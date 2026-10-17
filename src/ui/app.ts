@@ -113,6 +113,7 @@ interface LlmCatalog {
     readonly name?: string
     readonly contextWindow?: number
     readonly maxTokens?: number
+    readonly inputModalities?: readonly ('text' | 'image')[]
   }[]>
   resolveModelInfo(provider: string, model: string): Promise<unknown>
 }
@@ -2150,7 +2151,7 @@ export async function startTerminalApp(
                             return { id: modelId, contextWindow: Number(contextRaw), maxTokens: Number(maxRaw) };
                         };
                         pushNotice('info', 'Discovering models from ' + baseURL + '…');
-                        let discovered: readonly { readonly id: string; readonly name?: string; readonly contextWindow?: number; readonly maxTokens?: number }[] = [];
+                        let discovered: readonly { readonly id: string; readonly name?: string; readonly contextWindow?: number; readonly maxTokens?: number; readonly inputModalities?: readonly ('text' | 'image')[] }[] = [];
                         const discoveryAbort = new AbortController();
                         const timeout = setTimeout(() => discoveryAbort.abort(), 5000);
                         try {
@@ -2166,7 +2167,7 @@ export async function startTerminalApp(
                         finally {
                             clearTimeout(timeout);
                         }
-                        let model: { id: string; name?: string; contextWindow: number; maxTokens: number } | undefined;
+                        let model: { id: string; name?: string; contextWindow: number; maxTokens: number; inputModalities?: readonly ('text' | 'image')[] } | undefined;
                         if (discovered.length > 0) {
                             const choice = await showChoice(tui, palette, 'Select model from ' + route, [
                                 ...discovered.map((candidate, index) => ({
@@ -2189,6 +2190,7 @@ export async function startTerminalApp(
                                         ...(found.name === undefined ? {} : { name: found.name }),
                                         contextWindow: typeof found.contextWindow === 'number' && found.contextWindow > 0 ? found.contextWindow : 128000,
                                         maxTokens: typeof found.maxTokens === 'number' && found.maxTokens > 0 ? found.maxTokens : 16384,
+                                        ...(found.inputModalities === undefined ? {} : { inputModalities: found.inputModalities }),
                                     };
                                 }
                             }
@@ -2199,6 +2201,20 @@ export async function startTerminalApp(
                         }
                         if (model === undefined)
                             return;
+                        const supportsImage = model.inputModalities?.includes('image') === true;
+                        const imageFirst = supportsImage || model.inputModalities === undefined;
+                        const inputChoice = await showChoice(tui, palette, 'Input modalities', imageFirst
+                            ? [
+                                { value: 'image', label: 'Text + image', description: supportsImage ? 'The endpoint reports image input' : 'Only if the endpoint accepts image input' },
+                                { value: 'text', label: 'Text only', description: 'Safest for text-only models' },
+                            ]
+                            : [
+                                { value: 'text', label: 'Text only', description: 'The endpoint reports text input only' },
+                                { value: 'image', label: 'Text + image', description: 'Override only if the endpoint accepts images' },
+                            ], 'Enter selects · Esc cancels', interactionAbort.signal);
+                        if (inputChoice === undefined)
+                            return;
+                        const input = inputChoice === 'image' ? ['text', 'image'] as const : ['text'] as const;
                         chosenModel = model.id;
                         provider = buildCustomProvider({
                             route,
@@ -2209,6 +2225,7 @@ export async function startTerminalApp(
                             ...(model.name === undefined ? {} : { modelName: model.name }),
                             contextWindow: model.contextWindow,
                             maxTokens: model.maxTokens,
+                            input,
                         });
                     }
                     if (Object.hasOwn(providerRecord, route)) {

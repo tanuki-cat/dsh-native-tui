@@ -1,6 +1,12 @@
 /** Supported hand-declared pi-ai wire protocols. */
 export const PROVIDER_PROTOCOLS = ['openai-completions', 'openai-responses', 'anthropic-messages'] as const
 
+/** Input modalities a hand-declared provider model may claim. */
+export const PROVIDER_INPUT_MODALITIES = ['text', 'image'] as const
+
+/** One input modality accepted by a hand-declared model. */
+export type ProviderInputModality = typeof PROVIDER_INPUT_MODALITIES[number]
+
 /** One supported hand-declared wire protocol. */
 export type ProviderProtocol = typeof PROVIDER_PROTOCOLS[number]
 
@@ -14,6 +20,7 @@ export interface CustomProviderInput {
   readonly modelName?: string
   readonly contextWindow: number
   readonly maxTokens: number
+  readonly input?: readonly ProviderInputModality[]
 }
 
 /** Validate a provider route key. */
@@ -53,6 +60,12 @@ export function buildCustomProvider(input: CustomProviderInput): Record<string, 
   if (input.modelId.trim() === '') throw new Error('model id must not be empty')
   if (!Number.isSafeInteger(input.contextWindow) || input.contextWindow <= 0) throw new Error('contextWindow must be a positive integer')
   if (!Number.isSafeInteger(input.maxTokens) || input.maxTokens <= 0) throw new Error('maxTokens must be a positive integer')
+  if (input.input !== undefined
+    && (input.input.length === 0
+      || input.input.some(modality => !PROVIDER_INPUT_MODALITIES.includes(modality))
+      || new Set(input.input).size !== input.input.length)) {
+    throw new Error('input must contain unique text/image modalities')
+  }
   const name = input.modelName?.trim() === '' || input.modelName === undefined ? input.modelId.trim() : input.modelName.trim()
   return {
     api: input.api,
@@ -63,6 +76,7 @@ export function buildCustomProvider(input: CustomProviderInput): Record<string, 
       name,
       contextWindow: input.contextWindow,
       maxTokens: input.maxTokens,
+      ...(input.input === undefined ? {} : { input: [...input.input] }),
     }],
   }
 }

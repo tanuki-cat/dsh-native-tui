@@ -42,6 +42,30 @@ describe('provider config helpers', () => {
     })
   })
 
+  it('declares text and image input explicitly', () => {
+    const provider = buildCustomProvider({
+      route: 'vision-gateway',
+      api: 'openai-responses',
+      baseURL: 'https://api.example.com/v1',
+      apiKeyEnv: 'VISION_GATEWAY_KEY',
+      modelId: 'vision-model',
+      contextWindow: 128000,
+      maxTokens: 16384,
+      input: ['text', 'image'],
+    })
+    expect((provider.models as readonly { input?: readonly string[] }[])[0]?.input).toEqual(['text', 'image'])
+    expect(() => buildCustomProvider({
+      route: 'vision-gateway',
+      api: 'openai-responses',
+      baseURL: 'https://api.example.com/v1',
+      apiKeyEnv: 'VISION_GATEWAY_KEY',
+      modelId: 'vision-model',
+      contextWindow: 128000,
+      maxTokens: 16384,
+      input: ['text', 'text'],
+    })).toThrow('unique text/image')
+  })
+
   it('merges routes without dropping existing providers', () => {
     expect(mergeProviderProfiles({ openai: { apiKeyEnv: 'OPENAI_API_KEY' } }, 'my-gateway', { apiKeyEnv: 'X' }))
       .toEqual({ openai: { apiKeyEnv: 'OPENAI_API_KEY' }, 'my-gateway': { apiKeyEnv: 'X' } })

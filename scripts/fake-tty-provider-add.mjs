@@ -19,8 +19,9 @@ const tick = setInterval(() => {
   else if (phase === 6 && text.includes('Model id')) { phase = 7; try { child.stdin.write('test-model\r') } catch {} }
   else if (phase === 7 && text.includes('Context window')) { phase = 8; try { child.stdin.write('\r') } catch {} }
   else if (phase === 8 && text.includes('Max output tokens')) { phase = 9; try { child.stdin.write('\r') } catch {} }
-  else if (phase === 9 && text.includes('Model selected')) {
-    phase = 10
+  else if (phase === 9 && text.includes('Input modalities')) { phase = 10; try { child.stdin.write('\r') } catch {} }
+  else if (phase === 10 && text.includes('Model selected')) {
+    phase = 11
     setTimeout(() => { try { child.stdin.write('/provider list\r') } catch {} }, 500)
     setTimeout(() => { try { child.stdin.write('\x04') } catch {} }, 1300)
   }
