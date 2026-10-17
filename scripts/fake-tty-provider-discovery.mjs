@@ -33,8 +33,9 @@ const tick = setInterval(() => {
   else if (phase === 5 && text.includes('API key env var NAME')) { phase = 6; try { child.stdin.write('\r') } catch {} }
   else if (phase === 6 && text.includes('Select model from auto-route')) { phase = 7; try { child.stdin.write('\r') } catch {} }
   else if (phase === 7 && text.includes('Input modalities')) { phase = 8; try { child.stdin.write('\r') } catch {} }
-  else if (phase === 8 && text.includes('Model selected: auto-route/auto-model')) {
-    phase = 9
+  else if (phase === 8 && text.includes('Reasoning levels')) { phase = 9; try { child.stdin.write('\r') } catch {} }
+  else if (phase === 9 && text.includes('Model selected: auto-route/auto-model')) {
+    phase = 10
     try { child.stdin.write('/provider list\r') } catch {}
     setTimeout(() => { try { child.stdin.write('\x04') } catch {} }, 900)
   }

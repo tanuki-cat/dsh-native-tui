@@ -62,7 +62,7 @@ pnpm check
   tsc -p tsconfig.build.json
 
 Test Files  17 passed (17)
-Tests       63 passed (63)
+Tests       64 passed (64)
 ```
 
 ### 安装与启动
@@ -106,7 +106,7 @@ src/index.ts                 Cordis 入口、TTY 守卫
 src/config.ts                schemastery 配置、fullscreen
 src/runtime/                 agent/session、attachments、bundle、html、images、open、providers、settings、tool-log
 src/ui/                      app、autocomplete、dialogs、transcript、diff、theme
-tests/                       19 个测试文件，63 个测试
+tests/                       19 个测试文件，64 个测试
 scripts/fake-tty-*.mjs       fake-TTY 验证脚本
 README.md
 docs/design-task-feature-dsh-native-tui-host-native.md
@@ -133,6 +133,8 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - 本地 mock SSE endpoint 验证 Esc：流式输出中按 Esc 后请求关闭、状态回 idle、显示 `! Turn cancelled`。
 - 工具 call 的 `[tool-call]` 内容不再进入正文；参数 JSON 按字段展开 code/description/timeoutMs。
 - `/provider add` 已验证 Input modalities=Text + image 会显式写入 `input: [text, image]`。
+- `/provider add` 已验证 Reasoning levels=`low,medium,high` 会写入 `reasoningEfforts`。
+- 已验证 `/model mock/mock-model` → `/reasoning high` → 状态栏 `effort high`，`/status` 显示 `Reasoning: high`。
 - 已验证 Store API key 模式：粘贴 key → credential store（0600）→ 自动发现 stored-model → 保存并选中，`/provider list` 显示 `(stored)`。
 - 已验证裸 `quit` 退出 TUI，退出码 0。
 - 已验证把 `sk-proj-...` 填入 env 字段会被拒绝且不写 profile；缺 env 时同样不保存。
@@ -158,4 +160,4 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 | 14–20 | Plugin remove/market、剪贴板图片、图片预览、alt-screen、`@@session` |
 | 21–25 | 附件预览、ZIP/HTML 导出、Deliverables reveal、工具结果 pager、Markdown |
 | 26–30 | 独立 Diff、附件管理器、Settings 数组、Deliverables panel、收尾验证 |
-| 后续 | 第三方模型 `/provider add|list|remove` 引导与自动模型发现，19 个测试文件 / 63 个测试 |
+| 后续 | 第三方模型 `/provider add|list|remove` 引导与自动模型发现，19 个测试文件 / 64 个测试 |

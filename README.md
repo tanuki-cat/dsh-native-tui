@@ -2,7 +2,7 @@
 
 DeepSeek Harness 的 host-native 终端前端，基于 pi-tui。
 
-> 状态：实施完成（30 轮 + 第三方模型引导，63 个单元测试通过）；已知差距见进度记录。  
+> 状态：实施完成（30 轮 + 第三方模型引导，64 个单元测试通过）；已知差距见进度记录。  
 > 目标：在 TUI 中提供 Web 模式的核心能力，而不是复制浏览器图形界面。  
 > 架构说明与差距清单：[Host-native 方案](docs/design-task-feature-dsh-native-tui-host-native.md)。  
 > 实施进度、验证证据与未验收项：[实施进度](docs/progress-dsh-native-tui.md)。
@@ -55,6 +55,7 @@ DSH Host 包由当前 dsh 安装提供；本插件只把 pi-tui 与 schemastery 
 | /clear | 仅清空终端视图 |
 | /cancel | 取消当前 turn |
 | /model [provider/model] | 列出或切换模型；目录为空时明确提示 |
+| /reasoning [effort|default] | 列出或切换当前模型的思考强度；default 清除显式 effort |
 | /provider [add|list|remove <route>] | 引导配置/查看/删除第三方模型 provider |
 | /permissions [preset] | 列出或切换权限预设 |
 | /jobs [kill <id>] | 列出或终止后台任务 |
@@ -107,6 +108,7 @@ Enter 发送；运行中 Enter 作为 steer；Ctrl+C 取消/退出；Ctrl+D 退�
 3. custom gateway 会调用 Host `discoverModels` 请求 `GET {baseURL}/models` 并列出模型（5 秒超时）。
 4. 从自动发现的模型中选择，或回退到手动输入 model id/context window/max tokens。
 5. 选择 Input modalities：`Text + image`（vision）或 `Text only`。生成的模型配置会显式写入 `input`；未知能力的自定义网关默认先选 `Text + image`。
+6. 输入 Reasoning levels（逗号分隔，默认 `low,medium,high`；留空表示不支持 reasoning）。生成的模型配置会写入 `reasoningEfforts`，之后可用 `/reasoning` 切换。
 
 `apiKeyEnv` 保存的是 credential reference（环境变量名或 DSH credential 名称），不是 key 明文。env 模式下若变量未设置会拒绝保存；store 模式直接写 credential store。
 
@@ -116,9 +118,23 @@ Enter 发送；运行中 Enter 作为 steer；Ctrl+C 取消/退出；Ctrl+D 退�
 input:
   - text
   - image
+reasoningEfforts:
+  low: low
+  medium: medium
+  high: high
 ```
 
-也可以在 route 级使用 `defaultInput: [text, image]`，让该 route 下未声明 `input` 的模型继承。
+也可以在 route 级使用 `defaultInput: [text, image]`，让该 route 下未声明 `input` 的模型继承。`reasoningEfforts` 的 key 是 Harness 选择项，value 是该网关实际接收的 wire spelling；引导默认同名映射，网关拼写不同（例如 `minimal`）时请按实际值修改。
+
+切换思考强度：
+
+```text
+/reasoning
+/reasoning high
+/reasoning default
+```
+
+运行中切换会在下一 step 生效；状态栏会显示 `effort high`。
 
 env 模式示例：
 
@@ -134,7 +150,7 @@ dsh --profile tui
 ## 开发与验证
 
 ~~~sh
-pnpm check          # typecheck + 63 unit tests + build
+pnpm check          # typecheck + 64 unit tests + build
 pnpm test
 pnpm build
 ~~~

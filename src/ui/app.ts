@@ -11,7 +11,7 @@ import {
 import type { Context } from '@deepseek-ai/cordis'
 import { installModelSelection, type ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-commands'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm/types'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
@@ -32,6 +32,7 @@ import {
   buildCustomProvider,
   isValidEnvName,
   isValidProviderRoute,
+  parseReasoningLevels,
   type ProviderProtocol,
 } from '../runtime/providers.js'
 import {
@@ -72,6 +73,7 @@ const LOCAL_COMMANDS: readonly CommandSuggestion[] = [
   { name: 'clear', description: 'clear the terminal view only' },
   { name: 'cancel', description: 'cancel the running turn' },
   { name: 'model', description: 'select a model', input: { hint: 'provider/model' } },
+  { name: 'reasoning', description: 'select the model reasoning effort', input: { hint: 'effort' } },
   { name: 'permissions', description: 'select a permission preset', input: { hint: 'preset' } },
   { name: 'preset', description: 'select the preset for the current or next session', input: { hint: 'id' } },
   { name: 'workspaces', description: 'list/create/use/pin/archive workspaces' },
@@ -115,7 +117,12 @@ interface LlmCatalog {
     readonly maxTokens?: number
     readonly inputModalities?: readonly ('text' | 'image')[]
   }[]>
-  resolveModelInfo(provider: string, model: string): Promise<unknown>
+  resolveModelInfo(provider: string, model: string): Promise<{
+    readonly reasoning?: {
+      readonly efforts: readonly { readonly id: string; readonly name: string; readonly description?: string }[]
+      readonly defaultEffort?: string
+    }
+  }>
 }
 
 interface PermissionPresets {
@@ -346,6 +353,7 @@ export async function startTerminalApp(
     current: {
       provider: active.agent.options.provider ?? 'deepseek-official',
       model: active.agent.options.model ?? 'deepseek-flash',
+      ...(active.agent.options.reasoningEffort === undefined ? {} : { reasoningEffort: active.agent.options.reasoningEffort }),
     },
     assembled: undefined,
   }
@@ -409,6 +417,8 @@ export async function startTerminalApp(
     const preset = (host.get('agentPresets') as AgentPresetService | undefined)?.composedPreset(active.agent.ctx)
     const bits = [state]
     if (preset !== undefined) bits.push(palette.dim('preset ' + preset))
+    const effort = modelSelection.current?.reasoningEffort
+    if (effort !== undefined) bits.push(palette.dim('effort ' + String(effort)))
     if (pendingAttachments.length > 0) bits.push(palette.dim('attached ' + String(pendingAttachments.length)))
     const hint = active.agent.status === 'running'
       ? 'enter steer · esc cancel · ctrl+c cancel · ctrl+d exit'
@@ -558,6 +568,7 @@ export async function startTerminalApp(
         current: {
           provider: active.agent.options.provider ?? 'deepseek-official',
           model: active.agent.options.model ?? 'deepseek-flash',
+          ...(active.agent.options.reasoningEffort === undefined ? {} : { reasoningEffort: active.agent.options.reasoningEffort }),
         },
         assembled: undefined,
       }
@@ -603,9 +614,18 @@ export async function startTerminalApp(
       return
     }
     try {
-      await llm.resolveModelInfo(provider, model)
-      modelSelection.current = { provider, model }
+      const info = await llm.resolveModelInfo(provider, model)
+      const reasoning = info.reasoning
+      let effort = modelSelection.current?.reasoningEffort
+      if (effort !== undefined && reasoning?.efforts.some(candidate => candidate.id === effort) !== true)
+        effort = undefined
+      if (effort === undefined && reasoning?.defaultEffort !== undefined)
+        effort = ReasoningEffortId(reasoning.defaultEffort)
+      modelSelection.current = { provider, model, ...(effort === undefined ? {} : { reasoningEffort: effort }) }
       pushNotice('info', 'Model selected: ' + provider + '/' + model + ' (applies to the next step)')
+      if (reasoning !== undefined && reasoning.efforts.length > 0) {
+        pushNotice('info', 'Reasoning efforts: ' + reasoning.efforts.map(candidate => candidate.id).join(', ') + ' — use /reasoning')
+      }
       renderStatus()
     } catch (error) {
       pushNotice('error', 'Unroutable model ' + provider + '/' + model + ': ' + errorMessage(error))
@@ -630,7 +650,7 @@ export async function startTerminalApp(
           'Local commands:',
           '/help · /new · /sessions · /resume [id] · /status · /clear',
           '/exit · /quit (or bare exit/quit)',
-          '/cancel · /model [provider/model] · /provider [add|list|remove <route>]',
+          '/cancel · /model [provider/model] · /reasoning [effort] · /provider [add|list|remove <route>]',
           '/permissions [preset]',
           '/jobs [kill <id>] · /agents · /preset [id]',
           '/plugins [list|market [q]|inspect <spec>|install <spec>|remove <bundle>|enable <id>|disable <id>] · /exit',
@@ -660,6 +680,7 @@ export async function startTerminalApp(
           'Session: ' + active.id,
           'Directory: ' + (headerInfo.cwd ?? config.cwd),
           'Model: ' + (modelSelection.current?.provider ?? options.provider ?? 'deepseek-official') + '/' + (modelSelection.current?.model ?? options.model ?? 'deepseek-flash'),
+          'Reasoning: ' + (modelSelection.current?.reasoningEffort ?? 'provider default'),
           'State: ' + active.agent.status,
           'Preset: ' + ((host.get('agentPresets') as AgentPresetService | undefined)?.composedPreset(active.agent.ctx) ?? '(none)'),
           'Events: ' + String(active.agent.session.snapshotEvents().length),
@@ -720,6 +741,75 @@ export async function startTerminalApp(
         const selectedModel = await showChoice(tui, palette, 'Select model', items, 'Enter selects · Esc cancels', interactionAbort.signal)
         if (selectedModel !== undefined) await selectModel(llm, selectedModel)
         return
+      }
+      case 'reasoning': {
+        const llm = host.get('llm') as LlmCatalog | undefined;
+        const selected = modelSelection.current;
+        if (llm === undefined || selected === undefined) {
+            pushNotice('warning', 'No active model selection is available.');
+            return;
+        }
+        try {
+            const info = await llm.resolveModelInfo(selected.provider, selected.model);
+            const reasoning = info.reasoning;
+            if (reasoning === undefined || reasoning.efforts.length === 0) {
+                pushNotice('warning', 'Model ' + selected.provider + '/' + selected.model + ' exposes no reasoning efforts. Add reasoningEfforts to the provider model or choose another model.');
+                return;
+            }
+            const applyEffort = (effort: string | undefined): void => {
+                const current = modelSelection.current;
+                if (current === undefined)
+                    return;
+                modelSelection.current = {
+                    provider: current.provider,
+                    model: current.model,
+                    ...(effort === undefined ? {} : { reasoningEffort: ReasoningEffortId(effort) }),
+                };
+                pushNotice('info', 'Reasoning effort: ' + (effort ?? 'provider default'));
+                renderStatus();
+            };
+            const currentEffort = selected.reasoningEffort;
+            if (args !== '') {
+                const requested = args.trim().toLowerCase();
+                if (requested === 'default' || requested === 'auto' || requested === 'clear') {
+                    applyEffort(undefined);
+                    return;
+                }
+                if (!reasoning.efforts.some(candidate => candidate.id === requested)) {
+                    pushNotice('warning', 'Unknown reasoning effort "' + requested + '". Available: ' + reasoning.efforts.map(candidate => candidate.id).join(', '));
+                    return;
+                }
+                applyEffort(requested);
+                return;
+            }
+            const items: Array<{ value: string; label: string; description?: string }> = [{
+                value: '__default__',
+                label: (currentEffort === undefined ? '* ' : '  ') + 'provider default',
+                description: 'Omit an explicit reasoning effort',
+            }];
+            for (const candidate of reasoning.efforts) {
+                items.push({
+                    value: candidate.id,
+                    label: (candidate.id === currentEffort ? '* ' : '  ') + candidate.id,
+                    description: candidate.name + (candidate.description === undefined ? '' : ' — ' + candidate.description),
+                });
+            }
+            const choice = await showChoice(
+                tui,
+                palette,
+                'Reasoning effort (current: ' + (currentEffort ?? 'provider default') + ')',
+                items,
+                'Enter selects · Esc cancels',
+                interactionAbort.signal,
+            );
+            if (choice === undefined)
+                return;
+            applyEffort(choice === '__default__' ? undefined : choice);
+        }
+        catch (error) {
+            pushNotice('error', 'Could not inspect reasoning efforts: ' + errorMessage(error));
+        }
+        return;
       }
       case 'permissions': {
         const presets = host.get('permissionPresets') as PermissionPresets | undefined
@@ -2215,6 +2305,17 @@ export async function startTerminalApp(
                         if (inputChoice === undefined)
                             return;
                         const input = inputChoice === 'image' ? ['text', 'image'] as const : ['text'] as const;
+                        const reasoningRaw = await showTextInput(tui, palette, 'Reasoning levels', 'low, medium, high', 'Comma-separated: off/minimal/low/medium/high/xhigh/max; blank = no reasoning · Esc cancels', interactionAbort.signal, 'low,medium,high');
+                        if (reasoningRaw === undefined)
+                            return;
+                        let reasoningEfforts: Record<string, string | null> | undefined;
+                        try {
+                            reasoningEfforts = parseReasoningLevels(reasoningRaw);
+                        }
+                        catch (error) {
+                            pushNotice('warning', 'Invalid reasoning levels: ' + errorMessage(error));
+                            return;
+                        }
                         chosenModel = model.id;
                         provider = buildCustomProvider({
                             route,
@@ -2226,6 +2327,7 @@ export async function startTerminalApp(
                             contextWindow: model.contextWindow,
                             maxTokens: model.maxTokens,
                             input,
+                            ...(reasoningEfforts === undefined ? {} : { reasoningEfforts }),
                         });
                     }
                     if (Object.hasOwn(providerRecord, route)) {

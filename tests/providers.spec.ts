@@ -6,6 +6,7 @@ import {
   isValidProviderRoute,
   mergeProviderProfiles,
   normalizeBaseURL,
+  parseReasoningLevels,
 } from '../src/runtime/providers.js'
 
 describe('provider config helpers', () => {
@@ -64,6 +65,24 @@ describe('provider config helpers', () => {
       maxTokens: 16384,
       input: ['text', 'text'],
     })).toThrow('unique text/image')
+  })
+
+  it('maps reasoning levels and rejects an off-only mapping', () => {
+    expect(parseReasoningLevels(' off, low, high ')).toEqual({ off: null, low: 'low', high: 'high' })
+    expect(parseReasoningLevels('')).toBeUndefined()
+    expect(() => parseReasoningLevels('off')).toThrow('other than off')
+    const provider = buildCustomProvider({
+      route: 'reasoning-gateway',
+      api: 'openai-responses',
+      baseURL: 'https://api.example.com/v1',
+      apiKeyEnv: 'REASONING_GATEWAY_KEY',
+      modelId: 'reasoning-model',
+      contextWindow: 128000,
+      maxTokens: 16384,
+      reasoningEfforts: { low: 'low', high: 'high' },
+    })
+    expect((provider.models as readonly { reasoningEfforts?: Record<string, string | null> }[])[0]?.reasoningEfforts)
+      .toEqual({ low: 'low', high: 'high' })
   })
 
   it('merges routes without dropping existing providers', () => {

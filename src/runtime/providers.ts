@@ -7,6 +7,12 @@ export const PROVIDER_INPUT_MODALITIES = ['text', 'image'] as const
 /** One input modality accepted by a hand-declared model. */
 export type ProviderInputModality = typeof PROVIDER_INPUT_MODALITIES[number]
 
+/** Thinking levels a pi-ai profile may map to wire values. */
+export const PROVIDER_REASONING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
+
+/** One selectable reasoning level in a hand-declared model. */
+export type ProviderReasoningLevel = typeof PROVIDER_REASONING_LEVELS[number]
+
 /** One supported hand-declared wire protocol. */
 export type ProviderProtocol = typeof PROVIDER_PROTOCOLS[number]
 
@@ -21,6 +27,7 @@ export interface CustomProviderInput {
   readonly contextWindow: number
   readonly maxTokens: number
   readonly input?: readonly ProviderInputModality[]
+  readonly reasoningEfforts?: Readonly<Record<string, string | null>>
 }
 
 /** Validate a provider route key. */
@@ -66,6 +73,7 @@ export function buildCustomProvider(input: CustomProviderInput): Record<string, 
       || new Set(input.input).size !== input.input.length)) {
     throw new Error('input must contain unique text/image modalities')
   }
+  if (input.reasoningEfforts !== undefined) validateReasoningEfforts(input.reasoningEfforts)
   const name = input.modelName?.trim() === '' || input.modelName === undefined ? input.modelId.trim() : input.modelName.trim()
   return {
     api: input.api,
@@ -77,8 +85,45 @@ export function buildCustomProvider(input: CustomProviderInput): Record<string, 
       contextWindow: input.contextWindow,
       maxTokens: input.maxTokens,
       ...(input.input === undefined ? {} : { input: [...input.input] }),
+      ...(input.reasoningEfforts === undefined ? {} : { reasoningEfforts: { ...input.reasoningEfforts } }),
     }],
   }
+}
+
+/** Validate one explicit reasoning-effort map before it reaches pi-ai. */
+export function validateReasoningEfforts(efforts: Readonly<Record<string, string | null>>): void {
+  const levels = Object.keys(efforts)
+  if (levels.length === 0) throw new Error('reasoningEfforts must not be empty')
+  for (const level of levels) {
+    if (!PROVIDER_REASONING_LEVELS.includes(level as ProviderReasoningLevel)) {
+      throw new Error('reasoningEfforts has unknown level "' + level + '"')
+    }
+    const value = efforts[level]
+    if (level !== 'off' && (typeof value !== 'string' || value.trim() === '')) {
+      throw new Error('reasoningEfforts.' + level + ' must be a non-empty wire value')
+    }
+    if (value !== null && typeof value !== 'string') {
+      throw new Error('reasoningEfforts.' + level + ' must be a string or null')
+    }
+  }
+  if (!levels.some(level => level !== 'off')) {
+    throw new Error('reasoningEfforts must offer a level beyond off')
+  }
+}
+
+/** Parse a comma-separated list into pi-ai's level-to-wire-value map. */
+export function parseReasoningLevels(raw: string): Record<string, string | null> | undefined {
+  const levels = [...new Set(raw.split(',').map(value => value.trim().toLowerCase()).filter(Boolean))]
+  if (levels.length === 0) return undefined
+  for (const level of levels) {
+    if (!PROVIDER_REASONING_LEVELS.includes(level as ProviderReasoningLevel)) {
+      throw new Error('unknown reasoning level "' + level + '"')
+    }
+  }
+  if (!levels.some(level => level !== 'off')) {
+    throw new Error('reasoning levels must include at least one level other than off')
+  }
+  return Object.fromEntries(levels.map(level => [level, level === 'off' ? null : level]))
 }
 
 /** Build a catalog-route profile that only names a credential. */
