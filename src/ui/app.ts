@@ -9,7 +9,7 @@ import {
   VStack,
 } from '@earendil-works/pi-tui'
 import type { Context } from '@deepseek-ai/cordis'
-import { installModelSelection, type ModelSelectionRef } from '@deepseek-ai/dsh-agent'
+import { installModelSelection, type ModelSelection, type ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-commands'
 import { createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm/types'
@@ -243,6 +243,10 @@ interface PluginManagerService {
 interface WorkspaceChangesService {
   summary(sessionId: SessionId, seq: number): ChangesSummaryView | undefined
   diff(sessionId: SessionId, seq: number, index: number, signal: AbortSignal): Promise<WorkspaceDiffView | undefined>
+}
+
+interface AgentDefaultModelService {
+  saveSelection(selection: ModelSelection): Promise<void>
 }
 
 interface CredentialsService {
@@ -603,6 +607,17 @@ export async function startTerminalApp(
     }
   }
 
+  const persistSelection = async (): Promise<void> => {
+    const service = host.get('agentDefaultModel') as AgentDefaultModelService | undefined
+    const current = modelSelection.current
+    if (service === undefined || current === undefined) return
+    try {
+      await service.saveSelection(current)
+    } catch (error) {
+      pushNotice('warning', 'Selection applies now but could not be saved: ' + errorMessage(error))
+    }
+  }
+
   const selectModel = async (llm: LlmCatalog, target: string): Promise<void> => {
     const slash = target.indexOf('/')
     const provider = slash === -1
@@ -626,6 +641,7 @@ export async function startTerminalApp(
       if (reasoning !== undefined && reasoning.efforts.length > 0) {
         pushNotice('info', 'Reasoning efforts: ' + reasoning.efforts.map(candidate => candidate.id).join(', ') + ' — use /reasoning')
       }
+      await persistSelection()
       renderStatus()
     } catch (error) {
       pushNotice('error', 'Unroutable model ' + provider + '/' + model + ': ' + errorMessage(error))
@@ -756,7 +772,7 @@ export async function startTerminalApp(
                 pushNotice('warning', 'Model ' + selected.provider + '/' + selected.model + ' exposes no reasoning efforts. Add reasoningEfforts to the provider model or choose another model.');
                 return;
             }
-            const applyEffort = (effort: string | undefined): void => {
+            const applyEffort = async (effort: string | undefined): Promise<void> => {
                 const current = modelSelection.current;
                 if (current === undefined)
                     return;
@@ -766,20 +782,21 @@ export async function startTerminalApp(
                     ...(effort === undefined ? {} : { reasoningEffort: ReasoningEffortId(effort) }),
                 };
                 pushNotice('info', 'Reasoning effort: ' + (effort ?? 'provider default'));
+                await persistSelection();
                 renderStatus();
             };
             const currentEffort = selected.reasoningEffort;
             if (args !== '') {
                 const requested = args.trim().toLowerCase();
                 if (requested === 'default' || requested === 'auto' || requested === 'clear') {
-                    applyEffort(undefined);
+                    await applyEffort(undefined);
                     return;
                 }
                 if (!reasoning.efforts.some(candidate => candidate.id === requested)) {
                     pushNotice('warning', 'Unknown reasoning effort "' + requested + '". Available: ' + reasoning.efforts.map(candidate => candidate.id).join(', '));
                     return;
                 }
-                applyEffort(requested);
+                await applyEffort(requested);
                 return;
             }
             const items: Array<{ value: string; label: string; description?: string }> = [{
@@ -804,7 +821,7 @@ export async function startTerminalApp(
             );
             if (choice === undefined)
                 return;
-            applyEffort(choice === '__default__' ? undefined : choice);
+            await applyEffort(choice === '__default__' ? undefined : choice);
         }
         catch (error) {
             pushNotice('error', 'Could not inspect reasoning efforts: ' + errorMessage(error));

@@ -135,6 +135,7 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - `/provider add` 已验证 Input modalities=Text + image 会显式写入 `input: [text, image]`。
 - `/provider add` 已验证 Reasoning levels=`low,medium,high` 会写入 `reasoningEfforts`。
 - 已验证 `/model mock/mock-model` → `/reasoning high` → 状态栏 `effort high`，`/status` 显示 `Reasoning: high`。
+- 已验证选择后 profile 写入 `agent-default-model` 的 provider/model/reasoningEffort；重启 TUI 后 `/status` 自动恢复 mock/mock-model + high。
 - 已验证本地命令输出按事件顺序插入：`/provider list`、`/model`、`/reasoning`、`/status` 的 notice 位于随后 prompt 的 context/AI 输出之前。
 - 已验证 Store API key 模式：粘贴 key → credential store（0600）→ 自动发现 stored-model → 保存并选中，`/provider list` 显示 `(stored)`。
 - 已验证裸 `quit` 退出 TUI，退出码 0。

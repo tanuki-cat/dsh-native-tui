@@ -13,7 +13,8 @@ DeepSeek Harness 的 host-native 终端前端，基于 pi-tui。
 - 流式文本、Markdown、reasoning、工具卡片（write/edit 结果渲染 ± diff 行）、turn 失败提示。
 - 本地命令与宿主命令执行（compact/feedback/goal/permission/plan）。
 - 审批与问答 waterfall；question probe 已通过真实 Host 验证。
-- 模型选择器（LLM catalog 为空时明确提示）、权限预设、后台任务、子代理列表。
+- 模型选择器（LLM catalog 为空时明确提示）、reasoning effort 切换、权限预设、后台任务、子代理列表。
+- 模型与 reasoning effort 通过 Host `agentDefaultModel.saveSelection` 持久化；重启或 `/new` 沿用，不再回落默认。
 - 第三方模型：`/provider add` 引导配置 pi-ai gateway/catalog route，`/provider list|remove` 管理。
 - Agent Presets：standard / ptc / minimal / cordis；/preset 可在首个 turn 前切换当前 Session，已开始的 Session 锁定并用于下一次 /new。
 - Workspace 列表/创建/切换/pin/unpin/archive/unarchive；Schedule 列表/创建/删除；Settings 顶层/嵌套对象/数组字段编辑与 JSON 写入；Plugins 列表/官方市场/检查/安装/移除/启停（带确认，实时应用）。
@@ -54,8 +55,8 @@ DSH Host 包由当前 dsh 安装提供；本插件只把 pi-tui 与 schemastery 
 | /status | Session、cwd、模型、状态、事件数 |
 | /clear | 仅清空终端视图 |
 | /cancel | 取消当前 turn |
-| /model [provider/model] | 列出或切换模型；目录为空时明确提示 |
-| /reasoning [effort|default] | 列出或切换当前模型的思考强度；default 清除显式 effort |
+| /model [provider/model] | 列出或切换模型；选择同时保存为默认模型 |
+| /reasoning [effort|default] | 列出或切换当前模型的思考强度并保存；default 清除显式 effort |
 | /provider [add|list|remove <route>] | 引导配置/查看/删除第三方模型 provider |
 | /permissions [preset] | 列出或切换权限预设 |
 | /jobs [kill <id>] | 列出或终止后台任务 |
