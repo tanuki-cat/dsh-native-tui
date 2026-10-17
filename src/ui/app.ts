@@ -106,6 +106,11 @@ const LOCAL_COMMANDS: readonly CommandSuggestion[] = [
     { name: 'items', description: 'edit an array item', hint: '<ns> <field>' },
     { name: 'set', description: 'merge JSON into a namespace', hint: '<ns> <json>' },
   ] },
+  { name: 'mcp', description: 'configure MCP servers', input: { hint: '[add|list|remove <name>]' }, subcommands: [
+    { name: 'add', description: 'add a stdio or HTTP MCP server' },
+    { name: 'list', description: 'list configured MCP servers' },
+    { name: 'remove', description: 'remove an MCP server', hint: '<name>' },
+  ] },
   { name: 'provider', description: 'guided third-party model provider setup', input: { hint: '[add|list|edit|models|remove <route>]' }, subcommands: [
     { name: 'add', description: 'guide a new provider route' },
     { name: 'list', description: 'list configured providers' },
@@ -698,6 +703,7 @@ export async function startTerminalApp(
           '/help · /new · /sessions · /resume [id] · /status · /clear',
           '/exit · /quit (or bare exit/quit)',
           '/cancel · /model [provider/model] · /reasoning [effort] · /provider [add|list|edit|models|remove <route>]',
+          '/mcp [add|list|remove <name>]',
           '/permissions [preset]',
           '/jobs [kill <id>] · /agents · /preset [id]',
           '/plugins [list|market [q]|inspect <spec>|install <spec>|remove <bundle>|enable <id>|disable <id>] · /exit',
@@ -1122,14 +1128,16 @@ export async function startTerminalApp(
           }
           return
         }
-        if (args === 'list') {
+        if (args === 'list' || args.startsWith('list ')) {
           try {
-            const rows = await manager.listPlugins()
+            const query = args.startsWith('list ') ? args.slice('list '.length).trim().toLowerCase() : ''
+            const allRows = await manager.listPlugins()
+            const rows = query === '' ? allRows : allRows.filter(row => row.entryId.toLowerCase().includes(query) || row.moduleName.toLowerCase().includes(query))
             if (rows.length === 0) {
               pushNotice('info', 'No plugin entries reported.')
               return
             }
-            pushNotice('info', 'Plugin entries (first 40):' + NL + rows.slice(0, 40).map(row => {
+            pushNotice('info', 'Plugin entries' + (query === '' ? ' (first 40)' : ' matching "' + query + '"') + ':' + NL + rows.slice(0, 40).map(row => {
               const state = row.enabled ? '[on] ' : '[off] '
               const readOnly = row.readOnlyReason === undefined ? '' : '  (read-only: ' + row.readOnlyReason + ')'
               return state + row.entryId + '  ' + row.moduleName + readOnly
@@ -2108,6 +2116,166 @@ export async function startTerminalApp(
                         pushNotice('info', 'Removed staged attachment: ' + removed.label);
                     renderStatus();
                 }
+                return;
+            }
+            case 'mcp': {
+                const settings = host.get('settings') as unknown as SettingsService | undefined;
+                if (settings === undefined) {
+                    pushNotice('warning', 'The settings service is unavailable in this profile.');
+                    return;
+                }
+                const descriptor = settings.describe({ redactSecrets: true }).find(row => row.ns === 'mcp-manager');
+                if (descriptor === undefined) {
+                    pushNotice('warning', 'The MCP manager is unavailable; enable the dsh-mcp-client integration first.');
+                    return;
+                }
+                const rawServers = descriptor.value.servers;
+                const servers: Record<string, Record<string, unknown>> = rawServers !== null && typeof rawServers === 'object' && !Array.isArray(rawServers)
+                    ? rawServers as Record<string, Record<string, unknown>>
+                    : {};
+                if (args === '' || args === 'list') {
+                    const entries = Object.entries(servers);
+                    if (entries.length === 0) {
+                        pushNotice('info', 'No MCP servers configured. Use /mcp add.');
+                        return;
+                    }
+                    const rows = entries.map(([name, raw]) => {
+                        const transport = typeof raw.transport === 'string' ? raw.transport : 'unknown';
+                        const target = transport === 'stdio'
+                            ? [typeof raw.command === 'string' ? raw.command : '', ...(Array.isArray(raw.args) ? raw.args.map(String) : [])].filter(Boolean).join(' ')
+                            : typeof raw.url === 'string' ? raw.url : '';
+                        return name + '  ' + transport + (target === '' ? '' : '  ' + target);
+                    });
+                    pushNotice('info', 'MCP servers:' + NL + rows.join(NL) + NL + 'Use /mcp add or /mcp remove <name>.');
+                    return;
+                }
+                if (args === 'add') {
+                    const name = await showTextInput(tui, palette, 'MCP server name', 'github', '[A-Za-z0-9_-]{1,32}; unique · Esc cancels', interactionAbort.signal);
+                    if (name === undefined)
+                        return;
+                    if (!/^[A-Za-z0-9_-]{1,32}$/u.test(name)) {
+                        pushNotice('warning', 'MCP server name must match [A-Za-z0-9_-]{1,32}.');
+                        return;
+                    }
+                    if (Object.hasOwn(servers, name)) {
+                        const confirmed = await showChoice(tui, palette, 'MCP server ' + name + ' already exists', [
+                            { value: 'replace', label: 'Replace', description: 'Overwrite this server configuration' },
+                            { value: 'cancel', label: 'Cancel' },
+                        ], 'Enter selects · Esc cancels', interactionAbort.signal);
+                        if (confirmed !== 'replace')
+                            return;
+                    }
+                    const transport = await showChoice(tui, palette, 'MCP transport', [
+                        { value: 'stdio', label: 'stdio', description: 'Spawn a local MCP server process' },
+                        { value: 'streamable-http', label: 'Streamable HTTP', description: 'Connect to an HTTP MCP endpoint' },
+                    ], 'Enter selects · Esc cancels', interactionAbort.signal);
+                    if (transport === undefined)
+                        return;
+                    let config: Record<string, unknown>;
+                    if (transport === 'stdio') {
+                        const command = await showTextInput(tui, palette, 'MCP command', 'npx', 'Executable without shell interpolation · Esc cancels', interactionAbort.signal);
+                        if (command === undefined)
+                            return;
+                        const argsRaw = await showTextInput(tui, palette, 'MCP arguments', '[]', 'Space-separated, or a JSON string array; optional · Esc cancels', interactionAbort.signal, '[]');
+                        if (argsRaw === undefined)
+                            return;
+                        let argsValue: string[] = [];
+                        if (argsRaw.trim() !== '') {
+                            try {
+                                const parsed = argsRaw.trim().startsWith('[') ? JSON.parse(argsRaw) : argsRaw.trim().split(/\s+/u);
+                                if (!Array.isArray(parsed) || parsed.some(value => typeof value !== 'string'))
+                                    throw new Error('arguments must be strings');
+                                argsValue = parsed;
+                            }
+                            catch (error) {
+                                pushNotice('error', 'Invalid MCP arguments: ' + errorMessage(error));
+                                return;
+                            }
+                        }
+                        const envRaw = await showTextInput(tui, palette, 'MCP environment JSON', '{}', 'Optional JSON object; values merge over the scrubbed environment · Esc cancels', interactionAbort.signal, '{}');
+                        if (envRaw === undefined)
+                            return;
+                        pushNotice('info', 'Applying MCP server ' + name + '…');
+                        let envValue: Record<string, unknown> | undefined;
+                        if (envRaw.trim() !== '' && envRaw.trim() !== '{}') {
+                            try {
+                                const parsed: unknown = JSON.parse(envRaw);
+                                if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed))
+                                    throw new Error('environment must be a JSON object');
+                                envValue = parsed as Record<string, unknown>;
+                            }
+                            catch (error) {
+                                pushNotice('error', 'Invalid MCP environment: ' + errorMessage(error));
+                                return;
+                            }
+                        }
+                        config = {
+                            transport,
+                            serverName: name,
+                            command,
+                            args: argsValue,
+                            ...(envValue === undefined ? {} : { env: envValue }),
+                        };
+                    }
+                    else {
+                        const url = await showTextInput(tui, palette, 'MCP endpoint URL', 'http://localhost:3000/mcp', 'Streamable HTTP endpoint · Esc cancels', interactionAbort.signal);
+                        if (url === undefined)
+                            return;
+                        const headersRaw = await showTextInput(tui, palette, 'MCP headers JSON', '{}', 'Optional JSON object of request headers · Esc cancels', interactionAbort.signal, '{}');
+                        if (headersRaw === undefined)
+                            return;
+                        pushNotice('info', 'Applying MCP server ' + name + '…');
+                        let headersValue: Record<string, unknown> | undefined;
+                        if (headersRaw.trim() !== '' && headersRaw.trim() !== '{}') {
+                            try {
+                                const parsed: unknown = JSON.parse(headersRaw);
+                                if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed))
+                                    throw new Error('headers must be a JSON object');
+                                headersValue = parsed as Record<string, unknown>;
+                            }
+                            catch (error) {
+                                pushNotice('error', 'Invalid MCP headers: ' + errorMessage(error));
+                                return;
+                            }
+                        }
+                        config = {
+                            transport,
+                            serverName: name,
+                            url,
+                            ...(headersValue === undefined ? {} : { headers: headersValue }),
+                        };
+                    }
+                    try {
+                        await settings.update('mcp-manager', { servers: { [name]: config } }, descriptor.revision);
+                        pushNotice('info', 'MCP server saved: ' + name + ' · ' + transport + '. Restart the session to load its tools if the connection was not live.');
+                    }
+                    catch (error) {
+                        pushNotice('error', 'Could not save MCP server: ' + errorMessage(error));
+                    }
+                    return;
+                }
+                if (args.startsWith('remove ')) {
+                    const name = args.slice('remove '.length).trim();
+                    if (name === '' || !Object.hasOwn(servers, name)) {
+                        pushNotice('warning', 'No configured MCP server "' + name + '".');
+                        return;
+                    }
+                    const confirmed = await showChoice(tui, palette, 'Remove MCP server ' + name + '?', [
+                        { value: 'yes', label: 'Remove', description: 'Remove this server from mcp-manager settings' },
+                        { value: 'no', label: 'Cancel' },
+                    ], 'Enter selects · Esc cancels', interactionAbort.signal);
+                    if (confirmed !== 'yes')
+                        return;
+                    try {
+                        await settings.mutate('mcp-manager', [{ op: 'unset', path: ['servers', name] }], descriptor.revision);
+                        pushNotice('info', 'MCP server removed: ' + name);
+                    }
+                    catch (error) {
+                        pushNotice('error', 'Could not remove MCP server: ' + errorMessage(error));
+                    }
+                    return;
+                }
+                pushNotice('warning', 'Usage: /mcp [add | list | remove <name>]');
                 return;
             }
             case 'provider': {

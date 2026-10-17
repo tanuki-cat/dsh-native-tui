@@ -47,6 +47,8 @@
 ### Agent Presets / Workspace / Schedule / Plugins / Settings
 
 - 引入 agent-preset-registry，默认 ptc；复制并加载 standard / ptc / minimal / cordis 四个 preset patch。
+- 默认集成官方 computer-use、experimental computer-use Cua Driver native、mcp-client、mcp-resources；版本按 DSH runtime 兼容的 0.2.1-rc.1 固定。
+- 新增 mcp-manager：把 `mcp-manager.servers` 中的 stdio/Streamable HTTP 服务映射为官方 mcp-client Loader rows，删除配置时移除 rows；manager 异步加载，避免 `/mcp` 保存阻塞。
 - Base 的进程级 agent-plane 行被禁用，工具/提示词/技能改由 preset 按 Session 组合。
 - /preset 列出当前 preset；首个 turn 前通过 Host `agentPresets.select(agent, id)` 切换当前 Session，已开始的 Session 由 Host 锁定，选择回退为下一次 /new；选择同时更新 settings `agent-preset-registry.selectedDefault` 持久化为默认 preset；/status 展示 current preset。
 - resume 使用最后一个 `agent-preset/selected` 事件恢复 preset，header 的旧值只作 fallback。
@@ -94,6 +96,7 @@
 - /model：列出 LLM catalog；目录为空时明确说明；支持直接输入 provider/model；通过 installModelSelection 接入下一 step 路由，并调用 agentDefaultModel.saveSelection 持久化默认选择。
 - /provider add：引导配置 custom OpenAI/Responses/Anthropic gateway 或 built-in pi-ai catalog route；Credential source 支持 Store API key（写 DSH credential store，0600，不写 profile）或 UPPERCASE env 引用；env 未设置或形似 key 时拒绝保存。custom gateway 在保存前调用 Host `discoverModels` 读取 `/models`，**把发现列表中的其他模型也写入 route**，选择本次模型后为它写 Input modalities、Reasoning levels、`input` 与 `reasoningEfforts`；已有 route 重跑时默认 merge，保留其他模型。
 - /provider edit|models：打开已有 provider 或直接按 route 调用 `discoverModels({ provider, baseURL, api })`，使用已存 credential 获取模型并合并：新模型追加、已有模型更新容量、保留既有 input/reasoningEfforts；/provider list|remove 管理 route。
+- /mcp：读取/写入 `mcp-manager.servers`；`add` 引导 serverName、stdio/HTTP、command/args/env 或 url/headers；`remove` 删除；mcp-manager 负责动态 Loader rows 和清理。MCP tools 以 `mcp__<serverName>__<rawName>` 暴露。
 - /reasoning：读取 `resolveModelInfo().reasoning.efforts`，列出/切换当前模型的 reasoning effort；写入 `ModelSelectionRef.current.reasoningEffort`，下一 step 生效；`default` 清除显式 effort；变更同时通过 agentDefaultModel.saveSelection 持久化。
 - 已验证 dummy `TEST_ROUTE_API_KEY` 下 `/provider add` → `/model` 选中 `test-route/test-model`；`/provider remove` 写回 `providers: {}`。
 - 已验证本地 HTTP `/v1/models` 自动发现 → 选择 auto-model → 写入 64000/8192 容量并直接选中；已验证裸 `quit` 退出。
@@ -101,6 +104,7 @@
 - mock SSE 端到端验证运行中 Esc：取消后状态 idle、显示 `! Turn cancelled`，HTTP 请求关闭。
 - `/provider add` 自动发现后选择 Text + image，profile 写入 `input: [text, image]`；Reasoning levels=`low,medium,high` 写入 `reasoningEfforts`；auto-route 同时保存 auto-model + auto-small 两个模型。
 - 已验证 `/provider models fetch-route` 获取 2 个模型并 merge：`1 added, 1 refreshed`。
+- 已验证默认集成 boot、`/mcp add` 持久化以及 mcp-manager 的 Loader row 创建/清理。
 - 已验证 `/reasoning high` 后状态栏显示 `effort high`，`/status` 显示 `Reasoning: high`。
 - 已验证 `/provider` 补全显示 add/list/remove，`/provider re` 过滤为 remove。
 - 已验证 `/preset minimal` 写入 `selectedDefault`，重启后仍以 minimal 创建 Session。

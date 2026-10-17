@@ -40,6 +40,20 @@
     - id: workspace-changes
       name: '@deepseek-ai/dsh-workspace-changes'
 
+    - id: computer-use
+      name: '@deepseek-ai/dsh-computer-use'
+
+    - id: computer-use-cua-driver-native
+      name: '@deepseek-ai/dsh-experimental-computer-use-cua-driver-native'
+
+    - id: mcp-resources
+      name: '@deepseek-ai/dsh-mcp-resources'
+
+    - id: mcp-manager
+      name: dsh-native-tui/mcp-manager
+      config:
+        servers: {}
+
     - id: native-tui
       name: dsh-native-tui
 

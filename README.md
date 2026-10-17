@@ -2,7 +2,7 @@
 
 DeepSeek Harness 的 host-native 终端前端，基于 pi-tui。
 
-> 状态：实施完成（30 轮 + 第三方模型引导，69 个单元测试通过）；已知差距见进度记录。  
+> 状态：实施完成（30 轮 + 第三方模型引导 + 官方 MCP/computer-use 集成，70 个单元测试通过）；已知差距见进度记录。  
 > 目标：在 TUI 中提供 Web 模式的核心能力，而不是复制浏览器图形界面。  
 > 架构说明与差距清单：[Host-native 方案](docs/design-task-feature-dsh-native-tui-host-native.md)。  
 > 实施进度、验证证据与未验收项：[实施进度](docs/progress-dsh-native-tui.md)。
@@ -15,7 +15,9 @@ DeepSeek Harness 的 host-native 终端前端，基于 pi-tui。
 - 审批与问答 waterfall；question probe 已通过真实 Host 验证。
 - 模型选择器（LLM catalog 为空时明确提示）、reasoning effort 切换、权限预设、后台任务、子代理列表。
 - 模型与 reasoning effort 通过 Host `agentDefaultModel.saveSelection` 持久化；重启或 `/new` 沿用，不再回落默认。
-- 第三方模型：`/provider add` 引导配置 pi-ai gateway/catalog route，`/provider list|remove` 管理。
+- 第三方模型：`/provider add` 引导配置 pi-ai gateway/catalog route，`/provider list|edit|models|remove` 管理。
+- 默认集成官方 `@deepseek-ai/dsh-computer-use`、`@deepseek-ai/dsh-experimental-computer-use-cua-driver-native`、`@deepseek-ai/dsh-mcp-client`（以及 mcp-resources）。
+- `/mcp add|list|remove` 配置 stdio / Streamable HTTP MCP 服务；配置持久化到 `mcp-manager.servers`。
 - Agent Presets：standard / ptc / minimal / cordis；/preset 可在首个 turn 前切换当前 Session，已开始的 Session 锁定并用于下一次 /new；选择同时写入 `agent-preset-registry.selectedDefault`，重启后继续使用。
 - Workspace 列表/创建/切换/pin/unpin/archive/unarchive；Schedule 列表/创建/删除；Settings 顶层/嵌套对象/数组字段编辑与 JSON 写入；Plugins 列表/官方市场/检查/安装/移除/启停（带确认，实时应用）。
 - 可选 `fullscreen`：TuiAltScreen + ScrollView，header/status/editor 固定，鼠标滚轮滚动、文本选择复制。
@@ -58,6 +60,7 @@ DSH Host 包由当前 dsh 安装提供；本插件只把 pi-tui 与 schemastery 
 | /model [provider/model] | 列出或切换模型；选择同时保存为默认模型 |
 | /reasoning [effort|default] | 列出或切换当前模型的思考强度并保存；default 清除显式 effort |
 | /provider [add|list|edit [route]|models <route>|remove <route>] | 配置/查看 provider；打开配置获取可用模型；刷新或删除 route |
+| /mcp [add|list|remove <name>] | 配置、查看或删除 MCP 服务 |
 | /permissions [preset] | 列出或切换权限预设 |
 | /jobs [kill <id>] | 列出或终止后台任务 |
 | /agents | 列出直接子代理 |
@@ -158,10 +161,27 @@ dsh --profile tui
 
 **不要在 env 模式把 key 填进变量名。** 流程要求 UPPERCASE 环境变量名，并拒绝形似 key 的输入。若旧配置已经把 key 写入 `apiKeyEnv`，立即执行 `/provider remove <route>`，检查 `cordis.patch.yml` 中对应配置，并轮换该 key。手工 JSON 配置仍可通过 `/settings set llm-pi-ai ...` 或 Web Models page 完成。
 
+## MCP 服务
+
+默认 bundle 集成官方 `mcp-client` 与 `mcp-resources`。TUI 通过 `mcp-manager` 管理服务配置：
+
+```text
+/mcp list
+/mcp add
+/mcp remove <name>
+```
+
+`/mcp add` 支持：
+
+- `stdio`：command、args（空格分隔或 JSON 数组）、env JSON
+- `streamable-http`：URL、headers JSON
+
+配置写入 profile 的 `mcp-manager.servers`；mcp-manager 将每个条目动态映射为官方 `mcp-client` Loader row。配置保存后可重启 TUI 确保连接和工具重新同步。MCP tools 以 `mcp__<serverName>__<toolName>` 暴露。
+
 ## 开发与验证
 
 ~~~sh
-pnpm check          # typecheck + 69 unit tests + build
+pnpm check          # typecheck + 70 unit tests + build
 pnpm test
 pnpm build
 ~~~
