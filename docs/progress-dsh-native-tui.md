@@ -38,7 +38,7 @@ dsh --profile tui
 | 对话 | 流式 assistant/reasoning、Markdown、steer、cancel、失败 turn 展示 |
 | 工具 | 工具卡片、write/edit diff 行、`/tools`、`/tool <index>` 分页、`/diff [index]` |
 | 审批/问答 | approval waterfall、question 面板、Other 自由文本 |
-| 模型/命令 | 模型选择、第三方 provider 引导、权限预设、Host commands、jobs、subagents |
+| 模型/命令 | 模型选择、第三方 provider 引导、权限预设、Host commands、jobs、subagents（仅 `/agents` 只读列举直接子级） |
 | Preset | 首个 turn 前切换当前 Session；开始后锁定，改用 /new |
 | Presets | standard / ptc / minimal / cordis |
 | Workspace | list/create/use/pin/unpin/archive/unarchive |
@@ -207,6 +207,8 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - [ ] **Context 百分比精确性**：compaction 后只按 `shadowedTokenCount` 做近似扣减，未计 summary 本身 token；需要结合 token meter/下一次 usage 修正。
 - [ ] **真实 PTY**：fullscreen 鼠标滚动、选择复制、Ctrl+D 恢复尚未在普通终端验收。
 - [ ] **真实审批/模型/tool waterfall**：approval 已有 allow/reject/cancel 弹窗测试，但真实模型流式、工具调用和审批链路仍缺凭据环境验收。
+- [ ] **ask_user_question 多选与取消语义**：`multiSelect` 未实现，当前只接受单选（仅在标题提示 multi-select: this build accepts one option per question），模型要求多选时答案不完整；取消时抛普通 `Error` 而非 `UserQuestionError(code: 'ASK_ABORTED')`，`dsh-user-questions` 的 `restoreUserQuestionError` 无法还原错误分类，上层区分不出用户取消与工具故障；契约允许的跳过单题（返回 `{ id, selected: [] }`）也未实现，Esc 会让整个批次失败。
+- [ ] **ask_user_question 单测覆盖**：`tests/dialogs.spec.ts` 目前只覆盖 dialog frame、approval、searchable choice；需补 `answerOne` 的四个分支（无选项自由文本、选中选项、Other 自由文本、Esc 取消）以及 `showQuestionBatch` 的顺序与中止行为。
 - [ ] **Settings wizard 自动化测试**：覆盖打开弹窗、修改 mode/entries、settings 持久化、theme/fullscreen restart 提示。
 
 ### P3
@@ -214,7 +216,13 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - [ ] 远端连接（连接已有 dsh web Host）。
 - [ ] 官方目录之外的市场搜索。
 - [ ] PDF/Office 富文档预览。
-- [ ] 多 Agent 并发/后台会话视图。
+- [ ] **Subagent 查看/继续/进度（2026-10-18 复核）**：当前只有 `/agents` 只读列举直接子级（见「已完成」），以下均未实现。
+  - 查看：`/sessions` 主动排除子会话，只能用 `/agents` 输出的 id 手工 `/resume <child-id>`；实测可打开子会话，但这是把 `delegationDepth >= 1` 的子会话当根会话恢复，属于未文档化的副作用，应做成受支持的入口。
+  - 继续/中断：未接入 `subagents.prompt|interrupt|sendMessage`；在 resume 出来的子会话里直接发消息会绕过 subagent 服务的归属校验与 `maxActiveSubagents` 容量控制。
+  - 进度：未订阅 `subagent/start` / `subagent/end`，委派执行期间父会话只有一张 pending 工具卡，看不到子代理状态。
+  - 层级/状态：只用 `listChildren`，未用 `listDescendants`，不显示 depth、`hasChildren`、`activity`。
+  - 测试：`/agents` 处理体无单测，`scripts/fake-tty-command-sweep.mjs` 只敲命令不断言输出；需补空列表/有行/服务缺失/抛错四个分支。
+- [ ] 多 Agent 并发/后台会话视图（与上一条的查看/继续/进度合并评估）。
 - [ ] 发布名称、scope、CI/publish 策略；当前 package 为 private。
 
 ### 已完成，不再作为剩余项
@@ -232,3 +240,4 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - [x] MCP 真实服务器实测：官方 mcp-client 直连 profile 中的 `idea`（streamable-http，`127.0.0.1:64342/stream`），注册 67 个工具，`get_all_open_file_paths`、`get_project_modules` 两次只读 `tools/call` 均返回真实数据。IDEA 侧要求显式 `projectPath`，未传时以业务错误返回当前打开项目列表。
 - [x] 流式渲染组件复用：`TranscriptRenderer.rebuild` 原先每帧重建全部 block 组件，于是每个 Markdown 每帧重新解析。改为按 block 内容判定并复用未变化的组件（`sameTranscriptBlock`），流式时每帧只重建尾部一个 block，分隔用 Spacer/Rule 仍按帧新建（成本可忽略）。基准 `scripts/bench-transcript.ts`：600 轮会话每帧 76.5 ms → 2.4 ms；流式在途 100 chunks 每帧 24.4 ms → 0.4 ms，均降到 33 ms 节流窗口以下。
 - [x] compaction 事件卡片、`/compact` 输出去重、context 近似扣减。
+- [x] Subagent 只读列举：`inject: ['subagents']` + `/agents` 调 `SubagentRuntime.listChildren(active.id)` 输出 `id mode label createdAt`；`/sessions` 按 header `origin === 'subagent'` 排除子会话（`src/runtime/session-list.ts`，有单测）。实测（2026-10-18）：全新 DSH_HOME 装当前 tgz 后空路径输出 `No subagents for this session.`；拷入含真实 `subagent/catalog` 事件的父会话后输出 `dcb2ef18-… continuable "Smoke test subagent" 2026-10-17T10:46:46.600Z`，同期 `/sessions` 不含该子会话。查看/继续/进度见 P3。
