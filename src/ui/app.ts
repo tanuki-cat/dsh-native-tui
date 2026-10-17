@@ -369,6 +369,7 @@ export async function startTerminalApp(
   let switching = false
   let clearedAfterSeq: number | undefined
   let selectedPreset: string | undefined = config.agentPreset
+    ?? (host.get('agentPresets') as AgentPresetService | undefined)?.defaultId
   let liveSeq = 0
   let entries: TranscriptEntry[] = active.agent.session.snapshotEvents().map(event => ({ type: 'event', event }))
   let localNotices: TranscriptBlock[] = []
@@ -1574,6 +1575,19 @@ export async function startTerminalApp(
                         catch (error) {
                             pushNotice('warning', 'Current session cannot switch preset: ' + errorMessage(error)
                                 + ' — next /new will use ' + id + '.');
+                        }
+                        const settings = host.get('settings') as unknown as SettingsService | undefined;
+                        if (settings === undefined) {
+                            pushNotice('warning', 'Preset applies now, but the settings service is unavailable; default preset was not saved.');
+                            return;
+                        }
+                        try {
+                            const descriptor = settings.describe({ redactSecrets: true }).find(row => row.ns === 'agent-preset-registry');
+                            await settings.update('agent-preset-registry', { selectedDefault: id }, descriptor?.revision);
+                            pushNotice('info', 'Default preset saved: ' + id);
+                        }
+                        catch (error) {
+                            pushNotice('warning', 'Preset applies now, but the default could not be saved: ' + errorMessage(error));
                         }
                     };
                     if (args === '') {

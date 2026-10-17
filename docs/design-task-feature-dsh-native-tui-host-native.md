@@ -48,7 +48,7 @@
 
 - 引入 agent-preset-registry，默认 ptc；复制并加载 standard / ptc / minimal / cordis 四个 preset patch。
 - Base 的进程级 agent-plane 行被禁用，工具/提示词/技能改由 preset 按 Session 组合。
-- /preset 列出当前 preset；首个 turn 前通过 Host `agentPresets.select(agent, id)` 切换当前 Session，已开始的 Session 由 Host 锁定，选择回退为下一次 /new；/status 展示 current preset。
+- /preset 列出当前 preset；首个 turn 前通过 Host `agentPresets.select(agent, id)` 切换当前 Session，已开始的 Session 由 Host 锁定，选择回退为下一次 /new；选择同时更新 settings `agent-preset-registry.selectedDefault` 持久化为默认 preset；/status 展示 current preset。
 - resume 使用最后一个 `agent-preset/selected` 事件恢复 preset，header 的旧值只作 fallback。
 - /workspaces 列出 workspace；/workspaces new <path> 创建；/workspaces use <id|path> 在新 workspace 创建会话。
 - /schedule 列出当前会话的提醒；支持 add <seconds> <title> 与 delete <id>。
@@ -101,6 +101,7 @@
 - `/provider add` 自动发现后选择 Text + image，profile 写入 `input: [text, image]`；Reasoning levels=`low,medium,high` 写入 `reasoningEfforts`；auto-route 同时保存 auto-model + auto-small 两个模型。
 - 已验证 `/reasoning high` 后状态栏显示 `effort high`，`/status` 显示 `Reasoning: high`。
 - 已验证 `/provider` 补全显示 add/list/remove，`/provider re` 过滤为 remove。
+- 已验证 `/preset minimal` 写入 `selectedDefault`，重启后仍以 minimal 创建 Session。
 - 已验证选择后 profile 写入 `agent-default-model: { provider, model, reasoningEffort }`；重启后 `/status` 恢复保存值。
 - 已验证先执行本地命令再发 prompt 时，命令 notice 位于随后 User/context/AI 输出之前。
 - 已验证把 `sk-proj-...` 填入 env 字段被拒绝，profile 未写入；`/provider list` 对非法 env 引用只显示脱敏提示。
