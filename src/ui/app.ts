@@ -383,6 +383,7 @@ export async function startTerminalApp(
   editor.setAutocompleteProvider(autocomplete)
 
   let disposed = false
+  let reportedSession = false
   let exiting = false
   let switching = false
   let clearedAfterSeq: number | undefined
@@ -2829,6 +2830,15 @@ export async function startTerminalApp(
         }
         catch {
             // The terminal may already be gone; restoration is best-effort here.
+        }
+        if (!reportedSession) {
+            reportedSession = true;
+            try {
+                process.stdout.write('\nSession: ' + active.id + '\nResume: dsh --profile tui --resume ' + active.id + '\n');
+            }
+            catch {
+                // A closed stdout must not turn a normal exit into a failure.
+            }
         }
         await active.dispose();
     };

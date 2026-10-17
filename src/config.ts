@@ -32,6 +32,34 @@ export interface ResolvedConfig {
   title: string
 }
 
+/**
+ * Read the app-level `--resume <session-id>` option from process arguments.
+ * The launcher passes arguments after its own flags through to the profile app.
+ * @param argv - process arguments, including the launcher and profile flags.
+ * @returns the requested session id, or undefined when absent.
+ */
+export function parseResumeArg(argv: readonly string[]): string | undefined {
+  let resume: string | undefined
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index]
+    if (arg === undefined) continue
+    if (arg === '--resume') {
+      const value = argv[index + 1]
+      if (value === undefined || value === '' || value.startsWith('-')) {
+        throw new Error('native-tui: --resume requires a session id')
+      }
+      resume = value
+      index += 1
+    }
+    else if (arg.startsWith('--resume=')) {
+      const value = arg.slice('--resume='.length)
+      if (value === '') throw new Error('native-tui: --resume requires a session id')
+      resume = value
+    }
+  }
+  return resume
+}
+
 /** Loader schema for the native-tui row. */
 export const Config = z.object({
   sessionId: z.string(),

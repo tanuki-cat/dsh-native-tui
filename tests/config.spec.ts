@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { resolveConfig } from '../src/config.js'
+import { parseResumeArg, resolveConfig } from '../src/config.js'
 
 describe('resolveConfig', () => {
   it('applies terminal defaults', () => {
@@ -10,6 +10,13 @@ describe('resolveConfig', () => {
     expect(config.theme).toBe('auto')
     expect(config.cwd).toBe(process.cwd())
     expect(config.title).toBe('DeepSeek Harness')
+  })
+
+  it('parses app-level --resume in both forms', () => {
+    expect(parseResumeArg(['--profile', 'tui', '--resume', 'session-1'])).toBe('session-1')
+    expect(parseResumeArg(['--resume=session-2'])).toBe('session-2')
+    expect(parseResumeArg(['--profile', 'tui'])).toBeUndefined()
+    expect(() => parseResumeArg(['--resume'])).toThrow(/requires a session id/u)
   })
 
   it('keeps explicit values', () => {

@@ -1,5 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
-import { Config, resolveConfig, type Config as TuiConfig } from './config.js'
+import { Config, parseResumeArg, resolveConfig, type Config as TuiConfig } from './config.js'
 import { startTerminalApp, type TerminalApp } from './ui/app.js'
 import { debug } from './debug.js'
 
@@ -39,7 +39,8 @@ export async function apply(ctx: Context, config: TuiConfig): Promise<void> {
     throw new Error('native-tui: both stdin and stdout must be TTYs; use the headless or web profile for pipes')
   }
 
-  const resolved = resolveConfig(config)
+  const resume = parseResumeArg(process.argv.slice(2))
+  const resolved = resolveConfig(resume === undefined ? config : { ...config, sessionId: resume })
   let app: TerminalApp | undefined
   let exiting = false
 
