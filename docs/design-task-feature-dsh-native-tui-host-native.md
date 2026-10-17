@@ -46,7 +46,7 @@
 
 ### Agent Presets / Workspace / Schedule / Plugins / Settings
 
-- 引入 agent-preset-registry，默认 standard；复制并加载 standard / ptc / minimal / cordis 四个 preset patch。
+- 引入 agent-preset-registry，默认 ptc；复制并加载 standard / ptc / minimal / cordis 四个 preset patch。
 - Base 的进程级 agent-plane 行被禁用，工具/提示词/技能改由 preset 按 Session 组合。
 - /preset 列出当前 preset；首个 turn 前通过 Host `agentPresets.select(agent, id)` 切换当前 Session，已开始的 Session 由 Host 锁定，选择回退为下一次 /new；/status 展示 current preset。
 - resume 使用最后一个 `agent-preset/selected` 事件恢复 preset，header 的旧值只作 fallback。
@@ -127,7 +127,7 @@ profile 由 dsh-base + 本 bundle 组成。bundle patch 插入：
 | schedule | 定时任务 Host 服务 |
 | tool-schedule | 模型可用的 schedule 工具 |
 | tool-ask-user | 模型可用的 ask_user_question 工具 |
-| agent-preset-registry | 预设注册表；默认 standard |
+| agent-preset-registry | 预设注册表；默认 ptc |
 | native-tui | 本 TUI 插件 |
 
 Agent 的模型默认值来自 Host 的 ctx.agentDefaultModel；当前默认是 deepseek-official/deepseek-flash。没有配置凭据时，首个请求会以 MISSING_CREDENTIAL 失败，TUI 会显示 Turn failed，而不是假装成功。

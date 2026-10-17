@@ -88,7 +88,7 @@ Enter 发送；运行中 Enter 作为 steer；Ctrl+C 取消/退出；Ctrl+D 退�
     maxTranscriptEntries: 2000
     fullscreen: false              # true 使用 alt-screen + 鼠标/应用滚动
     theme: auto                    # auto | dark | light | plain
-    agentPreset: standard          # standard | ptc | minimal | cordis
+    agentPreset: ptc               # 默认 ptc | standard | minimal | cordis
     title: DeepSeek Harness
 ~~~
 
