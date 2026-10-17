@@ -1,5 +1,6 @@
 import { Container, Markdown, Spacer, Text, type MarkdownTheme } from '@earendil-works/pi-tui'
 import { Rule } from './rule.js'
+import { BarText } from './bar-text.js'
 import type {} from '@deepseek-ai/dsh-commands'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import type { ContentBlock, StreamChunk } from '@deepseek-ai/dsh-llm/types'
@@ -61,9 +62,10 @@ export function contentText(content: readonly ContentBlock[] | undefined): strin
   for (const block of content) {
     if (block.type === 'text') parts.push(block.text)
     else if (block.type === 'reasoning') continue
+    else if (block.type === 'tool-call' || block.type === 'tool-addition' || block.type === 'tool-removal') continue
     else if (block.type === 'image') parts.push('[image ' + (block.attachment.name ?? block.attachment.mediaType) + ']')
     else if (block.type === 'file') parts.push('[file ' + block.attachment.name + ']')
-    else parts.push(`[${block.type}]`)
+    else parts.push('[content]')
   }
   return parts.join('\n')
 }
@@ -78,6 +80,44 @@ export function contentReasoning(content: readonly ContentBlock[] | undefined): 
 export function clip(text: string, limit = TOOL_PREVIEW): string {
   if (text.length <= limit) return text
   return `${text.slice(0, limit)}\n… [${String(text.length - limit)} chars omitted]`
+}
+
+/**
+ * Format a model-produced JSON argument string for a readable tool call.
+ * Known fields keep their names; long string values such as code are split
+ * into indented rows instead of one wrapped JSON line.
+ * @param raw - raw JSON arguments from the tool call.
+ * @returns a bounded, multi-line display value.
+ */
+export function formatToolArguments(raw: string): string {
+  const trimmed = raw.trim()
+  if (trimmed === '') return ''
+  let value: unknown
+  try {
+    value = JSON.parse(trimmed)
+  } catch {
+    return clip(trimmed, TOOL_PREVIEW)
+  }
+  if (value === null || typeof value !== 'object') return clip(String(value), TOOL_PREVIEW)
+  const rows: Array<readonly [string, unknown]> = Array.isArray(value)
+    ? value.map((item, index) => [String(index), item] as const)
+    : Object.entries(value as Record<string, unknown>)
+  const lines: string[] = []
+  for (const [key, item] of rows.slice(0, 12)) {
+    if (typeof item === 'string') {
+      const text = clip(item, 900)
+      if (text.includes('\n')) {
+        lines.push(key + ':')
+        for (const line of text.split('\n')) lines.push('  ' + line)
+      } else {
+        lines.push(key + ': ' + text)
+      }
+    } else {
+      lines.push(key + ': ' + clip(JSON.stringify(item) ?? String(item), 500))
+    }
+  }
+  if (rows.length > 12) lines.push('… ' + String(rows.length - 12) + ' more fields')
+  return clip(lines.join('\n'), 2400)
 }
 
 function toolResultText(message: { readonly content?: readonly ContentBlock[] }): string {
@@ -311,16 +351,13 @@ export class TranscriptRenderer {
 
   private renderBlock(block: TranscriptBlock) {
     const palette = this.options.palette
-    const bar = (text: string, style: (line: string) => string = line => palette.dim('│ ' + line)): string =>
-      text.split('\n').map(style).join('\n')
     switch (block.kind) {
-      case 'user':
-        return new Text(
-          palette.bold(palette.accent('▌ You')) + '\n'
-          + bar(block.text, line => palette.accent('│ ') + line),
-          0,
-          0,
-        )
+      case 'user': {
+        const container = new Container()
+        container.addChild(new Text(palette.bold(palette.accent('▌ You')), 0, 0))
+        container.addChild(new BarText(block.text, '│ ', line => line, palette.accent))
+        return container
+      }
       case 'assistant': {
         const container = new Container()
         const label = palette.bold(palette.accent('◆ assistant'))
@@ -328,11 +365,8 @@ export class TranscriptRenderer {
         container.addChild(new Text(label, 0, 0))
         if (block.reasoning !== undefined && block.reasoning.trim() !== '') {
           container.addChild(new Spacer(1))
-          container.addChild(new Text(
-            palette.dim('thinking') + '\n' + bar(clip(block.reasoning, REASONING_PREVIEW), line => palette.dim('│ ' + line)),
-            0,
-            0,
-          ))
+          container.addChild(new Text(palette.dim('thinking'), 0, 0))
+          container.addChild(new BarText(clip(block.reasoning, REASONING_PREVIEW), '│ ', palette.dim, palette.dim))
         }
         if (block.text.trim() !== '') {
           container.addChild(new Spacer(1))
@@ -340,29 +374,31 @@ export class TranscriptRenderer {
         }
         return container
       }
-      case 'context':
-        return new Text(
-          palette.dim('◇ context · ' + block.label) + '\n'
-          + bar(clip(block.text), line => palette.dim('│ ' + line)),
-          0,
-          0,
-        )
+      case 'context': {
+        const container = new Container()
+        container.addChild(new Text(palette.dim('◇ context · ' + block.label), 0, 0))
+        container.addChild(new BarText(clip(block.text), '│ ', palette.dim, palette.dim))
+        return container
+      }
       case 'tool': {
         const status = block.pending ? palette.warning('running') : block.isError === true ? palette.error('error') : palette.success('done')
-        const lines = [palette.bold(palette.accent('⚙ ' + block.name)) + '  ' + status]
+        const container = new Container()
+        container.addChild(new Text(palette.bold(palette.accent('⚙ ' + block.name)) + '  ' + status, 0, 0))
         if (block.args.trim() !== '') {
-          lines.push(palette.dim('├ args'))
-          lines.push(bar(clip(block.args), line => palette.dim('│ ' + line)))
+          container.addChild(new Text(palette.dim('├ args'), 0, 0))
+          container.addChild(new BarText(formatToolArguments(block.args), '│ ', palette.dim, palette.dim))
         }
         if (block.result !== undefined && block.result.trim() !== '') {
-          lines.push(palette.dim('├ result'))
-          lines.push(bar(
+          container.addChild(new Text(palette.dim('├ result'), 0, 0))
+          container.addChild(new BarText(
             clip(block.result),
-            block.isError === true ? line => palette.error('│ ' + line) : line => palette.dim('│ ') + line,
+            '│ ',
+            block.isError === true ? palette.error : line => line,
+            block.isError === true ? palette.error : palette.dim,
           ))
         }
         if (block.diffs !== undefined) {
-          lines.push(palette.dim('├ diff'))
+          const lines = [palette.dim('├ diff')]
           for (const diff of block.diffs) {
             lines.push(palette.bold(palette.accent('│ diff ' + diff.path)))
             for (const row of diffLines(diff.oldText, diff.newText, 60)) {
@@ -371,8 +407,9 @@ export class TranscriptRenderer {
                 : row.kind === 'remove' ? palette.error('│ - ' + row.text) : palette.dim('│   ' + row.text))
             }
           }
+          container.addChild(new Text(lines.join('\n'), 0, 0))
         }
-        return new Text(lines.join('\n'), 0, 0)
+        return container
       }
       case 'notice': {
         const text = block.text.replaceAll('\n', '\n  ')

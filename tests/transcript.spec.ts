@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import { createPalette, markdownTheme } from '../src/ui/theme.js'
-import { contentText, reduceTranscript, TranscriptRenderer, type TranscriptBlock, type TranscriptEntry } from '../src/ui/transcript.js'
+import { contentText, formatToolArguments, reduceTranscript, TranscriptRenderer, type TranscriptBlock, type TranscriptEntry } from '../src/ui/transcript.js'
 
 const palette = createPalette('plain')
 const options = {
@@ -66,6 +66,17 @@ describe('reduceTranscript', () => {
       { type: 'file', attachment: { name: 'notes.txt' } },
       { type: 'image', attachment: { name: 'pixel.png', mediaType: 'image/png' } },
     ] as never)).toBe('[file notes.txt]' + String.fromCharCode(10) + '[image pixel.png]')
+  })
+
+  it('hides tool-call content and formats JSON arguments', () => {
+    expect(contentText([
+      { type: 'tool-call', id: 'call-1', name: 'run', arguments: '{}' },
+      { type: 'text', text: 'visible' },
+    ] as never)).toBe('visible')
+    const formatted = formatToolArguments(JSON.stringify({ code: 'const a = 1\nconst b = 2', timeoutMs: 60000 }))
+    expect(formatted).toContain('code:')
+    expect(formatted).toContain('  const a = 1')
+    expect(formatted).toContain('timeoutMs: 60000')
   })
 
   it('marks turn failures and caps old rows', () => {

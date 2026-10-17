@@ -68,7 +68,8 @@
 - 已验证 @@ 在真实 profile 中列出 13 个其他 Session（label + cwd）；候选值由 remoteExportCandidates 生成 canonical mention。
 - /preview <image> 使用 pi-tui Image 渲染 PNG/JPEG/GIF/WebP；不支持图形协议的终端显示文本占位；已验证 RGB PNG 2x2 的 overlay 标题、占位图与 Enter/Esc 关闭。
 - fullscreen: true 使用 TuiAltScreen + VStack/ScrollView：固定两行 header、分隔线、status/editor，transcript 为 primary follow-end 滚动区，启用鼠标滚轮与选择复制。
-- Transcript 层次：用户消息左侧 accent 色条；assistant 标签与 streaming 状态；reasoning 独立缩进；context 用 ◇ 标签；tool 用 ├ args/result 与 diff 分支；notice 用 i/!/✕ 图标；用户 turn 之间插入 dim Rule。
+- Transcript 层次：用户消息左侧 accent 色条；assistant 标签与 streaming 状态；reasoning 独立缩进；context 用 ◇ 标签；tool 用 ├ args/result 与 diff 分支；notice 用 i/!/✕ 图标；用户 turn 之间插入 dim Rule。长行使用 BarText 让每条 wrap 行保留左色条。
+- 运行中 Esc/Ctrl+C 取消当前 turn；Esc 在 overlay 打开时不抢占，交给 dialog。
 - 已验证 fullscreen: true 启动、输入 /help 展示完整命令列表、Ctrl+D 正常退出；默认 fullscreen: false 仍走 TuiMainScreen。
 - 图片读取上线 8 MiB，使用文件头嗅探，不依赖扩展名。
 - 字段选择器解析 schemastery uid/refs，拒绝 secret 字段，输入值按 JSON 解析后写回。
@@ -94,6 +95,7 @@
 - 已验证 dummy `TEST_ROUTE_API_KEY` 下 `/provider add` → `/model` 选中 `test-route/test-model`；`/provider remove` 写回 `providers: {}`。
 - 已验证本地 HTTP `/v1/models` 自动发现 → 选择 auto-model → 写入 64000/8192 容量并直接选中；已验证裸 `quit` 退出。
 - 已验证 Store API key → credential store → stored-model 自动发现/选中，`/provider list` 显示 `(stored)`。
+- mock SSE 端到端验证运行中 Esc：取消后状态 idle、显示 `! Turn cancelled`，HTTP 请求关闭。
 - 已验证把 `sk-proj-...` 填入 env 字段被拒绝，profile 未写入；`/provider list` 对非法 env 引用只显示脱敏提示。
 - /permissions：列出权限预设并写回当前 Session；支持 /permissions <preset>。
 - /jobs：列出当前 Session 的后台任务，支持 /jobs kill <id>。

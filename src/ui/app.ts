@@ -2314,6 +2314,15 @@ export async function startTerminalApp(
     };
     editor.onSubmit = handleSubmit;
     tui.addInputListener((data) => {
+        if (data === '\u001B') {
+            if (tui.hasOverlay())
+                return undefined;
+            if (active.agent.status === 'running') {
+                active.agent.cancel({ kind: 'user' });
+                return { consume: true };
+            }
+            return undefined;
+        }
         if (data === String.fromCharCode(3)) {
             if (active.agent.status === 'running') {
                 active.agent.cancel({ kind: 'user' });
