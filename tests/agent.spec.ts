@@ -1,0 +1,109 @@
+import { describe, expect, it } from 'vitest'
+import type { Context } from '@deepseek-ai/cordis'
+import type { AgentHandle } from '@deepseek-ai/dsh-agent'
+import { SessionId } from '@deepseek-ai/dsh-session'
+import { createHostSession, resumeHostSession } from '../src/runtime/agent.js'
+import type { ResolvedConfig } from '../src/config.js'
+
+const config: ResolvedConfig = {
+  sessionId: undefined,
+  cwd: '/tmp/workspace',
+  showReasoning: true,
+  maxTranscriptEntries: 100,
+  fullscreen: false,
+  theme: 'plain',
+  agentPreset: undefined,
+  title: 'TUI',
+}
+
+function fakeHandle(sessionId: ReturnType<typeof SessionId>): AgentHandle {
+  return {
+    agent: {
+      id: sessionId,
+      status: 'idle',
+      options: { provider: 'p', model: 'm' },
+      session: { header: { cwd: '/tmp/workspace', createdAt: 0 } },
+    },
+    dispose: async () => {},
+  } as unknown as AgentHandle
+}
+
+function fakeContext(overrides: Record<string, unknown>): Context {
+  return overrides as unknown as Context
+}
+
+describe('host runtime', () => {
+  it('creates an agent with the configured cwd and default model', async () => {
+    let captured: unknown
+    const ctx = fakeContext({
+      get: (key: string) => key === 'agentDefaultModel'
+        ? { currentSelection: () => ({ provider: 'default-provider', model: 'default-model' }) }
+        : undefined,
+      agents: {
+        create: async (options: unknown) => {
+          captured = options
+          const sessionId = (options as { sessionId: ReturnType<typeof SessionId> }).sessionId
+          return fakeHandle(sessionId)
+        },
+      },
+    })
+    const session = await createHostSession(ctx, config)
+    expect(captured).toMatchObject({
+      meta: { cwd: '/tmp/workspace' },
+      agentOptions: { provider: 'default-provider', model: 'default-model' },
+    })
+    expect(session.id).toContain('native-tui-')
+    expect(session.agent.id).toBe(session.id)
+  })
+
+  it('mounts the configured agent preset', async () => {
+    let mounted: string | undefined
+    let captured: unknown
+    const ctx = fakeContext({
+      get: (key: string) => {
+        if (key === 'agentDefaultModel') return { currentSelection: () => ({ provider: 'p', model: 'm' }) }
+        if (key === 'agentPresets') {
+          return {
+            defaultId: 'standard',
+            resolve: async (id?: string) => ({ id: id ?? 'standard' }),
+            mount: async (_ctx: unknown, id?: string) => { mounted = id },
+            composedPreset: () => undefined,
+            list: async () => [],
+          }
+        }
+        return undefined
+      },
+      agents: {
+        create: async (options: unknown) => {
+          captured = options
+          const candidate = options as {
+            sessionId: ReturnType<typeof SessionId>
+            setup?: (agentCtx: unknown, agent: unknown) => Promise<void>
+          }
+          await candidate.setup?.({}, {})
+          return fakeHandle(candidate.sessionId)
+        },
+      },
+    })
+    await createHostSession(ctx, { ...config, agentPreset: 'minimal' })
+    expect(captured).toMatchObject({ meta: { cwd: '/tmp/workspace', agentPreset: 'minimal' } })
+    expect(mounted).toBe('minimal')
+  })
+
+  it('resumes an explicit persisted session', async () => {
+    let captured: unknown
+    const id = SessionId('session-1')
+    const ctx = fakeContext({
+      get: () => undefined,
+      agents: {
+        resume: async (options: unknown) => {
+          captured = options
+          return fakeHandle(id)
+        },
+      },
+    })
+    const session = await resumeHostSession(ctx, id)
+    expect(captured).toEqual({ resumeSessionId: id })
+    expect(session.id).toBe(id)
+  })
+})

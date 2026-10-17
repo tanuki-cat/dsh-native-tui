@@ -1,0 +1,2007 @@
+import {
+  Editor,
+  getNativeClipboard,
+  ProcessTerminal,
+  ScrollView,
+  Text,
+  TuiAltScreen,
+  TuiMainScreen,
+  VStack,
+} from '@earendil-works/pi-tui'
+import type { Context } from '@deepseek-ai/cordis'
+import { installModelSelection, type ModelSelectionRef } from '@deepseek-ai/dsh-agent'
+import type {} from '@deepseek-ai/dsh-commands'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock } from '@deepseek-ai/dsh-llm/types'
+import type { Session } from '@deepseek-ai/dsh-session'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import { dirname, resolve } from 'node:path'
+import type { ResolvedConfig } from '../config.js'
+import { createHostSession, resumeHostSession, type AgentPresetService, type HostSession } from '../runtime/agent.js'
+import { exportSessionLog } from '../runtime/export.js'
+import { exportSessionBundle } from '../runtime/bundle.js'
+import { exportSessionHtml } from '../runtime/html.js'
+import { isMarkdownPath, listDirectory, readTextPreview, sanitizeTerminalText } from '../runtime/files.js'
+import { settingsChildFields, settingsFields, settingsSetAt, settingsValueAt } from '../runtime/settings.js'
+import { readImagePreview } from '../runtime/images.js'
+import { revealWithSystemApp, systemRevealCommand } from '../runtime/open.js'
+import { collectDeliverables, formatDeliverables, type PresentedFileView } from '../runtime/deliverables.js'
+import { collectToolCalls } from '../runtime/tool-log.js'
+import {
+  formatChangesSummary,
+  formatWorkspaceDiff,
+  type ChangesSummaryView,
+  type WorkspaceDiffView,
+} from '../runtime/changes.js'
+import {
+  detectImageMediaType,
+  imageExtension,
+  loadAttachment,
+  MAX_ATTACHMENT_BYTES,
+  type AttachmentsService,
+  type PendingAttachment,
+} from '../runtime/attachments.js'
+import { showApproval, showChoice, showImagePreview, showMarkdownPreview, showQuestionBatch, showTextInput, showTextPager } from './dialogs.js'
+import { TuiAutocompleteProvider, type CommandSuggestion, type SessionReferenceService } from './autocomplete.js'
+import { createPalette, editorTheme, markdownTheme, type Palette } from './theme.js'
+import { TranscriptRenderer, type TranscriptBlock, type TranscriptEntry } from './transcript.js'
+import { diffLines } from './diff.js'
+
+/** Terminal application lifecycle. */
+export interface TerminalApp {
+  dispose(): Promise<void>
+}
+
+const MAX_NOTICES = 12
+const NL = String.fromCharCode(10)
+
+const LOCAL_COMMANDS: readonly CommandSuggestion[] = [
+  { name: 'help', description: 'show local and host commands' },
+  { name: 'new', description: 'create a new session' },
+  { name: 'sessions', description: 'list persisted sessions' },
+  { name: 'resume', description: 'resume a session', input: { hint: 'session-id' } },
+  { name: 'status', description: 'show session, model, and preset' },
+  { name: 'clear', description: 'clear the terminal view only' },
+  { name: 'cancel', description: 'cancel the running turn' },
+  { name: 'model', description: 'select a model', input: { hint: 'provider/model' } },
+  { name: 'permissions', description: 'select a permission preset', input: { hint: 'preset' } },
+  { name: 'preset', description: 'select the preset for /new', input: { hint: 'id' } },
+  { name: 'workspaces', description: 'list/create/use/pin/archive workspaces' },
+  { name: 'schedule', description: 'list/add/delete reminders' },
+  { name: 'jobs', description: 'list or kill background jobs' },
+  { name: 'agents', description: 'list direct subagents' },
+  { name: 'plugins', description: 'list, browse market, inspect/install/remove, or toggle plugin entries', input: { hint: '[list|market|inspect|install|remove|enable|disable]' } },
+  { name: 'settings', description: 'list, field/array-edit, or JSON-set settings', input: { hint: '[edit <ns>|items <ns> <field>|set <ns> <json>]' } },
+  { name: 'export', description: 'export JSONL, ZIP bundle, or static HTML', input: { hint: '[path|zip [path]|html [path]]' } },
+  { name: 'open', description: 'preview text or Markdown; Markdown renders styled', input: { hint: '<path>' } },
+  { name: 'preview', description: 'render a PNG/JPEG/GIF/WebP image', input: { hint: '<path>' } },
+  { name: 'files', description: 'browse a directory and preview a file', input: { hint: '[path]' } },
+  { name: 'changes', description: 'show the latest changed files or one file diff', input: { hint: '[diff <index>]' } },
+  { name: 'deliverables', description: 'list, panel, open, or reveal files declared by the present tool', input: { hint: '[panel|open|reveal <index>]' } },
+  { name: 'tools', description: 'list recent tool calls' },
+  { name: 'tool', description: 'page one tool call and its result', input: { hint: 'index' } },
+  { name: 'diff', description: 'page the latest or one indexed tool diff', input: { hint: '[index]' } },
+  { name: 'attach', description: 'stage or preview a file, image, or clipboard image', input: { hint: '<path>|paste|preview <i>|list|clear' } },
+  { name: 'attachments', description: 'open the staged attachment manager' },
+  { name: 'exit', description: 'exit the terminal front door' },
+]
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+interface LlmCatalog {
+  listProviders(): readonly { readonly id: string; readonly name?: string }[]
+  listModels(provider: string): Promise<readonly { readonly id: string; readonly name: string; readonly description?: string }[]>
+  resolveModelInfo(provider: string, model: string): Promise<unknown>
+}
+
+interface PermissionPresets {
+  readonly names: readonly string[]
+  current(session: Session): string
+  set(session: Session, name: string): void
+}
+
+interface JobRow {
+  readonly id: string
+  readonly kind: string
+  readonly label: string
+  readonly status: string
+  readonly progress?: string
+  readonly detail?: string
+  readonly startedAt: number
+}
+
+interface JobsService {
+  list(caller?: SessionId): readonly JobRow[]
+  kill(id: string, caller?: SessionId, reason?: string): 'requested' | 'already-finished'
+}
+
+interface SubagentRow {
+  readonly id: SessionId
+  readonly createdAt: number
+  readonly mode: string
+  readonly label?: string
+}
+
+interface SubagentsService {
+  listChildren(parentSessionId: SessionId, signal?: AbortSignal): Promise<readonly SubagentRow[]>
+}
+
+interface WorkspaceRow {
+  readonly id: string
+  readonly path: string
+  readonly title: string
+  readonly sessionIds: readonly string[]
+}
+
+interface WorkspaceService {
+  list(): readonly WorkspaceRow[]
+  create(path: string, title?: string): Promise<WorkspaceRow>
+  get(id: string): WorkspaceRow | undefined
+  resolveByPath(path: string): Promise<WorkspaceRow | undefined>
+  pinSession(sessionId: SessionId): Promise<void>
+  unpinSession(sessionId: SessionId): Promise<void>
+  archiveSession(sessionId: SessionId, options?: { stopActivity?: boolean }): Promise<void>
+  unarchiveSession(sessionId: SessionId): Promise<void>
+}
+
+interface ScheduleRow {
+  readonly id: string
+  readonly kind: string
+  readonly title: string
+  readonly prompt: string
+  readonly scheduledAt: string
+}
+
+interface ScheduleService {
+  list(request: { sessionId: SessionId }): Promise<readonly ScheduleRow[]>
+  create(
+    sessionId: SessionId,
+    request: { title: string; prompt: string; after_seconds: number },
+    signal?: AbortSignal,
+  ): Promise<ScheduleRow>
+  delete(request: { sessionId: SessionId; id: string }, signal?: AbortSignal): Promise<unknown>
+}
+
+interface PluginRow {
+  readonly entryId: string
+  readonly moduleName: string
+  readonly enabled: boolean
+  readonly readOnlyReason?: string
+  readonly meta?: { readonly name?: string; readonly description?: string }
+}
+
+interface PluginChangeResult {
+  readonly changed: boolean
+  readonly application: string
+  readonly target: string
+  readonly enabled?: boolean
+  readonly error?: { readonly code: string; readonly message?: string }
+}
+
+interface PluginInspection {
+  readonly status: 'accepted' | 'refused'
+  readonly kind?: string
+  readonly name?: string
+  readonly version?: string
+  readonly description?: string
+  readonly bundle?: boolean | null
+  readonly problem?: string
+  readonly reason?: string
+}
+
+interface PluginManagerService {
+  listBundles(): Promise<readonly {
+    name: string
+    enabled: boolean
+    installed: boolean
+    removable?: boolean
+    official?: boolean
+    availability?: string
+    optional?: boolean
+    version?: string
+    description?: string
+    installTarget?: { readonly spec: string; readonly version: string }
+  }[]>
+  listPlugins(): Promise<readonly PluginRow[]>
+  setPluginEnabled(id: string, enabled: boolean): Promise<PluginChangeResult>
+  inspect(spec: string): Promise<PluginInspection>
+  installBundle(spec: string, options?: { enabled?: boolean }): Promise<PluginChangeResult>
+  removeBundle(name: string): Promise<PluginChangeResult>
+}
+
+interface WorkspaceChangesService {
+  summary(sessionId: SessionId, seq: number): ChangesSummaryView | undefined
+  diff(sessionId: SessionId, seq: number, index: number, signal: AbortSignal): Promise<WorkspaceDiffView | undefined>
+}
+
+interface SettingsService {
+  describe(options?: { redactSecrets?: boolean }): readonly {
+    ns: string
+    value: Record<string, unknown>
+    schema: unknown
+    revision: number
+    secrets?: readonly { path: readonly string[]; set: boolean }[]
+  }[]
+  update(ns: string, patch: object, expectedRevision?: number): Promise<void>
+}
+
+/**
+ * Mount the pi-tui application over one owned Host Agent.
+ * @param host - Host plugin context.
+ * @param config - resolved terminal configuration.
+ * @param onExit - process-exit handoff owned by the Cordis entry.
+ * @returns the app controller; disposal restores the terminal without exiting.
+ */
+export async function startTerminalApp(
+  host: Context,
+  config: ResolvedConfig,
+  onExit: (code: number) => void,
+): Promise<TerminalApp> {
+  const palette: Palette = createPalette(config.theme)
+  const terminal = new ProcessTerminal()
+  const tui = config.fullscreen
+    ? new TuiAltScreen(terminal, false, undefined, { mouse: true })
+    : new TuiMainScreen(terminal, false)
+  const header = new Text('', 1, 0)
+  const status = new Text('', 1, 0)
+  const editor = new Editor(tui, editorTheme(palette), { paddingX: 1 })
+  const markdown = markdownTheme(palette)
+  const renderer = new TranscriptRenderer({
+    showReasoning: config.showReasoning,
+    maxEntries: config.maxTranscriptEntries,
+    palette,
+    markdown,
+  })
+
+  if (tui instanceof TuiAltScreen) {
+    const footer = new VStack([
+      { component: status, basis: 'auto' },
+      { component: editor, basis: 'auto' },
+    ])
+    tui.setLayoutRoot(new VStack([
+      { component: header, basis: 'auto' },
+      {
+        component: new ScrollView(renderer.container, { follow: 'end', primary: true, overscroll: 'chain' }),
+        basis: 0,
+        grow: 1,
+        minSize: 1,
+      },
+      { component: footer, basis: 'auto', shrink: 1, minSize: 1 },
+    ]))
+  } else {
+    tui.addChild(header)
+    tui.addChild(renderer.container)
+    tui.addChild(status)
+    tui.addChild(editor)
+  }
+  tui.setFocus(editor)
+
+  let active: HostSession
+  try {
+    active = config.sessionId === undefined
+      ? await createHostSession(host, config)
+      : await resumeHostSession(host, config.sessionId as SessionId)
+  } catch (error) {
+    throw new Error('native-tui: failed to open a session: ' + errorMessage(error), { cause: error })
+  }
+
+  const autocomplete = new TuiAutocompleteProvider({
+    getAgent: () => active.agent,
+    getCommands: () => [...LOCAL_COMMANDS, ...host.commands.list(active.agent)],
+    getFileReferences: () => host.get('fileReferences') as import('@deepseek-ai/dsh-file-reference').FileReferenceService | undefined,
+    getSessionReferences: () => host.get('sessionReferenceResolver') as SessionReferenceService | undefined,
+  })
+  editor.setAutocompleteProvider(autocomplete)
+
+  let disposed = false
+  let exiting = false
+  let switching = false
+  let clearedAfterSeq: number | undefined
+  let selectedPreset: string | undefined = config.agentPreset
+  let liveSeq = 0
+  let entries: TranscriptEntry[] = active.agent.session.snapshotEvents().map(event => ({ type: 'event', event }))
+  let localNotices: TranscriptBlock[] = []
+  let pendingAttachments: PendingAttachment[] = []
+  let transcriptTimer: ReturnType<typeof setTimeout> | undefined
+  let unsubscribeSession: (() => void) | undefined
+  let unsubscribeStream: (() => void) | undefined
+  let unsubscribeStatus: (() => void) | undefined
+  let interactionDisposers: Array<() => void> = []
+  const interactionAbort = new AbortController()
+  const attemptPositions = new Map<string, { turn: number; step: number }>()
+  let modelSelection: ModelSelectionRef = {
+    current: {
+      provider: active.agent.options.provider ?? 'deepseek-official',
+      model: active.agent.options.model ?? 'deepseek-flash',
+    },
+    assembled: undefined,
+  }
+  let disposeModelSelection: (() => void) | undefined
+  disposeModelSelection = installModelSelection(active.agent.ctx, modelSelection)
+
+  const summaryCwd = (): string | undefined => active.agent.session.header.cwd ?? config.cwd
+
+  const lastDurableSeq = (): number | undefined => {
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const entry = entries[index]
+      if (entry?.type === 'event') return Number(entry.event.seq)
+    }
+    return undefined
+  }
+
+  const renderTranscript = (): void => {
+    if (disposed) return
+    const visible = clearedAfterSeq === undefined
+      ? entries
+      : entries.filter((entry) => entry.type === 'live' || Number(entry.event.seq) > clearedAfterSeq!)
+    renderer.set(visible, localNotices)
+    tui.requestRender()
+  }
+
+  const scheduleTranscript = (immediate = false): void => {
+    if (disposed) return
+    if (immediate) {
+      if (transcriptTimer !== undefined) {
+        clearTimeout(transcriptTimer)
+        transcriptTimer = undefined
+      }
+      renderTranscript()
+      return
+    }
+    if (transcriptTimer !== undefined) return
+    transcriptTimer = setTimeout(() => {
+      transcriptTimer = undefined
+      renderTranscript()
+    }, 33)
+  }
+
+  const pushNotice = (tone: 'info' | 'warning' | 'error', text: string): void => {
+    localNotices.push({ kind: 'notice', tone, text })
+    if (localNotices.length > MAX_NOTICES) localNotices = localNotices.slice(-MAX_NOTICES)
+    scheduleTranscript(true)
+  }
+
+  const renderStatus = (): void => {
+    if (disposed) return
+    const options = active.agent.options
+    const state = active.agent.status === 'running'
+      ? palette.warning('working')
+      : palette.success('idle')
+    header.setText(palette.bold(config.title) + '  ' + palette.dim(active.id))
+    const bits = [
+      state,
+      summaryCwd() ?? config.cwd,
+      (modelSelection.current?.provider ?? options.provider ?? 'deepseek-official') + '/' + (modelSelection.current?.model ?? options.model ?? 'deepseek-flash'),
+      active.id,
+    ]
+    const hint = active.agent.status === 'running'
+      ? 'enter steer · esc cancel · ctrl+c cancel · ctrl+d exit'
+      : 'enter send · /help · ctrl+d exit'
+    status.setText(bits.join(palette.dim(' · ')) + '  ' + palette.dim(hint))
+    tui.requestRender()
+  }
+
+  const subscribeActive = (): void => {
+    unsubscribeSession = host.on('session/event', (session, event) => {
+      if (session.id !== active.id) return
+      if (event.type === 'assistant/message') {
+        entries = entries.filter(entry => !(
+          entry.type === 'live'
+          && entry.event.data.turn === event.data.turn
+          && entry.event.data.step === event.data.step
+        ))
+      }
+      entries.push({ type: 'event', event })
+      if ((event.type as string) === 'workspace/changes') {
+        const changes = host.get('workspaceChanges') as WorkspaceChangesService | undefined
+        const summary = changes?.summary(session.id, Number(event.seq))
+        if (summary !== undefined) pushNotice('info', formatChangesSummary(summary))
+      }
+      if ((event.type as string) === 'deliverables/presented') {
+        const data = event.data as { readonly turn: number; readonly files: readonly PresentedFileView[] }
+        pushNotice('info', formatDeliverables([{ turn: data.turn, files: data.files }]))
+      }
+      scheduleTranscript()
+      renderStatus()
+    })
+    unsubscribeStream = host.on('agent/assistant-stream', ({ agent, frame }) => {
+      if (agent.id !== active.id) return
+      if (frame.type === 'start') {
+        attemptPositions.set(String(frame.attemptId), { turn: frame.turn, step: frame.step })
+        return
+      }
+      if (frame.type === 'end') {
+        attemptPositions.delete(String(frame.attemptId))
+        return
+      }
+      const position = attemptPositions.get(String(frame.attemptId)) ?? { turn: 0, step: 0 }
+      liveSeq += 1
+      entries.push({
+        type: 'live',
+        event: {
+          type: 'assistant/live-chunk',
+          seq: liveSeq,
+          time: frame.time,
+          data: {
+            attemptId: String(frame.attemptId),
+            turn: position.turn,
+            step: position.step,
+            chunk: frame.chunk,
+          },
+        },
+      })
+      scheduleTranscript()
+    })
+    unsubscribeStatus = host.on('agent/status', ({ agent }) => {
+      if (agent.id === active.id) renderStatus()
+    })
+    scheduleTranscript(true)
+    renderStatus()
+  }
+
+  const clearSubscriptions = (): void => {
+    unsubscribeSession?.()
+    unsubscribeSession = undefined
+    unsubscribeStream?.()
+    unsubscribeStream = undefined
+    unsubscribeStatus?.()
+    unsubscribeStatus = undefined
+    if (transcriptTimer !== undefined) {
+      clearTimeout(transcriptTimer)
+      transcriptTimer = undefined
+    }
+  }
+
+  const registerInteractions = (): void => {
+    const agent = active.agent
+    interactionDisposers = [
+      agent.ctx.on('approval/request', async (request, next) => {
+        if (request.agent !== agent) return next()
+        return showApproval(tui, palette, request, request.signal === undefined
+          ? interactionAbort.signal
+          : AbortSignal.any([request.signal, interactionAbort.signal]))
+      }),
+      agent.ctx.on('user-questions/request', async (request, next) => {
+        if (request.agent !== agent) return next()
+        return showQuestionBatch(tui, palette, request.questions, request.signal === undefined
+          ? interactionAbort.signal
+          : AbortSignal.any([request.signal, interactionAbort.signal]))
+      }),
+    ]
+  }
+
+  const disposeInteractions = (): void => {
+    for (const dispose of interactionDisposers) dispose()
+    interactionDisposers = []
+  }
+
+  const listSessions = async (): Promise<void> => {
+    const persistence = host.get('sessionPersistence') as {
+      list(): Promise<readonly { header: { id: SessionId; cwd?: string; createdAt: number; origin?: string } }[]>
+    } | undefined
+    if (persistence === undefined) {
+      pushNotice('warning', 'Session persistence is unavailable; only the current session can be used.')
+      return
+    }
+    try {
+      const rows = (await persistence.list())
+        .filter(row => row.header.origin !== 'subagent')
+        .slice(0, 12)
+      if (rows.length === 0) {
+        pushNotice('info', 'No stored sessions yet. Use /new to create one.')
+        return
+      }
+      const lines = rows.map(row => {
+        const marker = row.header.id === active.id ? '*' : ' '
+        return marker + ' ' + row.header.id + '  ' + (row.header.cwd ?? '') + '  ' + new Date(row.header.createdAt).toISOString()
+      })
+      pushNotice('info', 'Sessions:' + NL + lines.join(NL) + NL + 'Use /resume <session-id> to switch.')
+    } catch (error) {
+      pushNotice('error', 'Could not list sessions: ' + errorMessage(error))
+    }
+  }
+
+  const switchTo = async (next: () => Promise<HostSession>): Promise<void> => {
+    if (switching || disposed) return
+    switching = true
+    try {
+      const opened = await next()
+      disposeInteractions()
+      disposeModelSelection?.()
+      disposeModelSelection = undefined
+      clearSubscriptions()
+      await active.dispose()
+      active = opened
+      entries = active.agent.session.snapshotEvents().map(event => ({ type: 'event', event }))
+      clearedAfterSeq = undefined
+      liveSeq = 0
+      localNotices = []
+      renderer.clear()
+      tui.setFocus(editor)
+      modelSelection = {
+        current: {
+          provider: active.agent.options.provider ?? 'deepseek-official',
+          model: active.agent.options.model ?? 'deepseek-flash',
+        },
+        assembled: undefined,
+      }
+      disposeModelSelection = installModelSelection(active.agent.ctx, modelSelection)
+      registerInteractions()
+      subscribeActive()
+      pushNotice('info', 'Switched to ' + active.id)
+    } catch (error) {
+      pushNotice('error', 'Could not open the session: ' + errorMessage(error))
+    } finally {
+      switching = false
+    }
+  }
+
+  const sendPrompt = (text: string): void => {
+    const content: ContentBlock[] = []
+    if (text.trim() !== '') content.push({ type: 'text', text })
+    for (const pending of pendingAttachments) content.push(pending.block)
+    if (content.length === 0) return
+    try {
+      const message = createUserMessage({
+        content,
+        source: { kind: 'user' },
+      })
+      if (active.agent.status === 'running') active.agent.steer(message)
+      else active.agent.followup(message)
+      pendingAttachments = []
+      editor.addToHistory(text)
+      renderStatus()
+    } catch (error) {
+      pushNotice('error', 'Prompt failed: ' + errorMessage(error))
+    }
+  }
+
+  const selectModel = async (llm: LlmCatalog, target: string): Promise<void> => {
+    const slash = target.indexOf('/')
+    const provider = slash === -1
+      ? (modelSelection.current?.provider ?? active.agent.options.provider ?? 'deepseek-official')
+      : target.slice(0, slash)
+    const model = slash === -1 ? target : target.slice(slash + 1)
+    if (provider === '' || model === '') {
+      pushNotice('warning', 'Usage: /model [provider/model]')
+      return
+    }
+    try {
+      await llm.resolveModelInfo(provider, model)
+      modelSelection.current = { provider, model }
+      pushNotice('info', 'Model selected: ' + provider + '/' + model + ' (applies to the next step)')
+      renderStatus()
+    } catch (error) {
+      pushNotice('error', 'Unroutable model ' + provider + '/' + model + ': ' + errorMessage(error))
+    }
+  }
+
+  const runCommand = async (line: string): Promise<void> => {
+    const withoutSlash = line.slice(1)
+    const space = withoutSlash.indexOf(' ')
+    const name = (space === -1 ? withoutSlash : withoutSlash.slice(0, space)).toLowerCase()
+    const args = space === -1 ? '' : withoutSlash.slice(space + 1).trim()
+
+    switch (name) {
+      case 'exit':
+      case 'quit':
+        requestExit(0)
+        return
+      case 'help': {
+        const hostCommands = host.commands.list(active.agent)
+          .map(command => '/' + command.name + (command.input === undefined ? '' : ' ' + command.input.hint))
+        pushNotice('info', [
+          'Local commands:',
+          '/help · /new · /sessions · /resume [id] · /status · /clear',
+          '/cancel · /model [provider/model] · /permissions [preset]',
+          '/jobs [kill <id>] · /agents · /preset [id]',
+          '/plugins [list|market [q]|inspect <spec>|install <spec>|remove <bundle>|enable <id>|disable <id>] · /exit',
+          '/workspaces [new|use|pin|unpin|archive|unarchive] · /schedule [add|delete]',
+          '/schedule [add <seconds> <title>|delete <id>] · /plugins · /exit',
+          '/settings [edit <ns>|items <ns> <field>|set <ns> <json>] · /export [path|zip|html] · /open <path> · /preview <image>',
+          '/files [path] · /changes [diff <index>] · /deliverables [panel|open|reveal <index>]',
+          '/tools · /tool <index> · /diff [index] · /exit',
+          '/attach <path>|paste|preview <i>|list|clear · /attachments · /exit',
+          '@@<query> references another session · /exit',
+          'Host commands: ' + (hostCommands.length === 0 ? '(none)' : hostCommands.join(' · ')),
+          'Enter sends; when the agent runs, Enter steers and Esc cancels.',
+        ].join(NL))
+        return
+      }
+      case 'clear':
+        clearedAfterSeq = lastDurableSeq()
+        entries = []
+        localNotices = []
+        renderer.clear()
+        scheduleTranscript(true)
+        return
+      case 'status': {
+        const headerInfo = active.agent.session.header
+        const options = active.agent.options
+        pushNotice('info', [
+          'Session: ' + active.id,
+          'Directory: ' + (headerInfo.cwd ?? config.cwd),
+          'Model: ' + (modelSelection.current?.provider ?? options.provider ?? 'deepseek-official') + '/' + (modelSelection.current?.model ?? options.model ?? 'deepseek-flash'),
+          'State: ' + active.agent.status,
+          'Preset: ' + ((host.get('agentPresets') as AgentPresetService | undefined)?.composedPreset(active.agent.ctx) ?? '(none)'),
+          'Events: ' + String(active.agent.session.snapshotEvents().length),
+          'Created: ' + new Date(headerInfo.createdAt).toISOString(),
+        ].join(NL))
+        return
+      }
+      case 'cancel':
+        active.agent.cancel({ kind: 'user' })
+        pushNotice('info', 'Cancellation requested')
+        return
+      case 'new':
+        await switchTo(() => createHostSession(host, {
+          ...config,
+          sessionId: undefined,
+          agentPreset: selectedPreset ?? config.agentPreset,
+        }))
+        return
+      case 'sessions':
+        await listSessions()
+        return
+      case 'resume':
+        if (args === '') await listSessions()
+        else await switchTo(() => resumeHostSession(host, args as SessionId))
+        return
+      case 'model': {
+        const llm = host.get('llm') as LlmCatalog | undefined
+        if (llm === undefined) {
+          pushNotice('warning', 'The LLM catalog service is unavailable.')
+          return
+        }
+        if (args !== '') {
+          await selectModel(llm, args)
+          return
+        }
+        const items: Array<{ value: string; label: string; description?: string }> = []
+        for (const provider of llm.listProviders()) {
+          let models: readonly { id: string; name: string; description?: string }[] = []
+          try {
+            models = await llm.listModels(provider.id)
+          } catch {
+            continue
+          }
+          for (const model of models) {
+            const value = provider.id + '/' + model.id
+            const current = modelSelection.current?.provider === provider.id && modelSelection.current?.model === model.id
+            items.push({
+              value,
+              label: (current ? '* ' : '  ') + value,
+              description: model.name + (model.description === undefined ? '' : ' — ' + model.description),
+            })
+          }
+        }
+        if (items.length === 0) {
+          pushNotice('warning', 'The LLM catalog advertises no models.')
+          return
+        }
+        const selectedModel = await showChoice(tui, palette, 'Select model', items, 'Enter selects · Esc cancels', interactionAbort.signal)
+        if (selectedModel !== undefined) await selectModel(llm, selectedModel)
+        return
+      }
+      case 'permissions': {
+        const presets = host.get('permissionPresets') as PermissionPresets | undefined
+        if (presets === undefined) {
+          pushNotice('warning', 'The permission-preset service is unavailable.')
+          return
+        }
+        if (args !== '') {
+          if (!presets.names.includes(args)) {
+            pushNotice('warning', 'Unknown preset "' + args + '". Available: ' + presets.names.join(', '))
+            return
+          }
+          presets.set(active.agent.session, args)
+          pushNotice('info', 'Permission preset: ' + args)
+          renderStatus()
+          return
+        }
+        const currentPreset = presets.current(active.agent.session)
+        const presetChoice = await showChoice(
+          tui,
+          palette,
+          'Permission preset (current: ' + currentPreset + ')',
+          presets.names.map(name => ({
+            value: name,
+            label: (name === currentPreset ? '* ' : '  ') + name,
+            description: name === 'workspace-write' ? 'Workspace writes only' : 'Full host access',
+          })),
+          'Enter selects · Esc cancels',
+          interactionAbort.signal,
+        )
+        if (presetChoice !== undefined) {
+          presets.set(active.agent.session, presetChoice)
+          pushNotice('info', 'Permission preset: ' + presetChoice)
+          renderStatus()
+        }
+        return
+      }
+      case 'jobs': {
+        const jobs = host.get('jobs') as JobsService | undefined
+        if (jobs === undefined) {
+          pushNotice('warning', 'The background-jobs service is unavailable.')
+          return
+        }
+        if (args.startsWith('kill ')) {
+          const id = args.slice('kill '.length).trim()
+          if (id === '') {
+            pushNotice('warning', 'Usage: /jobs kill <job-id>')
+            return
+          }
+          try {
+            const outcome = jobs.kill(id, active.id, 'user requested from native-tui')
+            pushNotice('info', 'Kill ' + id + ': ' + outcome)
+          } catch (error) {
+            pushNotice('error', 'Kill failed: ' + errorMessage(error))
+          }
+          return
+        }
+        try {
+          const rows = jobs.list(active.id)
+          if (rows.length === 0) {
+            pushNotice('info', 'No background jobs for this session.')
+            return
+          }
+          pushNotice('info', 'Jobs:' + NL + rows.map(row => row.id + '  ' + row.status + '  ' + row.kind + '  ' + row.label
+            + (row.progress === undefined ? '' : '  ' + row.progress)
+            + (row.detail === undefined ? '' : '  ' + row.detail)).join(NL))
+        } catch (error) {
+          pushNotice('error', 'Could not list jobs: ' + errorMessage(error))
+        }
+        return
+      }
+      case 'agents': {
+        const subagents = host.get('subagents') as SubagentsService | undefined
+        if (subagents === undefined) {
+          pushNotice('warning', 'The subagent service is unavailable.')
+          return
+        }
+        try {
+          const rows = await subagents.listChildren(active.id)
+          if (rows.length === 0) {
+            pushNotice('info', 'No subagents for this session.')
+            return
+          }
+          pushNotice('info', 'Subagents:' + NL + rows.map(row => row.id + '  ' + row.mode + '  ' + (row.label ?? '')
+            + '  ' + new Date(row.createdAt).toISOString()).join(NL))
+        } catch (error) {
+          pushNotice('error', 'Could not list subagents: ' + errorMessage(error))
+        }
+        return
+      }
+      case 'workspaces': {
+        const workspaceService = host.get('workspaceRegistry') as unknown as WorkspaceService | undefined
+        if (workspaceService === undefined) {
+          pushNotice('warning', 'The workspace registry is unavailable.')
+          return
+        }
+        if (args === '') {
+          const currentPath = active.agent.session.header.cwd ?? config.cwd
+          const rows = workspaceService.list()
+          if (rows.length === 0) {
+            pushNotice('info', 'No workspaces. Use /workspaces new <path>.')
+            return
+          }
+          pushNotice('info', 'Workspaces:' + NL + rows.map(row => {
+            const marker = row.path === currentPath ? '*' : ' '
+            return marker + ' ' + row.id + '  ' + row.title + '  ' + row.path + '  (' + String(row.sessionIds.length) + ' sessions)'
+          }).join(NL) + NL + 'Use /workspaces use <id|path> to start a session there.')
+          return
+        }
+        const parts = args.split(/\s+/u)
+        const subcommand = parts[0] ?? ''
+        const rest = args.slice(subcommand.length).trim()
+        if (subcommand === 'new') {
+          if (rest === '') {
+            pushNotice('warning', 'Usage: /workspaces new <path> [title]')
+            return
+          }
+          const firstSpace = rest.indexOf(' ')
+          const path = firstSpace === -1 ? rest : rest.slice(0, firstSpace)
+          const title = firstSpace === -1 ? undefined : rest.slice(firstSpace + 1).trim()
+          try {
+            const created = await workspaceService.create(path, title === '' ? undefined : title)
+            pushNotice('info', 'Workspace created: ' + created.id + '  ' + created.path)
+          } catch (error) {
+            pushNotice('error', 'Could not create workspace: ' + errorMessage(error))
+          }
+          return
+        }
+        if (subcommand === 'use') {
+          if (rest === '') {
+            pushNotice('warning', 'Usage: /workspaces use <id|path>')
+            return
+          }
+          try {
+            const workspace = workspaceService.get(rest) ?? await workspaceService.resolveByPath(rest)
+            if (workspace === undefined) {
+              pushNotice('warning', 'No workspace matches ' + rest)
+              return
+            }
+            await switchTo(() => createHostSession(host, {
+              ...config,
+              sessionId: undefined,
+              cwd: workspace.path,
+              agentPreset: selectedPreset ?? config.agentPreset,
+            }))
+          } catch (error) {
+            pushNotice('error', 'Could not switch workspace: ' + errorMessage(error))
+          }
+          return
+        }
+        if (subcommand === 'pin' || subcommand === 'unpin') {
+          const id = rest === '' ? active.id : rest as SessionId
+          try {
+            if (subcommand === 'pin') await workspaceService.pinSession(id)
+            else await workspaceService.unpinSession(id)
+            pushNotice('info', (subcommand === 'pin' ? 'Pinned ' : 'Unpinned ') + id)
+          } catch (error) {
+            pushNotice('error', 'Could not ' + subcommand + ' session: ' + errorMessage(error))
+          }
+          return
+        }
+        if (subcommand === 'archive' || subcommand === 'unarchive') {
+          if (rest === '') {
+            pushNotice('warning', 'Usage: /workspaces ' + subcommand + ' <session-id>')
+            return
+          }
+          if (subcommand === 'archive' && rest === active.id) {
+            pushNotice('warning', 'Refusing to archive the active session; switch to another session first.')
+            return
+          }
+          try {
+            if (subcommand === 'archive') await workspaceService.archiveSession(rest as SessionId)
+            else await workspaceService.unarchiveSession(rest as SessionId)
+            pushNotice('info', (subcommand === 'archive' ? 'Archived ' : 'Unarchived ') + rest)
+          } catch (error) {
+            pushNotice('error', 'Could not ' + subcommand + ' session: ' + errorMessage(error))
+          }
+          return
+        }
+        pushNotice('warning', 'Usage: /workspaces [new <path> [title] | use <id|path> | pin|unpin|archive|unarchive <id>]')
+        return
+      }
+      case 'schedule': {
+        const scheduleService = host.get('schedule') as unknown as ScheduleService | undefined
+        if (scheduleService === undefined) {
+          pushNotice('warning', 'The schedule service is unavailable.')
+          return
+        }
+        if (args === '') {
+          try {
+            const rows = await scheduleService.list({ sessionId: active.id })
+            if (rows.length === 0) {
+              pushNotice('info', 'No active reminders for this session.')
+              return
+            }
+            pushNotice('info', 'Reminders:' + NL + rows.map(row => row.id + '  ' + row.kind + '  ' + row.title + '  ' + row.scheduledAt).join(NL))
+          } catch (error) {
+            pushNotice('error', 'Could not list reminders: ' + errorMessage(error))
+          }
+          return
+        }
+        const parts = args.split(/\s+/u)
+        const subcommand = parts[0] ?? ''
+        const rest = args.slice(subcommand.length).trim()
+        if (subcommand === 'add') {
+          const firstSpace = rest.indexOf(' ')
+          const secondsText = firstSpace === -1 ? rest : rest.slice(0, firstSpace)
+          const title = firstSpace === -1 ? '' : rest.slice(firstSpace + 1).trim()
+          const seconds = Number(secondsText)
+          if (!Number.isSafeInteger(seconds) || seconds < 1 || title === '') {
+            pushNotice('warning', 'Usage: /schedule add <seconds> <title>')
+            return
+          }
+          try {
+            const created = await scheduleService.create(active.id, {
+              title,
+              prompt: title,
+              after_seconds: seconds,
+            })
+            pushNotice('info', 'Reminder created: ' + created.id + '  ' + created.scheduledAt)
+          } catch (error) {
+            pushNotice('error', 'Could not create reminder: ' + errorMessage(error))
+          }
+          return
+        }
+        if (subcommand === 'delete') {
+          if (rest === '') {
+            pushNotice('warning', 'Usage: /schedule delete <id>')
+            return
+          }
+          try {
+            const result = await scheduleService.delete({ sessionId: active.id, id: rest })
+            pushNotice('info', 'Reminder delete: ' + JSON.stringify(result))
+          } catch (error) {
+            pushNotice('error', 'Could not delete reminder: ' + errorMessage(error))
+          }
+          return
+        }
+        pushNotice('warning', 'Usage: /schedule [add <seconds> <title> | delete <id>]')
+        return
+      }
+      case 'plugins': {
+        const manager = host.get('pluginManager') as unknown as PluginManagerService | undefined
+        if (manager === undefined) {
+          pushNotice('warning', 'The plugin manager is unavailable in this profile.')
+          return
+        }
+        if (args === '') {
+          try {
+            const bundles = await manager.listBundles()
+            if (bundles.length === 0) {
+              pushNotice('info', 'No bundles reported.')
+              return
+            }
+            pushNotice('info', 'Bundles (read-only; use dsh plugin or Web to change):' + NL + bundles.map(bundle => {
+              const state = bundle.enabled ? '[on] ' : '[off] '
+              return state + bundle.name + (bundle.version === undefined ? '' : '  ' + bundle.version)
+                + (bundle.installed ? '' : '  (not installed)')
+            }).join(NL) + NL + 'Use /plugins list for plugin entries; /plugins enable|disable <entryId> to change one.')
+          } catch (error) {
+            pushNotice('error', 'Could not list bundles: ' + errorMessage(error))
+          }
+          return
+        }
+        if (args === 'list') {
+          try {
+            const rows = await manager.listPlugins()
+            if (rows.length === 0) {
+              pushNotice('info', 'No plugin entries reported.')
+              return
+            }
+            pushNotice('info', 'Plugin entries (first 40):' + NL + rows.slice(0, 40).map(row => {
+              const state = row.enabled ? '[on] ' : '[off] '
+              const readOnly = row.readOnlyReason === undefined ? '' : '  (read-only: ' + row.readOnlyReason + ')'
+              return state + row.entryId + '  ' + row.moduleName + readOnly
+            }).join(NL) + (rows.length > 40 ? NL + '… ' + String(rows.length - 40) + ' more' : '') + NL
+              + 'Use /plugins enable|disable <entryId>; the app may reload.')
+          } catch (error) {
+            pushNotice('error', 'Could not list plugin entries: ' + errorMessage(error))
+          }
+          return
+        }
+        if (args === 'market' || args.startsWith('market ')) {
+          const query = args.slice('market'.length).trim().toLowerCase()
+          try {
+            const bundles = await manager.listBundles()
+            const rows = bundles.filter(bundle => bundle.installTarget !== undefined).filter(bundle =>
+              query === ''
+              || bundle.name.toLowerCase().includes(query)
+              || (bundle.description ?? '').toLowerCase().includes(query))
+            if (rows.length === 0) {
+              pushNotice('info', query === '' ? 'The official market has no on-demand bundles.' : 'No market bundle matches "' + query + '".')
+              return
+            }
+            pushNotice('info', 'Official market (on-demand):' + NL + rows.map(bundle => {
+              const state = bundle.installed ? (bundle.enabled ? '[on] ' : '[off] ') : '[available] '
+              const target = bundle.installTarget
+              return state + bundle.name + (bundle.version === undefined ? '' : '  ' + bundle.version)
+                + (bundle.description === undefined ? '' : NL + '  ' + bundle.description.slice(0, 140))
+                + (target === undefined || bundle.installed ? '' : NL + '  install: /plugins install ' + target.spec)
+            }).join(NL))
+          } catch (error) {
+            pushNotice('error', 'Could not read the plugin market: ' + errorMessage(error))
+          }
+          return
+        }
+        if (args.startsWith('inspect ')) {
+          const spec = args.slice('inspect '.length).trim()
+          if (spec === '') {
+            pushNotice('warning', 'Usage: /plugins inspect <spec>')
+            return
+          }
+          pushNotice('info', 'Inspecting ' + spec + '…')
+          try {
+            const preview = await manager.inspect(spec)
+            if (preview.status === 'refused') {
+              pushNotice('warning', 'Refused: ' + (preview.problem ?? 'unknown') + (preview.reason === undefined ? '' : ' · ' + preview.reason))
+              return
+            }
+            pushNotice('info', 'Accepted: ' + (preview.name ?? spec)
+              + (preview.version === undefined ? '' : '@' + preview.version)
+              + ' · ' + (preview.kind ?? 'unknown')
+              + (preview.bundle === false ? ' · no bundle patch' : '')
+              + (preview.description === undefined ? '' : NL + preview.description))
+          } catch (error) {
+            pushNotice('error', 'Could not inspect ' + spec + ': ' + errorMessage(error))
+          }
+          return
+        }
+        if (args.startsWith('install ')) {
+          const spec = args.slice('install '.length).trim()
+          if (spec === '') {
+            pushNotice('warning', 'Usage: /plugins install <spec>')
+            return
+          }
+          pushNotice('info', 'Inspecting ' + spec + '…')
+          try {
+            const preview = await manager.inspect(spec)
+            if (preview.status === 'refused') {
+              pushNotice('warning', 'Refused: ' + (preview.problem ?? 'unknown') + (preview.reason === undefined ? '' : ' · ' + preview.reason))
+              return
+            }
+            const label = preview.name ?? spec
+            const confirmed = await showChoice(
+              tui,
+              palette,
+              'Install ' + label + '?',
+              [
+                { value: 'yes', label: 'Continue', description: 'pnpm installs the package; the profile may reload' },
+                { value: 'no', label: 'Cancel' },
+              ],
+              'Enter selects · Esc cancels',
+              interactionAbort.signal,
+            )
+            if (confirmed !== 'yes') return
+            pushNotice('info', 'Installing ' + label + '… pnpm may take a while.')
+            const result = await manager.installBundle(spec, { enabled: true })
+            const suffix = result.error === undefined
+              ? ' · ' + result.application
+              : ' · ' + result.error.code + (result.error.message === undefined ? '' : ' ' + result.error.message)
+            pushNotice(result.error === undefined ? 'info' : 'error', 'install ' + label + suffix)
+          } catch (error) {
+            pushNotice('error', 'Could not install ' + spec + ': ' + errorMessage(error))
+          }
+          return
+        }
+        if (args.startsWith('remove ')) {
+          const name = args.slice('remove '.length).trim()
+          if (name === '') {
+            pushNotice('warning', 'Usage: /plugins remove <bundleName>')
+            return
+          }
+          try {
+            const bundle = (await manager.listBundles()).find(item => item.name === name)
+            if (bundle === undefined) {
+              pushNotice('warning', 'Unknown bundle "' + name + '".')
+              return
+            }
+            if (bundle.removable === false) {
+              pushNotice('warning', 'Bundle "' + name + '" is not removable in this profile.')
+              return
+            }
+            const confirmed = await showChoice(
+              tui,
+              palette,
+              'Remove ' + name + '?',
+              [
+                { value: 'yes', label: 'Continue', description: 'pnpm removes the dependency and the profile may reload' },
+                { value: 'no', label: 'Cancel' },
+              ],
+              'Enter selects · Esc cancels',
+              interactionAbort.signal,
+            )
+            if (confirmed !== 'yes') return
+            pushNotice('info', 'Removing ' + name + '… pnpm may take a while.')
+            const result = await manager.removeBundle(name)
+            const suffix = result.error === undefined
+              ? ' · ' + result.application
+              : ' · ' + result.error.code + (result.error.message === undefined ? '' : ' ' + result.error.message)
+            pushNotice(result.error === undefined ? 'info' : 'error', 'remove ' + name + suffix)
+          } catch (error) {
+            pushNotice('error', 'Could not remove ' + name + ': ' + errorMessage(error))
+          }
+          return
+        }
+        if (args.startsWith('enable ') || args.startsWith('disable ')) {
+          const verb = args.startsWith('enable ') ? 'enable' : 'disable'
+          const id = args.slice(verb.length).trim()
+          if (id === '') {
+            pushNotice('warning', 'Usage: /plugins ' + verb + ' <entryId>')
+            return
+          }
+          try {
+            const row = (await manager.listPlugins()).find(item => item.entryId === id)
+            if (row === undefined) {
+              pushNotice('warning', 'Unknown plugin entry "' + id + '". Use /plugins list.')
+              return
+            }
+            if (row.readOnlyReason !== undefined) {
+              pushNotice('warning', 'Plugin entry "' + id + '" is read-only: ' + row.readOnlyReason)
+              return
+            }
+            const confirmed = await showChoice(
+              tui,
+              palette,
+              verb + ' plugin ' + id + '?',
+              [
+                { value: 'yes', label: 'Continue', description: 'The profile may reload and interrupt this terminal' },
+                { value: 'no', label: 'Cancel' },
+              ],
+              'Enter selects · Esc cancels',
+              interactionAbort.signal,
+            )
+            if (confirmed !== 'yes') return
+            const result = await manager.setPluginEnabled(id, verb === 'enable')
+            const suffix = result.error === undefined
+              ? ' · ' + result.application
+              : ' · ' + result.error.code + (result.error.message === undefined ? '' : ' ' + result.error.message)
+            pushNotice(result.error === undefined ? 'info' : 'error', verb + ' ' + id + suffix)
+          } catch (error) {
+            pushNotice('error', 'Could not ' + verb + ' plugin: ' + errorMessage(error))
+          }
+          return
+        }
+        pushNotice('warning', 'Usage: /plugins [list | market [query] | inspect <spec> | install <spec> | remove <bundle> | enable <entryId> | disable <entryId>]')
+        return
+      }
+      case 'settings': {
+        const settings = host.get('settings') as unknown as SettingsService | undefined
+        if (settings === undefined) {
+          pushNotice('warning', 'The settings service is unavailable in this profile.')
+          return
+        }
+        try {
+          if (args === 'edit' || args.startsWith('edit ')) {
+            const nsArg = args.slice('edit'.length).trim()
+            const descriptors = settings.describe({ redactSecrets: true })
+            let descriptor = nsArg === '' ? undefined : descriptors.find(row => row.ns === nsArg)
+            if (nsArg !== '' && descriptor === undefined) {
+              pushNotice('warning', 'No active settings namespace "' + nsArg + '".')
+              return
+            }
+            if (descriptor === undefined) {
+              const namespaceChoice = await showChoice(
+                tui,
+                palette,
+                'Settings namespace',
+                descriptors.map(row => ({
+                  value: row.ns,
+                  label: row.ns,
+                  description: Object.keys(row.value).join(', '),
+                })),
+                'Enter selects · Esc cancels',
+                interactionAbort.signal,
+              )
+              if (namespaceChoice === undefined) return
+              descriptor = descriptors.find(row => row.ns === namespaceChoice)
+            }
+            if (descriptor === undefined) return
+            const fields = settingsFields(descriptor.schema)
+            if (fields.length === 0) {
+              pushNotice('warning', 'Namespace "' + descriptor.ns + '" exposes no editable live fields.')
+              return
+            }
+            const field = await showChoice(
+              tui,
+              palette,
+              'Settings · ' + descriptor.ns,
+              fields.map(name => ({
+                value: name,
+                label: name,
+                description: JSON.stringify(descriptor!.value[name] ?? null).slice(0, 120),
+              })),
+              'Enter selects · Esc cancels',
+              interactionAbort.signal,
+            )
+            if (field === undefined) return
+            const path: string[] = [field]
+            while (path.length < 4) {
+              const children = settingsChildFields(descriptor.schema, path)
+              if (children.length === 0) break
+              const nested = await showChoice(
+                tui,
+                palette,
+                'Settings · ' + descriptor.ns + '.' + path.join('.'),
+                [
+                  { value: '__json__', label: 'Edit this object as JSON', description: 'Replace the whole object' },
+                  ...children.map(name => ({
+                    value: name,
+                    label: name,
+                    description: JSON.stringify(settingsValueAt(descriptor!.value, [...path, name]) ?? null).slice(0, 120),
+                  })),
+                ],
+                'Enter selects · Esc cancels',
+                interactionAbort.signal,
+              )
+              if (nested === undefined) return
+              if (nested === '__json__') break
+              path.push(nested)
+            }
+            if (descriptor.secrets?.some(secret => path.every((part, index) => secret.path[index] === part)) === true) {
+              pushNotice('warning', 'Field "' + path.join('.') + '" is secret; use the Web Models page instead of terminal history.')
+              return
+            }
+            const dotted = path.join('.')
+            const current = settingsValueAt(descriptor.value, path)
+            const raw = await showTextInput(
+              tui,
+              palette,
+              'Set ' + descriptor.ns + '.' + dotted,
+              'JSON value (current: ' + JSON.stringify(current ?? null).slice(0, 80) + ')',
+              'Enter writes · Esc cancels',
+              interactionAbort.signal,
+            )
+            if (raw === undefined) return
+            let value: unknown
+            try {
+              value = JSON.parse(raw)
+            } catch (error) {
+              pushNotice('error', 'Invalid JSON: ' + errorMessage(error))
+              return
+            }
+                        try {
+                            let patch;
+                            if (path.length === 1) {
+                                patch = { [field]: value };
+                            }
+                            else {
+                                const top = descriptor.value[field];
+                                let root;
+                                try {
+                                    root = structuredClone(top);
+                                }
+                                catch {
+                                    root = top === undefined ? {} : JSON.parse(JSON.stringify(top));
+                                }
+                                root = settingsSetAt(root, path.slice(1), value);
+                                patch = { [field]: root };
+                            }
+                            await settings.update(descriptor.ns, patch, descriptor.revision);
+                            pushNotice('info', 'Updated ' + descriptor.ns + '.' + dotted);
+                        }
+                        catch (error) {
+                            pushNotice('error', 'Could not update settings: ' + errorMessage(error));
+                        }
+                        return;
+                    }
+                    if (args.startsWith('items ')) {
+                        const rest = args.slice('items '.length).trim();
+                        const [ns, field] = rest.split(/\s+/u);
+                        if (ns === undefined || field === undefined) {
+                            pushNotice('warning', 'Usage: /settings items <namespace> <array-field>');
+                            return;
+                        }
+                        const descriptor = settings.describe({ redactSecrets: true }).find(row => row.ns === ns);
+                        if (descriptor === undefined) {
+                            pushNotice('warning', 'No active settings namespace "' + ns + '".');
+                            return;
+                        }
+                        const current = descriptor.value[field];
+                        if (!Array.isArray(current)) {
+                            pushNotice('warning', 'Settings field "' + ns + '.' + field + '" is not an array.');
+                            return;
+                        }
+                        const picked = await showChoice(tui, palette, 'Array · ' + ns + '.' + field, [
+                            ...current.map((item, index) => ({
+                                value: String(index),
+                                label: String(index) + '. ' + JSON.stringify(item ?? null).slice(0, 100),
+                                description: 'array item',
+                            })),
+                            { value: '__append__', label: '+ Append JSON item', description: 'Add one item to the end' },
+                        ], 'Enter selects · Esc cancels', interactionAbort.signal);
+                        if (picked === undefined)
+                            return;
+                        let array;
+                        try {
+                            array = structuredClone(current);
+                        }
+                        catch {
+                            array = JSON.parse(JSON.stringify(current));
+                        }
+                        if (picked === '__append__') {
+                            const raw = await showTextInput(tui, palette, 'Append ' + ns + '.' + field, 'JSON value', 'Enter writes · Esc cancels', interactionAbort.signal);
+                            if (raw === undefined)
+                                return;
+                            try {
+                                array.push(JSON.parse(raw));
+                            }
+                            catch (error) {
+                                pushNotice('error', 'Invalid JSON: ' + errorMessage(error));
+                                return;
+                            }
+                        }
+                        else {
+                            const index = Number(picked);
+                            if (!Number.isSafeInteger(index) || index < 0 || index >= array.length) {
+                                pushNotice('warning', 'No array item at index ' + picked + '.');
+                                return;
+                            }
+                            const action = await showChoice(tui, palette, 'Item ' + String(index) + ' · ' + ns + '.' + field, [
+                                { value: 'edit', label: 'Edit JSON', description: 'Replace this item' },
+                                { value: 'remove', label: 'Remove', description: 'Delete this item' },
+                                { value: 'back', label: 'Back' },
+                            ], 'Enter selects · Esc cancels', interactionAbort.signal);
+                            if (action === 'remove') {
+                                array.splice(index, 1);
+                            }
+                            else if (action === 'edit') {
+                                const raw = await showTextInput(tui, palette, 'Set item ' + String(index) + ' · ' + ns + '.' + field, 'JSON value (current: ' + JSON.stringify(array[index] ?? null).slice(0, 80) + ')', 'Enter writes · Esc cancels', interactionAbort.signal);
+                                if (raw === undefined)
+                                    return;
+                                try {
+                                    array[index] = JSON.parse(raw);
+                                }
+                                catch (error) {
+                                    pushNotice('error', 'Invalid JSON: ' + errorMessage(error));
+                                    return;
+                                }
+                            }
+                            else {
+                                return;
+                            }
+                        }
+                        try {
+                            await settings.update(ns, { [field]: array }, descriptor.revision);
+                            pushNotice('info', 'Updated array ' + ns + '.' + field + ' (' + String(array.length) + ' items)');
+                        }
+                        catch (error) {
+                            pushNotice('error', 'Could not update settings array: ' + errorMessage(error));
+                        }
+                        return;
+                    }
+                    if (args.startsWith('set ')) {
+                        const rest = args.slice('set '.length).trim();
+                        const space = rest.indexOf(' ');
+                        const ns = space === -1 ? rest : rest.slice(0, space);
+                        const json = space === -1 ? '' : rest.slice(space + 1).trim();
+                        if (ns === '' || json === '') {
+                            pushNotice('warning', 'Usage: /settings set <namespace> <json-object>');
+                            return;
+                        }
+                        let patch;
+                        try {
+                            patch = JSON.parse(json);
+                        }
+                        catch (error) {
+                            pushNotice('error', 'Invalid JSON: ' + errorMessage(error));
+                            return;
+                        }
+                        if (patch === null || typeof patch !== 'object' || Array.isArray(patch)) {
+                            pushNotice('warning', 'Settings patch must be a JSON object.');
+                            return;
+                        }
+                        const descriptor = settings.describe({ redactSecrets: true }).find(row => row.ns === ns);
+                        if (descriptor === undefined) {
+                            pushNotice('warning', 'No active settings namespace "' + ns + '".');
+                            return;
+                        }
+                        if (descriptor.secrets !== undefined && descriptor.secrets.length > 0) {
+                            pushNotice('warning', 'This namespace has secret fields; prefer the Web Models page for credentials. Writing non-secret fields now.');
+                        }
+                        await settings.update(ns, patch, descriptor.revision);
+                        pushNotice('info', 'Settings updated: ' + ns + ' (live where the owner applies immediately)');
+                        return;
+                    }
+                    const descriptors = settings.describe({ redactSecrets: true });
+                    if (descriptors.length === 0) {
+                        pushNotice('info', 'No configurable plugin namespaces are active.');
+                        return;
+                    }
+                    pushNotice('info', 'Settings namespaces (read-only unless using /settings set):' + NL + descriptors.map(descriptor => {
+                        const keys = Object.keys(descriptor.value);
+                        return descriptor.ns + (keys.length === 0 ? '' : '  ' + keys.join(', '));
+                    }).join(NL));
+                }
+                catch (error) {
+                    pushNotice('error', 'Could not read/write settings: ' + errorMessage(error));
+                }
+                return;
+            }
+            case 'preset': {
+                const presetService = host.get('agentPresets');
+                if (presetService === undefined) {
+                    pushNotice('warning', 'The agent-preset registry is unavailable.');
+                    return;
+                }
+                try {
+                    const rows = await presetService.list();
+                    const currentPreset = presetService.composedPreset(active.agent.ctx);
+                    if (args === '') {
+                        const choice = await showChoice(tui, palette, 'Agent preset (current: ' + (currentPreset ?? 'none') + ')', rows.map((row: { id: string; name?: string; description?: string }) => ({
+                            value: row.id,
+                            label: (row.id === currentPreset ? '* ' : row.id === selectedPreset ? '+ ' : '  ') + row.id,
+                            description: (row.name ?? '') + (row.description === undefined ? '' : ' — ' + row.description),
+                        })), 'Enter selects for the next /new · Esc cancels', interactionAbort.signal);
+                        if (choice !== undefined) {
+                            selectedPreset = choice;
+                            pushNotice('info', 'Next /new will use preset: ' + choice);
+                        }
+                        return;
+                    }
+                    if (!rows.some((row: { id: string }) => row.id === args)) {
+                        pushNotice('warning', 'Unknown preset "' + args + '". Available: ' + rows.map((row: { id: string }) => row.id).join(', '));
+                        return;
+                    }
+                    selectedPreset = args;
+                    pushNotice('info', 'Next /new will use preset: ' + args);
+                }
+                catch (error) {
+                    pushNotice('error', 'Could not read presets: ' + errorMessage(error));
+                }
+                return;
+            }
+            case 'export': {
+                if (args === 'html' || args.startsWith('html ')) {
+                    const target = args === 'html'
+                        ? 'dsh-session-' + active.id + '.html'
+                        : args.slice('html '.length).trim();
+                    if (target === '') {
+                        pushNotice('warning', 'Usage: /export html [path]');
+                        return;
+                    }
+                    try {
+                        const result = await exportSessionHtml(active.agent, target, config.cwd);
+                        pushNotice('info', 'Exported HTML: ' + result.path + ' (' + String(result.bytes) + ' bytes, ' + String(result.eventCount) + ' events)');
+                    }
+                    catch (error) {
+                        pushNotice('error', 'HTML export failed: ' + errorMessage(error));
+                    }
+                    return;
+                }
+                if (args === 'zip' || args.startsWith('zip ')) {
+                    const target = args === 'zip'
+                        ? 'dsh-session-' + active.id + '.zip'
+                        : args.slice('zip '.length).trim();
+                    if (target === '') {
+                        pushNotice('warning', 'Usage: /export zip [path]');
+                        return;
+                    }
+                    const attachments = host.get('attachments') as AttachmentsService | undefined;
+                    if (attachments === undefined) {
+                        pushNotice('warning', 'The attachment service is unavailable; cannot build a ZIP bundle.');
+                        return;
+                    }
+                    try {
+                        const result = await exportSessionBundle(active.agent, target, config.cwd, attachments, interactionAbort.signal);
+                        pushNotice('info', 'Exported ZIP bundle: ' + result.path + ' (' + String(result.bytes) + ' bytes, '
+                            + String(result.attachments.length) + ' attachment(s), '
+                            + String(result.deliverables.length) + ' deliverable(s)'
+                            + (result.skipped.length === 0 ? '' : ', ' + String(result.skipped.length) + ' skipped') + ')');
+                    }
+                    catch (error) {
+                        pushNotice('error', 'ZIP export failed: ' + errorMessage(error));
+                    }
+                    return;
+                }
+                const target = args === '' ? 'dsh-session-' + active.id + '.jsonl' : args;
+                try {
+                    const result = await exportSessionLog(active.agent, target, config.cwd);
+                    pushNotice('info', 'Exported ' + String(result.eventCount) + ' events to ' + result.path);
+                }
+                catch (error) {
+                    pushNotice('error', 'Export failed: ' + errorMessage(error));
+                }
+                return;
+            }
+            case 'open': {
+                if (args === '') {
+                    pushNotice('warning', 'Usage: /open <path>');
+                    return;
+                }
+                try {
+                    const target = resolve(config.cwd, args);
+                    const preview = await readTextPreview(target);
+                    if (isMarkdownPath(target)) {
+                        await showMarkdownPreview(tui, palette, preview.path, preview.text, interactionAbort.signal);
+                        return;
+                    }
+                    pushNotice('info', 'File: ' + preview.path + ' (' + String(preview.bytes) + ' bytes'
+                        + (preview.truncated ? ', truncated' : '') + ')' + NL + preview.text);
+                }
+                catch (error) {
+                    pushNotice('error', 'Could not open ' + args + ': ' + errorMessage(error));
+                }
+                return;
+            }
+            case 'attach': {
+                const attachments = host.get('attachments');
+                if (attachments === undefined) {
+                    pushNotice('warning', 'The attachment service is unavailable in this profile.');
+                    return;
+                }
+                if (args === 'paste') {
+                    const clipboard = getNativeClipboard();
+                    if (clipboard === undefined) {
+                        pushNotice('warning', 'Clipboard images are unavailable on this platform.');
+                        return;
+                    }
+                    try {
+                        const image = await clipboard.getImage();
+                        if (image === undefined) {
+                            pushNotice('warning', 'The system clipboard image reader is unavailable.');
+                            return;
+                        }
+                        if (image === null) {
+                            pushNotice('info', 'No image on the clipboard.');
+                            return;
+                        }
+                        if (image.byteLength > MAX_ATTACHMENT_BYTES) {
+                            pushNotice('warning', 'Clipboard image is ' + String(image.byteLength) + ' bytes; terminal attachment limit is ' + String(MAX_ATTACHMENT_BYTES) + '.');
+                            return;
+                        }
+                        const mediaType = detectImageMediaType(image);
+                        if (mediaType === undefined) {
+                            pushNotice('warning', 'Clipboard image is not PNG, JPEG, GIF, or WebP.');
+                            return;
+                        }
+                        const name = 'clipboard' + imageExtension(mediaType);
+                        const refs = await attachments.saveImages([{ data: image, mediaType, name }]);
+                        const ref = refs[0];
+                        if (ref === undefined)
+                            throw new Error('attachment service returned no image reference');
+                        pendingAttachments.push({
+                            label: name,
+                            kind: 'image',
+                            block: { type: 'image', attachment: ref },
+                        });
+                        pushNotice('info', 'Attached clipboard image: ' + name + ' (sent with the next prompt)');
+                        renderStatus();
+                    }
+                    catch (error) {
+                        pushNotice('error', 'Could not read the clipboard image: ' + errorMessage(error));
+                    }
+                    return;
+                }
+                if (args.startsWith('preview ')) {
+                    const index = Number(args.slice('preview '.length).trim());
+                    if (!Number.isSafeInteger(index) || index < 0 || pendingAttachments[index] === undefined) {
+                        pushNotice('warning', 'Usage: /attach preview <index> (see /attach list)');
+                        return;
+                    }
+                    const pending = pendingAttachments[index];
+                    try {
+                        if (pending.block.type === 'image') {
+                            const stored = await attachments.readImage(pending.block.attachment, interactionAbort.signal);
+                            await showImagePreview(tui, palette, {
+                                path: 'attachment://' + pending.block.attachment.attachmentId,
+                                name: pending.label,
+                                mediaType: pending.block.attachment.mediaType,
+                                base64: Buffer.from(stored.data).toString('base64'),
+                                bytes: stored.data.byteLength,
+                            }, interactionAbort.signal);
+                        }
+                        else if (pending.block.type === 'file') {
+                            const chunks = [];
+                            let total = 0;
+                            for await (const chunk of attachments.readFileStream(pending.block.attachment, interactionAbort.signal)) {
+                                const remaining = 65_536 - total;
+                                if (remaining <= 0)
+                                    break;
+                                const part = chunk.byteLength > remaining ? chunk.subarray(0, remaining) : chunk;
+                                chunks.push(part);
+                                total += part.byteLength;
+                                if (total >= 65_536)
+                                    break;
+                            }
+                            const data = Buffer.concat(chunks.map(chunk => Buffer.from(chunk)));
+                            if (data.includes(0)) {
+                                pushNotice('info', 'File: ' + pending.label + ' (' + String(data.byteLength) + ' bytes, binary)');
+                            }
+                            else {
+                                pushNotice('info', 'File: ' + pending.label + ' (' + String(total) + ' bytes'
+                                    + (total >= 65_536 ? ', truncated' : '') + ')' + NL + sanitizeTerminalText(new TextDecoder().decode(data)));
+                            }
+                        }
+                        else {
+                            pushNotice('warning', 'Attachment ' + String(index) + ' has no previewable block.');
+                        }
+                    }
+                    catch (error) {
+                        pushNotice('error', 'Could not preview attachment ' + String(index) + ': ' + errorMessage(error));
+                    }
+                    return;
+                }
+                if (args === '' || args === 'list') {
+                    if (pendingAttachments.length === 0) {
+                        pushNotice('info', 'No staged attachments. Use /attach <path>, /attach paste, or /attach clear.');
+                        return;
+                    }
+                    pushNotice('info', 'Staged attachments:' + NL + pendingAttachments.map((item, index) => String(index) + '. ' + item.kind + '  ' + item.label).join(NL)
+                        + NL + 'Use /attach preview <index> to inspect one.');
+                    return;
+                }
+                if (args === 'clear') {
+                    const count = pendingAttachments.length;
+                    pendingAttachments = [];
+                    pushNotice('info', 'Cleared ' + String(count) + ' staged attachment(s).');
+                    renderStatus();
+                    return;
+                }
+                try {
+                    const pending = await loadAttachment(args, config.cwd, attachments);
+                    pendingAttachments.push(pending);
+                    pushNotice('info', 'Attached ' + pending.kind + ': ' + pending.label + ' (sent with the next prompt)');
+                    renderStatus();
+                }
+                catch (error) {
+                    pushNotice('error', 'Could not attach ' + args + ': ' + errorMessage(error));
+                }
+                return;
+            }
+            case 'files': {
+                let current = resolve(config.cwd, args === '' ? '.' : args);
+                for (;;) {
+                    let entries;
+                    try {
+                        entries = await listDirectory(current);
+                    }
+                    catch (error) {
+                        pushNotice('error', 'Could not list ' + current + ': ' + errorMessage(error));
+                        return;
+                    }
+                    const parent = dirname(current);
+                    const items = [
+                        ...(parent === current ? [] : [{ value: '__parent__', label: '../', description: 'parent directory' }]),
+                        ...entries.map(entry => ({
+                            value: entry.path,
+                            label: entry.kind === 'directory' ? entry.name + '/' : entry.name,
+                            description: entry.kind,
+                        })),
+                    ];
+                    if (items.length === 0) {
+                        pushNotice('info', 'Directory is empty: ' + current);
+                        return;
+                    }
+                    const picked = await showChoice(tui, palette, 'Files · ' + current, items, 'Enter opens · Esc exits', interactionAbort.signal);
+                    if (picked === undefined)
+                        return;
+                    if (picked === '__parent__') {
+                        current = parent;
+                        continue;
+                    }
+                    const entry = entries.find(candidate => candidate.path === picked);
+                    if (entry === undefined)
+                        return;
+                    if (entry.kind === 'directory') {
+                        current = entry.path;
+                        continue;
+                    }
+                    try {
+                        const preview = await readTextPreview(entry.path);
+                        pushNotice('info', 'File: ' + preview.path + ' (' + String(preview.bytes) + ' bytes'
+                            + (preview.truncated ? ', truncated' : '') + ')' + NL + preview.text);
+                    }
+                    catch (error) {
+                        pushNotice('error', 'Could not open ' + entry.path + ': ' + errorMessage(error));
+                    }
+                    return;
+                }
+            }
+            case 'changes': {
+                const changes = host.get('workspaceChanges');
+                if (changes === undefined) {
+                    pushNotice('warning', 'The workspace-changes service is unavailable in this profile.');
+                    return;
+                }
+                const latest = active.agent.session.snapshotEvents()
+                    .filter(event => (event.type as string) === 'workspace/changes')
+                    .at(-1) as unknown as { readonly seq: number } | undefined;
+                if (latest === undefined) {
+                    pushNotice('info', 'No workspace-change summary recorded for this session yet.');
+                    return;
+                }
+                const seq = Number(latest.seq);
+                if (args.startsWith('diff ')) {
+                    const index = Number(args.slice('diff '.length).trim());
+                    if (!Number.isSafeInteger(index) || index < 0) {
+                        pushNotice('warning', 'Usage: /changes diff <file-index>');
+                        return;
+                    }
+                    try {
+                        const diff = await changes.diff(active.id, seq, index, interactionAbort.signal);
+                        if (diff === undefined) {
+                            pushNotice('warning', 'No comparison is available for file ' + String(index) + '.');
+                            return;
+                        }
+                        pushNotice('info', formatWorkspaceDiff(diff));
+                    }
+                    catch (error) {
+                        pushNotice('error', 'Could not read the file diff: ' + errorMessage(error));
+                    }
+                    return;
+                }
+                const summary = changes.summary(active.id, seq);
+                if (summary === undefined) {
+                    pushNotice('warning', 'The latest change summary is no longer available in this process.');
+                    return;
+                }
+                pushNotice('info', formatChangesSummary(summary) + NL + 'Use /changes diff <index> for one file.');
+                return;
+            }
+            case 'deliverables': {
+                const events = active.agent.session.snapshotEvents()
+                    .filter(event => (event.type as string) === 'deliverables/presented')
+                    .map(event => event.data as { readonly turn: number; readonly files: readonly PresentedFileView[] });
+                if (events.length === 0) {
+                    pushNotice('info', 'No presented deliverables in this session yet.');
+                    return;
+                }
+                if (args === 'panel') {
+                    const rows = collectDeliverables(events);
+                    const picked = await showChoice(tui, palette, 'Deliverables', rows.map((row, index) => ({
+                        value: String(index),
+                        label: String(index) + '. ' + row.path,
+                        description: (row.description ?? 'turn ' + String(row.turn)),
+                    })), 'Enter selects · Esc closes', interactionAbort.signal);
+                    if (picked === undefined)
+                        return;
+                    const index = Number(picked);
+                    const target = rows[index];
+                    if (target === undefined)
+                        return;
+                    const action = await showChoice(tui, palette, 'Deliverable · ' + target.path, [
+                        { value: 'open', label: 'Preview', description: 'Render text or Markdown in the transcript/overlay' },
+                        { value: 'reveal', label: 'Reveal', description: 'Open the system file manager at this file' },
+                        { value: 'back', label: 'Back' },
+                    ], 'Enter selects · Esc closes', interactionAbort.signal);
+                    if (action === 'open') {
+                        await runCommand('/deliverables open ' + String(index));
+                    }
+                    else if (action === 'reveal') {
+                        await runCommand('/deliverables reveal ' + String(index));
+                    }
+                    return;
+                }
+                if (args.startsWith('reveal ')) {
+                    const index = Number(args.slice('reveal '.length).trim());
+                    if (!Number.isSafeInteger(index) || index < 0) {
+                        pushNotice('warning', 'Usage: /deliverables reveal <index>');
+                        return;
+                    }
+                    const target = collectDeliverables(events)[index];
+                    if (target === undefined) {
+                        pushNotice('warning', 'No presented deliverable at index ' + String(index) + '.');
+                        return;
+                    }
+                    if (systemRevealCommand(process.platform, target.path) === undefined) {
+                        pushNotice('warning', 'Revealing files is unsupported on this platform.');
+                        return;
+                    }
+                    const confirmed = await showChoice(tui, palette, 'Reveal ' + target.path + '?', [
+                        { value: 'yes', label: 'Continue', description: 'Open the system file manager at this path' },
+                        { value: 'no', label: 'Cancel' },
+                    ], 'Enter selects · Esc cancels', interactionAbort.signal);
+                    if (confirmed !== 'yes')
+                        return;
+                    if (revealWithSystemApp(target.path))
+                        pushNotice('info', 'Revealed ' + target.path + ' in the system file manager.');
+                    else
+                        pushNotice('error', 'Could not launch the system file manager for ' + target.path + '.');
+                    return;
+                }
+                if (args.startsWith('open ')) {
+                    const index = Number(args.slice('open '.length).trim());
+                    if (!Number.isSafeInteger(index) || index < 0) {
+                        pushNotice('warning', 'Usage: /deliverables open <index>');
+                        return;
+                    }
+                    const target = collectDeliverables(events)[index];
+                    if (target === undefined) {
+                        pushNotice('warning', 'No presented deliverable at index ' + String(index) + '.');
+                        return;
+                    }
+                    try {
+                        const preview = await readTextPreview(target.path);
+                        pushNotice('info', 'File: ' + preview.path + ' (' + String(preview.bytes) + ' bytes'
+                            + (preview.truncated ? ', truncated' : '') + ')' + NL + preview.text);
+                    }
+                    catch (error) {
+                        pushNotice('error', 'Could not open ' + target.path + ': ' + errorMessage(error));
+                    }
+                    return;
+                }
+                pushNotice('info', formatDeliverables(events));
+                return;
+            }
+            case 'preview': {
+                if (args === '') {
+                    pushNotice('warning', 'Usage: /preview <image-path>');
+                    return;
+                }
+                try {
+                    const image = await readImagePreview(resolve(config.cwd, args));
+                    await showImagePreview(tui, palette, image, interactionAbort.signal);
+                }
+                catch (error) {
+                    pushNotice('error', 'Could not preview ' + args + ': ' + errorMessage(error));
+                }
+                return;
+            }
+            case 'tools': {
+                const calls = collectToolCalls(active.agent.session.snapshotEvents(), 20);
+                if (calls.length === 0) {
+                    pushNotice('info', 'No tool calls recorded in this session yet.');
+                    return;
+                }
+                pushNotice('info', 'Tool calls:' + NL + calls.map((call, index) => String(index) + '. ' + call.name
+                    + (call.isError === true ? '  error' : call.result === undefined ? '  pending' : '  ok')).join(NL)
+                    + NL + 'Use /tool <index> to page the full arguments and result.');
+                return;
+            }
+            case 'tool': {
+                if (args === '') {
+                    pushNotice('warning', 'Usage: /tool <index> (see /tools)');
+                    return;
+                }
+                const index = Number(args);
+                if (!Number.isSafeInteger(index) || index < 0) {
+                    pushNotice('warning', 'Usage: /tool <index> (see /tools)');
+                    return;
+                }
+                const call = collectToolCalls(active.agent.session.snapshotEvents(), 20)[index];
+                if (call === undefined) {
+                    pushNotice('warning', 'No tool call at index ' + String(index) + '.');
+                    return;
+                }
+                let formattedArgs = call.args;
+                try {
+                    formattedArgs = JSON.stringify(JSON.parse(call.args), null, 2);
+                }
+                catch {
+                    // Keep the recorded text when arguments are not JSON.
+                }
+                const text = call.name + ' · ' + call.callId + ' · ' + (call.isError === true ? 'error' : 'ok')
+                    + NL + NL + 'Arguments:' + NL + formattedArgs
+                    + NL + NL + 'Result:' + NL + (call.result === undefined ? '(pending)' : call.result);
+                await showTextPager(tui, palette, 'Tool · ' + call.name, text, interactionAbort.signal);
+                return;
+            }
+            case 'diff': {
+                const calls = collectToolCalls(active.agent.session.snapshotEvents(), 50);
+                const withDiffs = calls
+                    .map((call, index) => ({ call, index }))
+                    .filter(item => item.call.diffs !== undefined && item.call.diffs.length > 0);
+                if (withDiffs.length === 0) {
+                    pushNotice('info', 'No file diffs recorded in this session yet.');
+                    return;
+                }
+                let entry = withDiffs.at(-1);
+                if (args !== '') {
+                    const index = Number(args);
+                    if (!Number.isSafeInteger(index) || index < 0) {
+                        pushNotice('warning', 'Usage: /diff [tool-index]');
+                        return;
+                    }
+                    entry = withDiffs.find(item => item.index === index);
+                    if (entry === undefined) {
+                        pushNotice('warning', 'No tool diff at index ' + String(index) + '. Use /tools to list calls.');
+                        return;
+                    }
+                }
+                if (entry === undefined)
+                    return;
+                const lines = [palette.bold('Diff · ' + entry.call.name + ' · ' + entry.call.callId)];
+                for (const diff of entry.call.diffs ?? []) {
+                    lines.push(palette.bold(palette.accent('diff ' + diff.path)));
+                    for (const row of diffLines(diff.oldText, diff.newText, 120)) {
+                        lines.push(row.kind === 'add'
+                            ? palette.success('+ ' + row.text)
+                            : row.kind === 'remove' ? palette.error('- ' + row.text) : palette.dim('  ' + row.text));
+                    }
+                }
+                await showTextPager(tui, palette, 'Diff · ' + entry.call.name, lines.join('\n'), interactionAbort.signal);
+                return;
+            }
+            case 'attachments': {
+                if (pendingAttachments.length === 0) {
+                    pushNotice('info', 'No staged attachments. Use /attach <path> or /attach paste to add one.');
+                    return;
+                }
+                const picked = await showChoice(tui, palette, 'Attachments', pendingAttachments.map((item, index) => ({
+                    value: String(index),
+                    label: String(index) + '. ' + item.label,
+                    description: item.kind + (item.kind === 'image' ? ' · image preview available' : ' · text preview available'),
+                })), 'Enter opens · Esc closes', interactionAbort.signal);
+                if (picked === undefined)
+                    return;
+                const index = Number(picked);
+                const pending = pendingAttachments[index];
+                if (pending === undefined)
+                    return;
+                const action = await showChoice(tui, palette, 'Attachment · ' + pending.label, [
+                    { value: 'preview', label: 'Preview', description: pending.kind === 'image' ? 'Render the image' : 'Show up to 64 KiB of text' },
+                    { value: 'remove', label: 'Remove', description: 'Unstage this attachment' },
+                    { value: 'back', label: 'Back' },
+                ], 'Enter selects · Esc closes', interactionAbort.signal);
+                if (action === 'preview') {
+                    await runCommand('/attach preview ' + String(index));
+                    return;
+                }
+                if (action === 'remove') {
+                    const removed = pendingAttachments.splice(index, 1)[0];
+                    if (removed !== undefined)
+                        pushNotice('info', 'Removed staged attachment: ' + removed.label);
+                    renderStatus();
+                }
+                return;
+            }
+            default: {
+                try {
+                    const execution = await host.commands.execute(active.agent, line, [], new AbortController().signal);
+                    if (execution === undefined) {
+                        pushNotice('warning', 'Unknown command: /' + name + '. Use /help for local and host commands.');
+                    }
+                    else if (execution.result.text !== undefined && execution.result.text !== '') {
+                        pushNotice(execution.result.kind === 'error' ? 'error' : 'info', execution.result.text);
+                    }
+                }
+                catch (error) {
+                    pushNotice('error', 'Command failed: ' + errorMessage(error));
+                }
+            }
+        }
+    };
+    const handleSubmit = (text: string): void => {
+        const trimmed = text.trim();
+        if (trimmed === '' && pendingAttachments.length === 0)
+            return;
+        editor.setText('');
+        if (trimmed.startsWith('/')) {
+            void runCommand(trimmed);
+            return;
+        }
+        sendPrompt(trimmed);
+    };
+    const requestExit = (code: number): void => {
+        if (exiting || disposed)
+            return;
+        exiting = true;
+        void dispose().then(() => { onExit(code); }, () => { onExit(code); });
+    };
+    const onSignal = () => {
+        void dispose().finally(() => { process.exit(143); });
+    };
+    const dispose = async () => {
+        if (disposed)
+            return;
+        disposed = true;
+        interactionAbort.abort(new Error('native-tui: terminal disposed'));
+        disposeModelSelection?.();
+        disposeModelSelection = undefined;
+        disposeInteractions();
+        clearSubscriptions();
+        process.off('SIGTERM', onSignal);
+        process.off('SIGHUP', onSignal);
+        try {
+            tui.stop();
+        }
+        catch {
+            // The terminal may already be gone; restoration is best-effort here.
+        }
+        await active.dispose();
+    };
+    editor.onSubmit = handleSubmit;
+    tui.addInputListener((data) => {
+        if (data === String.fromCharCode(3)) {
+            if (active.agent.status === 'running') {
+                active.agent.cancel({ kind: 'user' });
+                return { consume: true };
+            }
+            requestExit(0);
+            return { consume: true };
+        }
+        if (data === String.fromCharCode(4)) {
+            requestExit(0);
+            return { consume: true };
+        }
+        return undefined;
+    });
+    process.once('SIGTERM', onSignal);
+    process.once('SIGHUP', onSignal);
+    try {
+        registerInteractions();
+        subscribeActive();
+        tui.start();
+        tui.setFocus(editor);
+        tui.requestRender();
+    }
+    catch (error) {
+        process.off('SIGTERM', onSignal);
+        process.off('SIGHUP', onSignal);
+        await dispose();
+        throw error;
+    }
+    return {
+        dispose: async () => {
+            await dispose();
+        },
+    };
+}
+//# sourceMappingURL=app.js.map

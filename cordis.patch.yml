@@ -1,0 +1,112 @@
+# dsh-native-tui bundle patch: host-native terminal front door with Agent Presets.
+# Host services come from dsh-base; this layer adds transport/session/schedule hosts
+# and the preset registry, then disables the base agent-plane rows presets replace.
+- insert:
+    - id: connection
+      name: '@deepseek-ai/dsh-client-connection'
+
+    - id: workspace
+      name: '@deepseek-ai/dsh-workspace'
+
+    - id: file-upload
+      name: '@deepseek-ai/dsh-client-file-upload'
+
+    - id: session-controller
+      name: '@deepseek-ai/dsh-api-session-controller'
+
+    - id: schedule
+      name: '@deepseek-ai/dsh-schedule'
+
+    - id: subagent-model-selection-settings
+      name: '@deepseek-ai/dsh-tool-subagent/model-selection-settings'
+
+    - id: file-reference-local
+      name: '@deepseek-ai/dsh-file-reference-local'
+
+    - id: session-reference
+      name: '@deepseek-ai/dsh-session-reference'
+
+    - id: cordis-host-runner
+      name: '@deepseek-ai/dsh-cordis-host-runner'
+
+    - id: cordis-inspect-providers
+      name: '@deepseek-ai/dsh-tool-cordis/host'
+
+    - id: agent-preset-registry
+      name: '@deepseek-ai/dsh-agent-preset-registry'
+      config:
+        default: standard
+
+    - id: workspace-changes
+      name: '@deepseek-ai/dsh-workspace-changes'
+
+    - id: native-tui
+      name: dsh-native-tui
+
+# The Web surface moves these per-agent contributions behind presets. The terminal
+# now does the same; keeping them in the base plane would duplicate preset tools.
+- id: tool-bash
+  disabled: true
+
+- id: tool-pwsh
+  disabled: true
+
+- id: tool-jobs
+  disabled: true
+
+- id: tool-fs
+  disabled: true
+
+- id: tool-fs-search
+  disabled: true
+
+- id: skill-filesystem
+  disabled: true
+
+- id: tool-skill
+  disabled: true
+
+- id: command-goal
+  disabled: true
+
+- id: tool-goal
+  disabled: true
+
+- id: plan-mode
+  disabled: true
+
+- id: compaction-basic
+  disabled: true
+
+- id: command-compact
+  disabled: true
+
+- id: tool-result-pruner
+  disabled: true
+
+- id: tool-subagent-control
+  disabled: true
+
+- id: tool-subagent-list-agents
+  disabled: true
+
+- id: tool-subagent
+  disabled: true
+
+- id: tool-subagent-fork
+  disabled: true
+
+- id: workflow-ptc
+  disabled: true
+
+- id: tool-workflow
+  disabled: true
+
+- id: agent-instructions
+  disabled: true
+
+- id: tool-todo
+  disabled: true
+
+- id: tool-web
+  disabled: true
