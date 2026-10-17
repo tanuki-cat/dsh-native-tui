@@ -2,7 +2,7 @@
 
 DeepSeek Harness 的 host-native 终端前端，基于 pi-tui。
 
-> 状态：实施完成（30 轮 + 第三方模型引导，66 个单元测试通过）；已知差距见进度记录。  
+> 状态：实施完成（30 轮 + 第三方模型引导，68 个单元测试通过）；已知差距见进度记录。  
 > 目标：在 TUI 中提供 Web 模式的核心能力，而不是复制浏览器图形界面。  
 > 架构说明与差距清单：[Host-native 方案](docs/design-task-feature-dsh-native-tui-host-native.md)。  
 > 实施进度、验证证据与未验收项：[实施进度](docs/progress-dsh-native-tui.md)。
@@ -11,7 +11,7 @@ DeepSeek Harness 的 host-native 终端前端，基于 pi-tui。
 
 - 新建/恢复 Session，owned root Agent。
 - 流式文本、Markdown、reasoning、工具卡片（write/edit 结果渲染 ± diff 行）、turn 失败提示。
-- 本地命令与宿主命令执行（compact/feedback/goal/permission/plan）。
+- 本地命令与宿主命令执行（compact/feedback/goal/permission/plan）；slash 命令支持子命令补全，例如 `/provider` 显示 add/list/remove。
 - 审批与问答 waterfall；question probe 已通过真实 Host 验证。
 - 模型选择器（LLM catalog 为空时明确提示）、reasoning effort 切换、权限预设、后台任务、子代理列表。
 - 模型与 reasoning effort 通过 Host `agentDefaultModel.saveSelection` 持久化；重启或 `/new` 沿用，不再回落默认。
@@ -151,7 +151,7 @@ dsh --profile tui
 ## 开发与验证
 
 ~~~sh
-pnpm check          # typecheck + 66 unit tests + build
+pnpm check          # typecheck + 68 unit tests + build
 pnpm test
 pnpm build
 ~~~

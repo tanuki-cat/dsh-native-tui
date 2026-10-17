@@ -62,7 +62,7 @@ pnpm check
   tsc -p tsconfig.build.json
 
 Test Files  17 passed (17)
-Tests       66 passed (66)
+Tests       68 passed (68)
 ```
 
 ### 安装与启动
@@ -106,7 +106,7 @@ src/index.ts                 Cordis 入口、TTY 守卫
 src/config.ts                schemastery 配置、fullscreen
 src/runtime/                 agent/session、attachments、bundle、html、images、open、providers、settings、tool-log
 src/ui/                      app、autocomplete、dialogs、transcript、diff、theme
-tests/                       19 个测试文件，66 个测试
+tests/                       19 个测试文件，68 个测试
 scripts/fake-tty-*.mjs       fake-TTY 验证脚本
 README.md
 docs/design-task-feature-dsh-native-tui-host-native.md
@@ -140,6 +140,7 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - 已验证本地命令输出按事件顺序插入：`/provider list`、`/model`、`/reasoning`、`/status` 的 notice 位于随后 prompt 的 context/AI 输出之前。
 - 已验证 Store API key 模式：粘贴 key → credential store（0600）→ 自动发现 stored-model → 保存并选中，`/provider list` 显示 `(stored)`。
 - 已验证裸 `quit` 退出 TUI，退出码 0。
+- 已验证输入 `/provider` 时补全列表显示 `/provider add/list/remove`；输入 `/provider re` 只显示 remove。
 - 已验证把 `sk-proj-...` 填入 env 字段会被拒绝且不写 profile；缺 env 时同样不保存。
 - 默认 Agent Preset 已设为 ptc：全新 profile 启动后 `/status` 显示 `Preset: ptc`；既有 Session 仍按其记录恢复。
 - 已验证空白 Session 的 `/preset minimal` 直接切换当前 Session，`/status` 显示 minimal。
@@ -163,4 +164,4 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 | 14–20 | Plugin remove/market、剪贴板图片、图片预览、alt-screen、`@@session` |
 | 21–25 | 附件预览、ZIP/HTML 导出、Deliverables reveal、工具结果 pager、Markdown |
 | 26–30 | 独立 Diff、附件管理器、Settings 数组、Deliverables panel、收尾验证 |
-| 后续 | 第三方模型 `/provider add|list|remove` 引导与自动模型发现，19 个测试文件 / 66 个测试 |
+| 后续 | 第三方模型 `/provider add|list|remove` 引导与自动模型发现，19 个测试文件 / 68 个测试 |

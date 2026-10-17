@@ -89,7 +89,7 @@
 
 ### 命令
 
-- 本地命令：/help、/new、/sessions、/resume、/status、/clear、/cancel、/model、/reasoning、/provider、/permissions、/jobs、/agents、/exit、/quit；裸 `exit` / `quit` 也退出。
+- 本地命令：/help、/new、/sessions、/resume、/status、/clear、/cancel、/model、/reasoning、/provider、/permissions、/jobs、/agents、/exit、/quit；裸 `exit` / `quit` 也退出。slash 命令支持子命令补全：精确命令后显示其 subcommands，命令后参数位置按前缀过滤。
 - 宿主命令：通过 ctx.commands.execute 执行；Base 实际注册了 /compact、/feedback、/goal、/permission、/plan。
 - /model：列出 LLM catalog；目录为空时明确说明；支持直接输入 provider/model；通过 installModelSelection 接入下一 step 路由，并调用 agentDefaultModel.saveSelection 持久化默认选择。
 - /provider add：引导配置 custom OpenAI/Responses/Anthropic gateway 或 built-in pi-ai catalog route；Credential source 支持 Store API key（写 DSH credential store，0600，不写 profile）或 UPPERCASE env 引用；env 未设置或形似 key 时拒绝保存。custom gateway 在保存前调用 Host `discoverModels` 读取 `/models`，**把发现列表中的其他模型也写入 route**，选择本次模型后为它写 Input modalities、Reasoning levels、`input` 与 `reasoningEfforts`；已有 route 重跑时默认 merge，保留其他模型；/provider list|remove 管理 route。
@@ -100,6 +100,7 @@
 - mock SSE 端到端验证运行中 Esc：取消后状态 idle、显示 `! Turn cancelled`，HTTP 请求关闭。
 - `/provider add` 自动发现后选择 Text + image，profile 写入 `input: [text, image]`；Reasoning levels=`low,medium,high` 写入 `reasoningEfforts`；auto-route 同时保存 auto-model + auto-small 两个模型。
 - 已验证 `/reasoning high` 后状态栏显示 `effort high`，`/status` 显示 `Reasoning: high`。
+- 已验证 `/provider` 补全显示 add/list/remove，`/provider re` 过滤为 remove。
 - 已验证选择后 profile 写入 `agent-default-model: { provider, model, reasoningEffort }`；重启后 `/status` 恢复保存值。
 - 已验证先执行本地命令再发 prompt 时，命令 notice 位于随后 User/context/AI 输出之前。
 - 已验证把 `sk-proj-...` 填入 env 字段被拒绝，profile 未写入；`/provider list` 对非法 env 引用只显示脱敏提示。

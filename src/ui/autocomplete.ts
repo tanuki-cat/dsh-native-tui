@@ -16,6 +16,11 @@ export interface CommandSuggestion {
   readonly name: string
   readonly description?: string
   readonly input?: { readonly hint?: string }
+  readonly subcommands?: readonly {
+    readonly name: string
+    readonly description?: string
+    readonly hint?: string
+  }[]
 }
 
 /** One host-exported session mention candidate. */
@@ -63,18 +68,51 @@ export class TuiAutocompleteProvider implements AutocompleteProvider {
     const line = lines[cursorLine] ?? ''
     const beforeCursor = line.slice(0, cursorCol)
 
-    if (beforeCursor.startsWith('/') && !beforeCursor.includes(' ')) {
-      const query = beforeCursor.slice(1).toLowerCase()
-      const items: AutocompleteItem[] = this.options.getCommands()
-        .filter(command => command.name.toLowerCase().startsWith(query))
-        .map(command => ({
-          value: '/' + command.name,
-          label: '/' + command.name,
-          ...(command.description === undefined && command.input?.hint === undefined
+    if (beforeCursor.startsWith('/')) {
+      const body = beforeCursor.slice(1)
+      const space = body.indexOf(' ')
+      const commands = this.options.getCommands()
+      if (space === -1) {
+        const query = body.toLowerCase()
+        const exact = commands.find(command => command.name.toLowerCase() === query)
+        if (exact?.subcommands !== undefined && exact.subcommands.length > 0) {
+          const items: AutocompleteItem[] = exact.subcommands.map(subcommand => ({
+            value: '/' + exact.name + ' ' + subcommand.name,
+            label: '/' + exact.name + ' ' + subcommand.name + (subcommand.hint === undefined ? '' : ' ' + subcommand.hint),
+            ...(subcommand.description === undefined && subcommand.hint === undefined
+              ? {}
+              : { description: subcommand.description ?? subcommand.hint ?? '' }),
+          }))
+          return items.length === 0 ? null : { items, prefix: beforeCursor }
+        }
+        const items: AutocompleteItem[] = commands
+          .filter(command => command.name.toLowerCase().startsWith(query))
+          .map(command => ({
+            value: '/' + command.name,
+            label: '/' + command.name,
+            ...(command.description === undefined && command.input?.hint === undefined
+              ? {}
+              : { description: command.description ?? command.input?.hint ?? '' }),
+          }))
+        return items.length === 0 ? null : { items, prefix: beforeCursor }
+      }
+      const commandName = body.slice(0, space).toLowerCase()
+      const argument = body.slice(space + 1)
+      const command = commands.find(candidate => candidate.name.toLowerCase() === commandName)
+      if (command === undefined || command.subcommands === undefined || command.subcommands.length === 0 || argument.includes(' ')) {
+        return null
+      }
+      const query = argument.toLowerCase()
+      const items: AutocompleteItem[] = command.subcommands
+        .filter(subcommand => subcommand.name.toLowerCase().startsWith(query))
+        .map(subcommand => ({
+          value: subcommand.name,
+          label: subcommand.name + (subcommand.hint === undefined ? '' : ' ' + subcommand.hint),
+          ...(subcommand.description === undefined
             ? {}
-            : { description: command.description ?? command.input?.hint ?? '' }),
+            : { description: subcommand.description }),
         }))
-      return items.length === 0 ? null : { items, prefix: beforeCursor }
+      return items.length === 0 ? null : { items, prefix: argument }
     }
 
     const sessionToken = activeSessionToken(line, cursorCol)

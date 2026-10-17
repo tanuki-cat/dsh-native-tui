@@ -21,6 +21,15 @@ function provider(
     getCommands: () => [
       { name: 'help', description: 'show help' },
       { name: 'model', input: { hint: 'provider/model' } },
+      {
+        name: 'provider',
+        description: 'provider setup',
+        subcommands: [
+          { name: 'add', description: 'add a route' },
+          { name: 'list' },
+          { name: 'remove', description: 'delete a route', hint: '<route>' },
+        ],
+      },
     ],
     getFileReferences: () => service,
     getSessionReferences: () => sessionService,
@@ -33,6 +42,24 @@ describe('TuiAutocompleteProvider', () => {
     expect(suggestions?.prefix).toBe('/he')
     expect(suggestions?.items).toEqual([
       { value: '/help', label: '/help', description: 'show help' },
+    ])
+  })
+
+  it('shows subcommands for an exact command', async () => {
+    const suggestions = await provider().getSuggestions(['/provider'], 0, 9, { signal })
+    expect(suggestions?.prefix).toBe('/provider')
+    expect(suggestions?.items).toEqual([
+      { value: '/provider add', label: '/provider add', description: 'add a route' },
+      { value: '/provider list', label: '/provider list' },
+      { value: '/provider remove', label: '/provider remove <route>', description: 'delete a route' },
+    ])
+  })
+
+  it('filters subcommands after a command space', async () => {
+    const suggestions = await provider().getSuggestions(['/provider re'], 0, 12, { signal })
+    expect(suggestions?.prefix).toBe('re')
+    expect(suggestions?.items).toEqual([
+      { value: 'remove', label: 'remove <route>', description: 'delete a route' },
     ])
   })
 
