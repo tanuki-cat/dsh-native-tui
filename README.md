@@ -58,7 +58,7 @@ DSH Host 包由当前 dsh 安装提供；插件运行时还依赖 pi-tui、schem
 |---|---|
 | /help | 本地命令、宿主命令、按键提示 |
 | /new | 创建新 Session 并切换 |
-| /sessions | 列出已持久化 Session |
+| /sessions | 列出本终端创建的 Session（排除 Web Session 与 subagent 子会话） |
 | /resume <id> | 恢复指定 Session |
 | /status | Session、cwd、模型、状态、事件数 |
 | /clear | 仅清空终端视图 |

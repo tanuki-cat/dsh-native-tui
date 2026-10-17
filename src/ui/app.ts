@@ -28,6 +28,7 @@ import { collectSessionMetrics, formatSessionMetrics, type SessionStats } from '
 import { revealWithSystemApp, systemRevealCommand } from '../runtime/open.js'
 import { collectDeliverables, formatDeliverables, type PresentedFileView } from '../runtime/deliverables.js'
 import { collectToolCalls } from '../runtime/tool-log.js'
+import { ownStoredSessions, selectListedSessions } from '../runtime/session-list.js'
 import {
   buildCatalogProvider,
   buildCustomProvider,
@@ -67,6 +68,8 @@ export interface TerminalApp {
 }
 
 const MAX_NOTICES = 12
+/** Sessions shown by one `/sessions` notice; the store can hold hundreds. */
+const MAX_LISTED_SESSIONS = 12
 const NL = String.fromCharCode(10)
 
 const LOCAL_COMMANDS: readonly CommandSuggestion[] = [
@@ -609,18 +612,24 @@ export async function startTerminalApp(
       return
     }
     try {
-      const rows = (await persistence.list())
-        .filter(row => row.header.origin !== 'subagent')
-        .slice(0, 12)
-      if (rows.length === 0) {
-        pushNotice('info', 'No stored sessions yet. Use /new to create one.')
+      const all = (await persistence.list()).map(row => row.header)
+      const stored = ownStoredSessions(all)
+      if (stored.length === 0) {
+        pushNotice('info', all.length === 0
+          ? 'No stored sessions yet. Use /new to create one.'
+          : 'No sessions created by this terminal yet. Use /new to create one.')
         return
       }
-      const lines = rows.map(row => {
-        const marker = row.header.id === active.id ? '*' : ' '
-        return marker + ' ' + row.header.id + '  ' + (row.header.cwd ?? '') + '  ' + new Date(row.header.createdAt).toISOString()
+      const selection = selectListedSessions(stored, active.id, MAX_LISTED_SESSIONS)
+      const lines = selection.shown.map(row => {
+        const marker = row.id === active.id ? '*' : ' '
+        return marker + ' ' + row.id + '  ' + (row.cwd ?? '') + '  ' + new Date(row.createdAt).toISOString()
       })
-      pushNotice('info', 'Sessions:' + NL + lines.join(NL) + NL + 'Use /resume <session-id> to switch.')
+      const heading = selection.hidden === 0
+        ? 'Sessions:'
+        : 'Sessions (' + String(selection.shown.length) + ' of ' + String(stored.length) + ', newest first; '
+          + String(selection.hidden) + ' older hidden):'
+      pushNotice('info', heading + NL + lines.join(NL) + NL + 'Use /resume <session-id> to switch.')
     } catch (error) {
       pushNotice('error', 'Could not list sessions: ' + errorMessage(error))
     }

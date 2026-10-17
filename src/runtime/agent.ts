@@ -4,6 +4,7 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import type { Session } from '@deepseek-ai/dsh-session'
 import { randomUUID } from 'node:crypto'
 import type { ResolvedConfig } from '../config.js'
+import { NATIVE_TUI_SESSION_ID_PREFIX } from './session-list.js'
 
 /** One live Host Agent and its owned handle. */
 export interface HostSession {
@@ -100,7 +101,7 @@ async function wrap(handle: AgentHandle): Promise<HostSession> {
  * @returns the owned Agent handle.
  */
 export async function createHostSession(ctx: Context, config: ResolvedConfig): Promise<HostSession> {
-  const sessionId = SessionId(config.sessionId ?? 'native-tui-' + randomUUID())
+  const sessionId = SessionId(config.sessionId ?? NATIVE_TUI_SESSION_ID_PREFIX + randomUUID())
   const presets = presetsOf(ctx)
   const preset = presets === undefined ? undefined : await presets.resolve(config.agentPreset)
   const handle = await ctx.agents.create({
