@@ -28,6 +28,12 @@ import { revealWithSystemApp, systemRevealCommand } from '../runtime/open.js'
 import { collectDeliverables, formatDeliverables, type PresentedFileView } from '../runtime/deliverables.js'
 import { collectToolCalls } from '../runtime/tool-log.js'
 import {
+  buildCatalogProvider,
+  buildCustomProvider,
+  isValidProviderRoute,
+  type ProviderProtocol,
+} from '../runtime/providers.js'
+import {
   formatChangesSummary,
   formatWorkspaceDiff,
   type ChangesSummaryView,
@@ -72,6 +78,7 @@ const LOCAL_COMMANDS: readonly CommandSuggestion[] = [
   { name: 'agents', description: 'list direct subagents' },
   { name: 'plugins', description: 'list, browse market, inspect/install/remove, or toggle plugin entries', input: { hint: '[list|market|inspect|install|remove|enable|disable]' } },
   { name: 'settings', description: 'list, field/array-edit, or JSON-set settings', input: { hint: '[edit <ns>|items <ns> <field>|set <ns> <json>]' } },
+  { name: 'provider', description: 'guided third-party model provider setup', input: { hint: '[add|list|remove <route>]' } },
   { name: 'export', description: 'export JSONL, ZIP bundle, or static HTML', input: { hint: '[path|zip [path]|html [path]]' } },
   { name: 'open', description: 'preview text or Markdown; Markdown renders styled', input: { hint: '<path>' } },
   { name: 'preview', description: 'render a PNG/JPEG/GIF/WebP image', input: { hint: '<path>' } },
@@ -225,6 +232,7 @@ interface SettingsService {
     secrets?: readonly { path: readonly string[]; set: boolean }[]
   }[]
   update(ns: string, patch: object, expectedRevision?: number): Promise<void>
+  mutate(ns: string, ops: readonly ({ op: 'set'; path: readonly string[]; value: unknown } | { op: 'unset'; path: readonly string[] })[], expectedRevision?: number): Promise<void>
 }
 
 /**
@@ -595,7 +603,8 @@ export async function startTerminalApp(
         pushNotice('info', [
           'Local commands:',
           '/help · /new · /sessions · /resume [id] · /status · /clear',
-          '/cancel · /model [provider/model] · /permissions [preset]',
+          '/cancel · /model [provider/model] · /provider [add|list|remove <route>]',
+          '/permissions [preset]',
           '/jobs [kill <id>] · /agents · /preset [id]',
           '/plugins [list|market [q]|inspect <spec>|install <spec>|remove <bundle>|enable <id>|disable <id>] · /exit',
           '/workspaces [new|use|pin|unpin|archive|unarchive] · /schedule [add|delete]',
@@ -1911,6 +1920,170 @@ export async function startTerminalApp(
                     renderStatus();
                 }
                 return;
+            }
+            case 'provider': {
+                const settings = host.get('settings') as unknown as SettingsService | undefined;
+                const llm = host.get('llm') as LlmCatalog | undefined;
+                if (settings === undefined) {
+                    pushNotice('warning', 'The settings service is unavailable in this profile.');
+                    return;
+                }
+                if (llm === undefined) {
+                    pushNotice('warning', 'The LLM catalog service is unavailable.');
+                    return;
+                }
+                const descriptor = settings.describe({ redactSecrets: true }).find(row => row.ns === 'llm-pi-ai');
+                if (descriptor === undefined) {
+                    pushNotice('warning', 'The llm-pi-ai settings namespace is unavailable; mount the llm-pi-ai Host row first.');
+                    return;
+                }
+                const currentProviders = descriptor.value.providers;
+                const providerRecord: Record<string, unknown> = currentProviders !== null && typeof currentProviders === 'object' && !Array.isArray(currentProviders)
+                    ? currentProviders as Record<string, unknown>
+                    : {};
+                if (args === 'list' || (args === '' && providerRecord !== undefined)) {
+                    const entries = Object.entries(providerRecord);
+                    if (entries.length === 0) {
+                        pushNotice('info', 'No third-party providers configured. Use /provider add.');
+                        return;
+                    }
+                    const rows = [];
+                    for (const [route, raw] of entries) {
+                        let count = 0;
+                        try {
+                            count = (await llm.listModels(route)).length;
+                        }
+                        catch {
+                            // Missing credentials or invalid route: show the configured entry anyway.
+                        }
+                        const env = raw !== null && typeof raw === 'object' && typeof (raw as { readonly apiKeyEnv?: unknown }).apiKeyEnv === 'string'
+                            ? (raw as { readonly apiKeyEnv: string }).apiKeyEnv
+                            : undefined;
+                        const envState = env === undefined ? '' : (process.env[env] === undefined ? '  ' + env + ' (not set)' : '  ' + env);
+                        rows.push(route + '  ' + String(count) + ' model(s)' + envState);
+                    }
+                    pushNotice('info', 'Configured third-party providers:' + NL + rows.join(NL)
+                        + NL + 'Use /provider add to add one, /provider remove <route> to delete one.');
+                    return;
+                }
+                if (args.startsWith('remove ')) {
+                    const route = args.slice('remove '.length).trim();
+                    if (route === '' || !isValidProviderRoute(route)) {
+                        pushNotice('warning', 'Usage: /provider remove <route>');
+                        return;
+                    }
+                    if (!Object.hasOwn(providerRecord, route)) {
+                        pushNotice('warning', 'No configured provider route "' + route + '".');
+                        return;
+                    }
+                    const confirmed = await showChoice(tui, palette, 'Remove provider ' + route + '?', [
+                        { value: 'yes', label: 'Remove', description: 'Delete this route from llm-pi-ai settings' },
+                        { value: 'no', label: 'Cancel' },
+                    ], 'Enter selects · Esc cancels', interactionAbort.signal);
+                    if (confirmed !== 'yes')
+                        return;
+                    try {
+                        await settings.mutate('llm-pi-ai', [{ op: 'unset', path: ['providers', route] }], descriptor.revision);
+                        pushNotice('info', 'Removed provider route: ' + route);
+                    }
+                    catch (error) {
+                        pushNotice('error', 'Could not remove provider: ' + errorMessage(error));
+                    }
+                    return;
+                }
+                if (args !== '' && args !== 'add') {
+                    pushNotice('warning', 'Usage: /provider [add | list | remove <route>]');
+                    return;
+                }
+                try {
+                    const kind = await showChoice(tui, palette, 'Provider type', [
+                        { value: 'openai-completions', label: 'Custom OpenAI-compatible gateway', description: 'Chat Completions endpoint; you supply baseURL and model' },
+                        { value: 'openai-responses', label: 'Custom OpenAI Responses gateway', description: 'Responses API endpoint; you supply baseURL and model' },
+                        { value: 'anthropic-messages', label: 'Custom Anthropic-compatible gateway', description: 'Messages API endpoint; you supply baseURL and model' },
+                        { value: 'catalog', label: 'Built-in pi-ai catalog route', description: 'Use a shipped provider catalog (for example openai, anthropic)' },
+                    ], 'Enter selects · Esc cancels', interactionAbort.signal);
+                    if (kind === undefined)
+                        return;
+                    const route = await showTextInput(tui, palette, 'Provider route', 'my-gateway', 'lowercase letters, digits, hyphens · Esc cancels', interactionAbort.signal);
+                    if (route === undefined)
+                        return;
+                    if (!isValidProviderRoute(route)) {
+                        pushNotice('warning', 'Provider route must start with a letter and contain only lowercase letters, digits, and hyphens.');
+                        return;
+                    }
+                    const envDefault = route.toUpperCase().replace(/[^A-Z0-9]+/gu, '_') + '_API_KEY';
+                    let provider: Record<string, unknown>;
+                    if (kind === 'catalog') {
+                        const env = await showTextInput(tui, palette, 'API key environment variable', envDefault, 'Name of an exported env var; the key itself is never stored · Esc cancels', interactionAbort.signal, envDefault);
+                        if (env === undefined)
+                            return;
+                        provider = buildCatalogProvider(env);
+                    }
+                    else {
+                        const baseURL = await showTextInput(tui, palette, 'Base URL', 'https://api.example.com/v1', 'OpenAI-compatible API root · Esc cancels', interactionAbort.signal);
+                        if (baseURL === undefined)
+                            return;
+                        const env = await showTextInput(tui, palette, 'API key environment variable', envDefault, 'Name of an exported env var; the key itself is never stored · Esc cancels', interactionAbort.signal, envDefault);
+                        if (env === undefined)
+                            return;
+                        const modelId = await showTextInput(tui, palette, 'Model id', 'gpt-4o-mini', 'Exact model id sent on the wire · Esc cancels', interactionAbort.signal);
+                        if (modelId === undefined)
+                            return;
+                        const contextRaw = await showTextInput(tui, palette, 'Context window', '128000', 'Positive integer; Enter keeps the default · Esc cancels', interactionAbort.signal, '128000');
+                        if (contextRaw === undefined)
+                            return;
+                        const maxRaw = await showTextInput(tui, palette, 'Max output tokens', '16384', 'Positive integer; Enter keeps the default · Esc cancels', interactionAbort.signal, '16384');
+                        if (maxRaw === undefined)
+                            return;
+                        const contextWindow = Number(contextRaw);
+                        const maxTokens = Number(maxRaw);
+                        provider = buildCustomProvider({
+                            route,
+                            api: kind as ProviderProtocol,
+                            baseURL,
+                            apiKeyEnv: env,
+                            modelId,
+                            contextWindow,
+                            maxTokens,
+                        });
+                    }
+                    if (Object.hasOwn(providerRecord, route)) {
+                        const confirmed = await showChoice(tui, palette, 'Provider route ' + route + ' already exists', [
+                            { value: 'yes', label: 'Overwrite', description: 'Replace this route profile' },
+                            { value: 'no', label: 'Cancel' },
+                        ], 'Enter selects · Esc cancels', interactionAbort.signal);
+                        if (confirmed !== 'yes')
+                            return;
+                    }
+                    await settings.mutate('llm-pi-ai', [{ op: 'set', path: ['providers', route], value: provider }], descriptor.revision);
+                    pushNotice('info', 'Saved provider route: ' + route + ' · key is read from ' + (provider as { apiKeyEnv?: string }).apiKeyEnv);
+                    let models: readonly { readonly id: string; readonly name: string; readonly description?: string }[] = [];
+                    try {
+                        models = await llm.listModels(route);
+                    }
+                    catch (error) {
+                        pushNotice('warning', 'Provider saved, but its model list is currently unavailable: ' + errorMessage(error));
+                        return;
+                    }
+                    if (models.length === 0) {
+                        pushNotice('warning', 'Provider saved, but /model sees no models yet. Export '
+                            + String((provider as { apiKeyEnv?: string }).apiKeyEnv ?? 'the API key env var')
+                            + ' before launching dsh, then restart the TUI or run /model.');
+                        return;
+                    }
+                    const selected = await showChoice(tui, palette, 'Model for ' + route, models.map(model => ({
+                        value: route + '/' + model.id,
+                        label: model.id,
+                        description: model.name,
+                    })), 'Enter selects · Esc keeps the current model', interactionAbort.signal);
+                    if (selected !== undefined)
+                        await selectModel(llm, selected);
+                    return;
+                }
+                catch (error) {
+                    pushNotice('error', 'Provider setup failed: ' + errorMessage(error));
+                    return;
+                }
             }
             default: {
                 try {

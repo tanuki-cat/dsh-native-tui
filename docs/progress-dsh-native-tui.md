@@ -60,8 +60,8 @@ pnpm check
   vitest run
   tsc -p tsconfig.build.json
 
-Test Files  16 passed (16)
-Tests       51 passed (51)
+Test Files  17 passed (17)
+Tests       55 passed (55)
 ```
 
 ### 安装与启动
@@ -103,9 +103,9 @@ cordis.patch.yml             Host 行、preset registry、native-tui 行
 presets/standard|ptc|minimal|cordis.patch.yml
 src/index.ts                 Cordis 入口、TTY 守卫
 src/config.ts                schemastery 配置、fullscreen
-src/runtime/                 agent/session、attachments、bundle、html、images、open、settings、tool-log
+src/runtime/                 agent/session、attachments、bundle、html、images、open、providers、settings、tool-log
 src/ui/                      app、autocomplete、dialogs、transcript、diff、theme
-tests/                       16 个测试文件，51 个测试
+tests/                       17 个测试文件，55 个测试
 scripts/fake-tty-*.mjs       fake-TTY 验证脚本
 README.md
 docs/design-task-feature-dsh-native-tui-host-native.md
@@ -114,7 +114,7 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 
 依赖：`@earendil-works/pi-tui@1.3.0`、`@deepseek-ai/schemastery@3.18.5`、`fflate@^0.8.3`。
 
-没有 git 仓库，因此没有 commit；工作区文件和 tarball 是唯一交付物。
+已初始化本地 git 仓库（main）；首次提交 `50ced8d`，第三方模型引导见后续提交。
 
 ## 6. 已知差距
 
@@ -124,6 +124,8 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - 会话级附件管理器未实现；当前 `/attachments` 管理 staged 附件。
 - 真实审批/工具/模型流式回合缺少凭据验收。
 - Deliverables panel 的真实 present 事件路径未验收。
+- `/provider add` 只支持 `apiKeyEnv` 引用，不在 TUI 输入/存储 API key；没有模型发现 UI。
+- 第三方模型引导已用 dummy key 验证配置、写入和 `/model` 选择，未发起真实推理请求。
 
 ## 7. 建议验收步骤
 
@@ -143,3 +145,4 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 | 14–20 | Plugin remove/market、剪贴板图片、图片预览、alt-screen、`@@session` |
 | 21–25 | 附件预览、ZIP/HTML 导出、Deliverables reveal、工具结果 pager、Markdown |
 | 26–30 | 独立 Diff、附件管理器、Settings 数组、Deliverables panel、收尾验证 |
+| 后续 | 第三方模型 `/provider add|list|remove` 引导，17 个测试文件 / 55 个测试 |

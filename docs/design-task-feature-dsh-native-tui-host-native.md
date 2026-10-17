@@ -88,6 +88,8 @@
 - 本地命令：/help、/new、/sessions、/resume、/status、/clear、/cancel、/model、/permissions、/jobs、/agents、/exit、/quit。
 - 宿主命令：通过 ctx.commands.execute 执行；Base 实际注册了 /compact、/feedback、/goal、/permission、/plan。
 - /model：列出 LLM catalog；目录为空时明确说明；支持直接输入 provider/model；通过 installModelSelection 接入下一 step 路由。
+- /provider add：引导配置 custom OpenAI/Responses/Anthropic gateway 或 built-in pi-ai catalog route；写入 `llm-pi-ai` settings，保存后用 `listModels` 刷新并选择模型；/provider list|remove 管理 route。apiKeyEnv 只保存变量名。
+- 已验证 dummy `TEST_ROUTE_API_KEY` 下 `/provider add` → `/model` 选中 `test-route/test-model`；`/provider remove` 写回 `providers: {}`。
 - /permissions：列出权限预设并写回当前 Session；支持 /permissions <preset>。
 - /jobs：列出当前 Session 的后台任务，支持 /jobs kill <id>。
 - /agents：列出当前 Session 的直接子代理。
@@ -192,10 +194,10 @@ scripts/
 
 - 默认只拥有一个 root Agent；切换到另一个会话会 dispose 当前 Agent。运行中切换会取消当前 turn。
 - 没有多 Agent 并发/后台会话视图；subagent 只读列出。
-- 模型 catalog 在无凭据时为空；/model 列表会明确提示，直接选择 provider/model 仍可尝试。
+- 模型 catalog 在无凭据时为空；/model 列表会明确提示。`/provider add` 可配置 route，但只保存 `apiKeyEnv` 引用，key 必须提前导出；没有模型发现 UI。
 - 问题面板的 multi-select 当前按单选项处理；自由文本可用，但多选组合尚未实现。
 - preset 编辑器尚未实现；选择与创建已可用。
-- /settings 仅支持顶层字段与 JSON merge，缺少嵌套 schema 表单；/plugins 已可浏览官方市场、安装/移除/启停，目录之外的市场仍走 Web。
+- /settings 支持顶层/嵌套对象/数组项编辑与 JSON merge，动态 record 仍是 JSON；/plugins 已可浏览官方市场、安装/移除/启停，目录之外的市场仍走 Web。
 - @file 补全只插入路径文本，不读取文件；模型仍需调用 read。
 - /schedule 只支持 after_seconds 一次性提醒，尚未暴露 every/daily/weekly/cron 表单。
 - 终端没有 HTML/PDF/Office/浏览器渲染；这些属于明确的非目标。

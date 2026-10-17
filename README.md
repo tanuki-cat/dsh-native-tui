@@ -2,7 +2,7 @@
 
 DeepSeek Harness 的 host-native 终端前端，基于 pi-tui。
 
-> 状态：实施完成（30 轮，51 个单元测试通过）；已知差距见进度记录。  
+> 状态：实施完成（30 轮 + 第三方模型引导，55 个单元测试通过）；已知差距见进度记录。  
 > 目标：在 TUI 中提供 Web 模式的核心能力，而不是复制浏览器图形界面。  
 > 架构说明与差距清单：[Host-native 方案](docs/design-task-feature-dsh-native-tui-host-native.md)。  
 > 实施进度、验证证据与未验收项：[实施进度](docs/progress-dsh-native-tui.md)。
@@ -14,6 +14,7 @@ DeepSeek Harness 的 host-native 终端前端，基于 pi-tui。
 - 本地命令与宿主命令执行（compact/feedback/goal/permission/plan）。
 - 审批与问答 waterfall；question probe 已通过真实 Host 验证。
 - 模型选择器（LLM catalog 为空时明确提示）、权限预设、后台任务、子代理列表。
+- 第三方模型：`/provider add` 引导配置 pi-ai gateway/catalog route，`/provider list|remove` 管理。
 - Agent Presets：standard / ptc / minimal / cordis；/preset 选择后用于下一次 /new。
 - Workspace 列表/创建/切换/pin/unpin/archive/unarchive；Schedule 列表/创建/删除；Settings 顶层/嵌套对象/数组字段编辑与 JSON 写入；Plugins 列表/官方市场/检查/安装/移除/启停（带确认，实时应用）。
 - 可选 `fullscreen`：TuiAltScreen + ScrollView，header/status/editor 固定，鼠标滚轮滚动、文本选择复制。
@@ -52,6 +53,7 @@ DSH Host 包由当前 dsh 安装提供；本插件只把 pi-tui 与 schemastery 
 | /clear | 仅清空终端视图 |
 | /cancel | 取消当前 turn |
 | /model [provider/model] | 列出或切换模型；目录为空时明确提示 |
+| /provider [add|list|remove <route>] | 引导配置/查看/删除第三方模型 provider |
 | /permissions [preset] | 列出或切换权限预设 |
 | /jobs [kill <id>] | 列出或终止后台任务 |
 | /agents | 列出直接子代理 |
@@ -92,10 +94,27 @@ Enter 发送；运行中 Enter 作为 steer；Ctrl+C 取消/退出；Ctrl+D 退�
 
 默认模型来自 Host 的 ctx.agentDefaultModel（Base 默认 deepseek-official/deepseek-flash）。没有凭据时首个请求会显示 MISSING_CREDENTIAL。
 
+## 第三方模型
+
+`/provider add` 提供引导流程：
+
+1. 选择 Custom OpenAI-compatible / OpenAI Responses / Anthropic-compatible gateway，或 Built-in pi-ai catalog route。
+2. 输入 route、baseURL、`apiKeyEnv`、model id；context window 与 max tokens 有默认值。
+3. 保存后立即刷新 `/model` 并选择模型。
+
+`apiKeyEnv` 只保存环境变量名，密钥本身不写入配置或终端历史。启动前导出：
+
+```sh
+export MY_GATEWAY_API_KEY=...
+dsh --profile tui
+```
+
+`/provider list` 显示已配置 route 与当前可见模型数；`/provider remove <route>` 删除。若保存后 `/model` 仍为空，通常是 `apiKeyEnv` 未设置；llm-pi-ai 在凭据缺失时会故意返回空模型列表。手工 JSON 配置仍可通过 `/settings set llm-pi-ai ...` 或 Web Models page 完成。
+
 ## 开发与验证
 
 ~~~sh
-pnpm check          # typecheck + 51 unit tests + build
+pnpm check          # typecheck + 55 unit tests + build
 pnpm test
 pnpm build
 ~~~
