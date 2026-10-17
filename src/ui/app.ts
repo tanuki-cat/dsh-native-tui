@@ -30,6 +30,7 @@ import { revealWithSystemApp, systemRevealCommand } from '../runtime/open.js'
 import { collectDeliverables, formatDeliverables, type PresentedFileView } from '../runtime/deliverables.js'
 import { collectToolCalls } from '../runtime/tool-log.js'
 import { ownStoredSessions, selectListedSessions } from '../runtime/session-list.js'
+import { INIT_AGENTS_PROMPT } from '../runtime/init-prompt.js'
 import {
   buildCatalogProvider,
   buildCustomProvider,
@@ -76,6 +77,7 @@ const NL = String.fromCharCode(10)
 const LOCAL_COMMANDS: readonly CommandSuggestion[] = [
   { name: 'help', description: 'show local and host commands' },
   { name: 'new', description: 'create a new session' },
+  { name: 'init', description: 'create a project-level AGENTS.md contributor guide' },
   { name: 'sessions', description: 'list persisted sessions' },
   { name: 'resume', description: 'resume a session', input: { hint: 'session-id' } },
   { name: 'status', description: 'show session, model, and preset' },
@@ -860,7 +862,7 @@ export async function startTerminalApp(
           .map(command => '/' + command.name + (command.input === undefined ? '' : ' ' + command.input.hint))
         pushNotice('info', [
           'Local commands:',
-          '/help · /new · /sessions · /resume [id] · /status · /clear',
+          '/help · /new · /init · /sessions · /resume [id] · /status · /clear',
           '/exit · /quit (or bare exit/quit)',
           '/cancel · /model [provider/model] · /reasoning [effort] · /provider [add|list|edit|models|remove <route>]',
           '/mcp [add|list|remove <name>]',
@@ -911,6 +913,9 @@ export async function startTerminalApp(
           sessionId: undefined,
           agentPreset: selectedPreset ?? config.agentPreset,
         }))
+        return
+      case 'init':
+        sendPrompt(INIT_AGENTS_PROMPT)
         return
       case 'sessions':
         await listSessions()
