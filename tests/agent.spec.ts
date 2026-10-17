@@ -9,6 +9,8 @@ const config: ResolvedConfig = {
   sessionId: undefined,
   cwd: '/tmp/workspace',
   showReasoning: true,
+  thinkingDisplay: 'detailed',
+  runCodeDisplay: 'detailed',
   maxTranscriptEntries: 100,
   fullscreen: false,
   theme: 'plain',

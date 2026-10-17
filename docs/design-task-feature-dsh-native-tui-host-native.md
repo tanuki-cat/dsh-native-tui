@@ -27,6 +27,7 @@
 
 - 启动时创建新的 root Agent；Session id 为 native-tui-<uuid>。
 - 启动配置 sessionId 时恢复已持久化 Session；CLI `--resume <id>` 或 `--resume=<id>` 覆盖配置并直接恢复。
+- `thinkingDisplay` 与 `runCodeDisplay` 支持 `hidden | compact | detailed`；`showReasoning` 仅作为 legacy fallback，显式显示模式优先。compact 的 reasoning 取首行，run_code 取 description/code/result 单行摘要。
 - /new 创建新会话并切换。
 - /sessions 列出已持久化 Session（排除 subagent 子会话）。
 - /resume <id> 恢复并切换。
@@ -185,7 +186,7 @@ scripts/
 
 ## 5. 验证证据
 
-- pnpm check：typecheck + 78 个单元测试 + build 通过（23 个测试文件）。
+- pnpm check：typecheck + 80 个单元测试 + build 通过（23 个测试文件）。
 - 安装：在全新 DSH_HOME 执行 dsh plugin --profile tui add <repo> 成功，profile bundles = base + dsh-native-tui。
 - 打包：pnpm pack 后以 tgz 安装到全新 DSH_HOME 成功，并成功启动。
 - 启动：安装后的 profile 在 fake TTY 中启动、渲染 header/status/editor、Ctrl+D 退出码 0。

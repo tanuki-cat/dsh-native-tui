@@ -335,6 +335,8 @@ export async function startTerminalApp(
   const markdown = markdownTheme(palette)
   const renderer = new TranscriptRenderer({
     showReasoning: config.showReasoning,
+    thinkingDisplay: config.thinkingDisplay,
+    runCodeDisplay: config.runCodeDisplay,
     maxEntries: config.maxTranscriptEntries,
     palette,
     markdown,

@@ -2,7 +2,7 @@
 
 DeepSeek Harness 的 host-native 终端前端，基于 pi-tui。
 
-> 状态：实施完成（30 轮 + 第三方模型引导 + 官方 MCP/computer-use 集成，78 个单元测试通过）；已知差距见进度记录。
+> 状态：实施完成（30 轮 + 第三方模型引导 + 官方 MCP/computer-use 集成，80 个单元测试通过）；已知差距见进度记录。
 > 目标：在 TUI 中提供 Web 模式的核心能力，而不是复制浏览器图形界面。
 > 架构说明与差距清单：[Host-native 方案](docs/design-task-feature-dsh-native-tui-host-native.md)。
 > 实施进度、验证证据与未验收项：[实施进度](docs/progress-dsh-native-tui.md)。
@@ -24,6 +24,7 @@ DeepSeek Harness 的 host-native 终端前端，基于 pi-tui。
 - Transcript 层次：参考 pi agent 使用全宽背景带（用户消息、reasoning、tool 输出）、assistant/context 标签、notice 图标、turn 分隔线；本地命令输出按 durable event sequence 插入，不会一律堆在 transcript 末尾。
 - 运行中 `Esc` / `Ctrl+C` 取消 turn；长文本和 tool 输出按行保持左侧色条。
 - 上下文压缩：默认 preset 启用 `compaction-basic` 自动压力压缩与 context-overflow 恢复，以及 tool-result pruner；TUI 渲染 compaction start/summary/end 和 prune 通知，`/compact` 作为 Host command 可手动触发。
+- 显示密度可配置：`thinkingDisplay` 与 `runCodeDisplay` 均支持 `hidden | compact | detailed`。
 - 状态栏常驻会话指标：turns/steps、tok/s、累计 token、cache hit、context 使用率；由官方 session-stats projection 和 assistant usage 折叠。
 - `@@<query>` 自动补全其他 Session 的 canonical mention；发送时 Host session-reference 自动注入快照。
 - `/export [path]` 导出 Session JSONL；`/export zip [path]` 导出含 manifest、attachments、deliverables 的 ZIP bundle；`/export html [path]` 导出静态 HTML transcript；`/open` 预览文本文件，Markdown 以 pi-tui Markdown 样式分页渲染；`/preview` 渲染 PNG/JPEG/GIF/WebP 图片；`/files` 浏览目录并预览；`/attach` 暂存文件/图片或剪贴板图片并随下一条 prompt 发送（8 MiB 上限），`/attach preview <i>` 可内联预览暂存项，`/attachments` 打开暂存附件管理器（预览/移除）；`/deliverables` 可列出、打开 panel、预览或用系统文件管理器定位 present 交付文件；`/tools` 列出工具调用，`/tool <index>` 分页查看完整参数/结果，`/diff [index]` 查看 write/edit 的独立 diff。
@@ -96,13 +97,21 @@ Enter 发送；运行中 Enter 作为 steer；Ctrl+C 取消/退出；Ctrl+D 退�
   config:
     sessionId: native-tui-fixed   # 可选：恢复固定 Session
     cwd: /path/to/workspace
-    showReasoning: true
+    showReasoning: true         # legacy boolean; false maps thinkingDisplay to hidden
+    thinkingDisplay: detailed   # hidden | compact | detailed
+    runCodeDisplay: detailed    # hidden | compact | detailed
     maxTranscriptEntries: 2000
     fullscreen: false              # true 使用 alt-screen + 鼠标/应用滚动
     theme: auto                    # auto | dark | light | plain
     agentPreset: ptc               # 默认 ptc | standard | minimal | cordis
     title: DeepSeek Harness
 ~~~
+
+显示模式：
+
+- `hidden`：不渲染 reasoning / `run_code` 块。
+- `compact`：reasoning 只显示首行摘要；`run_code` 只显示状态 + description/code 单行摘要。
+- `detailed`：当前完整 reasoning 区带与 `run_code` args/result 卡片。
 
 默认模型来自 Host 的 ctx.agentDefaultModel（Base 默认 deepseek-official/deepseek-flash）。没有凭据时首个请求会显示 MISSING_CREDENTIAL。
 
@@ -194,7 +203,7 @@ dsh --profile tui
 ## 开发与验证
 
 ~~~sh
-pnpm check          # typecheck + 78 unit tests + build
+pnpm check          # typecheck + 80 unit tests + build
 pnpm test
 pnpm build
 ~~~

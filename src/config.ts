@@ -1,13 +1,20 @@
 import z from '@deepseek-ai/schemastery'
 
+/** How one optional transcript block is rendered. */
+export type DisplayMode = 'hidden' | 'compact' | 'detailed'
+
 /** Terminal presentation and startup configuration. */
 export interface Config {
   /** Open an existing persisted session instead of creating a new one. */
   sessionId?: string
   /** Working directory used when creating a session. Defaults to process.cwd(). */
   cwd?: string
-  /** Render model reasoning blocks. */
+  /** Legacy boolean: false hides reasoning unless thinkingDisplay is explicitly set. */
   showReasoning?: boolean
+  /** Reasoning/thinking block rendering: hidden, compact one-line preview, or detailed. */
+  thinkingDisplay?: DisplayMode
+  /** run_code tool block rendering: hidden, compact summary, or detailed arguments/result. */
+  runCodeDisplay?: DisplayMode
   /** Maximum transcript entries retained in the terminal view. */
   maxTranscriptEntries?: number
   /** Use the alternate screen with application-owned scrolling and mouse support. */
@@ -25,6 +32,8 @@ export interface ResolvedConfig {
   sessionId: string | undefined
   cwd: string
   showReasoning: boolean
+  thinkingDisplay: DisplayMode
+  runCodeDisplay: DisplayMode
   maxTranscriptEntries: number
   fullscreen: boolean
   theme: 'auto' | 'dark' | 'light' | 'plain'
@@ -65,6 +74,8 @@ export const Config = z.object({
   sessionId: z.string(),
   cwd: z.string(),
   showReasoning: z.boolean().default(true),
+  thinkingDisplay: z.union(['hidden', 'compact', 'detailed'] as const),
+  runCodeDisplay: z.union(['hidden', 'compact', 'detailed'] as const),
   maxTranscriptEntries: z.number().step(1).min(50).default(2000),
   fullscreen: z.boolean().default(false),
   theme: z.union(['auto', 'dark', 'light', 'plain'] as const).default('auto'),
@@ -82,6 +93,8 @@ export function resolveConfig(config: Config | undefined): ResolvedConfig {
     sessionId: config?.sessionId,
     cwd: config?.cwd ?? process.cwd(),
     showReasoning: config?.showReasoning ?? true,
+    thinkingDisplay: config?.thinkingDisplay ?? (config?.showReasoning === false ? 'hidden' : 'detailed'),
+    runCodeDisplay: config?.runCodeDisplay ?? 'detailed',
     maxTranscriptEntries: config?.maxTranscriptEntries ?? 2000,
     fullscreen: config?.fullscreen ?? false,
     theme: config?.theme ?? 'auto',

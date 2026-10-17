@@ -111,6 +111,49 @@ describe('reduceTranscript', () => {
     expect(output).toContain('Tool output pruned')
   })
 
+  it('supports compact and hidden reasoning/run_code blocks', () => {
+    const entries: TranscriptEntry[] = [
+      durable('user/message', { content: [{ type: 'text', text: 'calc' }], source: { kind: 'user' } }, 1),
+      durable('assistant/message', {
+        turn: 1,
+        step: 1,
+        message: { content: [
+          { type: 'reasoning', text: 'first thought\nsecond thought' },
+          { type: 'text', text: 'answer' },
+        ] },
+      }, 2),
+      durable('tool/call', {
+        turn: 1,
+        step: 1,
+        callId: 'call-1',
+        name: 'run_code',
+        arguments: JSON.stringify({ description: 'Press AC', code: 'long code body' }),
+      }, 3),
+      durable('tool/result', {
+        turn: 1,
+        step: 1,
+        message: { source: { callId: 'call-1' }, content: [{ type: 'text', text: 'long result body' }], isError: false },
+      }, 4),
+    ]
+    const compactOptions = { ...options, thinkingDisplay: 'compact' as const, runCodeDisplay: 'compact' as const }
+    const compact = reduceTranscript(entries, compactOptions)
+    expect(compact.find(block => block.kind === 'tool')).toMatchObject({ kind: 'tool', name: 'run_code', pending: false })
+    const renderer = new TranscriptRenderer(compactOptions)
+    renderer.set(entries, [])
+    const compactOutput = renderer.container.render(100).join('\n')
+    expect(compactOutput).toContain('thinking · first thought')
+    expect(compactOutput).toContain('⚙ run_code')
+    expect(compactOutput).toContain('Press AC')
+    expect(compactOutput).not.toContain('long code body')
+    expect(compactOutput).not.toContain('long result body')
+
+    const hiddenOptions = { ...options, thinkingDisplay: 'hidden' as const, runCodeDisplay: 'hidden' as const }
+    const hidden = reduceTranscript(entries, hiddenOptions)
+    const assistant = hidden.find(block => block.kind === 'assistant')
+    expect(assistant).not.toHaveProperty('reasoning')
+    expect(hidden.some(block => block.kind === 'tool')).toBe(false)
+  })
+
   it('marks turn failures and caps old rows', () => {
     const entries: TranscriptEntry[] = [
       durable('user/message', { content: [{ type: 'text', text: 'one' }], source: { kind: 'user' } }),

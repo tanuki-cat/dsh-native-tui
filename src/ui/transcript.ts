@@ -23,6 +23,7 @@ export type TranscriptEntry =
   | { readonly type: 'event'; readonly event: SessionEvent }
   | { readonly type: 'live'; readonly event: LiveChunkEntry }
 import type { Palette } from './theme.js'
+import type { DisplayMode } from '../config.js'
 import { asFileDiffs, diffLines, type FileDiff } from './diff.js'
 
 /** Maximum characters retained in one tool preview. */
@@ -66,6 +67,8 @@ export type TranscriptBlock = ({
 /** Options controlling transcript reduction. */
 export interface TranscriptOptions {
   readonly showReasoning: boolean
+  readonly thinkingDisplay?: DisplayMode
+  readonly runCodeDisplay?: DisplayMode
   readonly maxEntries: number
   readonly palette: Palette
   readonly markdown: MarkdownTheme
@@ -140,6 +143,23 @@ function toolResultText(message: { readonly content?: readonly ContentBlock[] })
   return contentText(message.content)
 }
 
+/** Extract a one-line description for a compact run_code row. */
+function compactRunCodePreview(block: { readonly args: string; readonly result?: string }): string {
+  let description: string | undefined
+  try {
+    const parsed: unknown = JSON.parse(block.args)
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const record = parsed as Record<string, unknown>
+      if (typeof record.description === 'string' && record.description.trim() !== '') description = record.description
+      else if (typeof record.code === 'string' && record.code.trim() !== '') description = record.code
+    }
+  }
+  catch { /* Keep the result preview when arguments are not JSON. */ }
+  const text = description ?? block.result ?? block.args
+  const firstLine = text.split('\n').map(line => line.trim()).find(line => line !== '') ?? ''
+  return clip(firstLine.replace(/\s+/gu, ' '), 220)
+}
+
 function stepKey(turn: number, step: number): string {
   return `${String(turn)}:${String(step)}`
 }
@@ -159,6 +179,10 @@ export function reduceTranscript(
   const liveByStep = new Map<string, { index: number; text: string; reasoning: string }>()
   const finalizedSteps = new Set<string>()
   const toolByCall = new Map<string, number>()
+  const hiddenRunCodeCalls = new Set<string>()
+  const thinkingDisplay = options.thinkingDisplay ?? 'detailed'
+  const runCodeDisplay = options.runCodeDisplay ?? 'detailed'
+  const showReasoning = thinkingDisplay !== 'hidden' && (options.thinkingDisplay !== undefined || options.showReasoning)
   const compactionByCall = new Map<string, number>()
 
   const pushLive = (event: LiveChunkEntry): void => {
@@ -173,7 +197,7 @@ export function reduceTranscript(
     }
     const chunk: StreamChunk = event.data.chunk
     if (chunk.type === 'text-delta') live.text += chunk.text
-    else if (chunk.type === 'reasoning-delta' && options.showReasoning) live.reasoning += chunk.text
+    else if (chunk.type === 'reasoning-delta' && showReasoning) live.reasoning += chunk.text
     blocks[live.index] = {
       kind: 'assistant',
       text: live.text,
@@ -268,7 +292,7 @@ export function reduceTranscript(
           blocks[live.index] = { kind: 'assistant', text: '', live: true }
         }
         const text = contentText(event.data.message.content)
-        const reasoning = options.showReasoning ? contentReasoning(event.data.message.content) : ''
+        const reasoning = showReasoning ? contentReasoning(event.data.message.content) : ''
         if (text.trim() !== '' || reasoning.trim() !== '') {
           blocks.push({
             kind: 'assistant',
@@ -288,6 +312,10 @@ export function reduceTranscript(
         break
       }
       case 'tool/call': {
+        if (runCodeDisplay === 'hidden' && event.data.name === 'run_code') {
+          hiddenRunCodeCalls.add(event.data.callId)
+          break
+        }
         const index = blocks.length
         toolByCall.set(event.data.callId, index)
         blocks.push({
@@ -302,6 +330,7 @@ export function reduceTranscript(
       }
       case 'tool/result': {
         const callId = event.data.message.source.callId
+        if (hiddenRunCodeCalls.delete(callId)) break
         const index = toolByCall.get(callId)
         const result = toolResultText(event.data.message)
         const isError = event.data.message.isError === true
@@ -459,11 +488,19 @@ export class TranscriptRenderer {
           + (block.live === true ? '  ' + palette.warning('streaming') : '')
         container.addChild(new Text(label, 0, 0))
         if (block.reasoning !== undefined && block.reasoning.trim() !== '') {
-          const reasoning = new Container()
-          reasoning.addChild(new Text(palette.dim('thinking'), 0, 0))
-          reasoning.addChild(new Text(palette.dim(clip(block.reasoning, REASONING_PREVIEW)), 0, 0))
-          container.addChild(new Spacer(1))
-          container.addChild(band(reasoning, palette.thinkingBand))
+          const mode = this.options.thinkingDisplay ?? 'detailed'
+          if (mode === 'compact') {
+            const firstLine = block.reasoning.split('\n').map(line => line.trim()).find(line => line !== '') ?? ''
+            container.addChild(new Spacer(1))
+            container.addChild(new Text(palette.dim('thinking · ' + clip(firstLine, 240)), 0, 0))
+          }
+          else if (mode !== 'hidden') {
+            const reasoning = new Container()
+            reasoning.addChild(new Text(palette.dim('thinking'), 0, 0))
+            reasoning.addChild(new Text(palette.dim(clip(block.reasoning, REASONING_PREVIEW)), 0, 0))
+            container.addChild(new Spacer(1))
+            container.addChild(band(reasoning, palette.thinkingBand))
+          }
         }
         if (block.text.trim() !== '') {
           container.addChild(new Spacer(1))
@@ -479,6 +516,11 @@ export class TranscriptRenderer {
       }
       case 'tool': {
         const status = block.pending ? palette.warning('running') : block.isError === true ? palette.error('error') : palette.success('done')
+        if (block.name === 'run_code' && (this.options.runCodeDisplay ?? 'detailed') === 'compact') {
+          const preview = compactRunCodePreview(block)
+          return new Text(palette.bold(palette.accent('⚙ run_code')) + '  ' + status
+            + (preview === '' ? '' : '  ·  ' + palette.dim(preview)), 0, 0)
+        }
         const container = new Container()
         container.addChild(new Text(palette.bold(palette.accent('⚙ ' + block.name)) + '  ' + status, 0, 0))
         if (block.args.trim() !== '') {

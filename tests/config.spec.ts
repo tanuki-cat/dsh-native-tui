@@ -5,6 +5,8 @@ describe('resolveConfig', () => {
   it('applies terminal defaults', () => {
     const config = resolveConfig(undefined)
     expect(config.showReasoning).toBe(true)
+    expect(config.thinkingDisplay).toBe('detailed')
+    expect(config.runCodeDisplay).toBe('detailed')
     expect(config.maxTranscriptEntries).toBe(2000)
     expect(config.fullscreen).toBe(false)
     expect(config.theme).toBe('auto')
@@ -17,6 +19,17 @@ describe('resolveConfig', () => {
     expect(parseResumeArg(['--resume=session-2'])).toBe('session-2')
     expect(parseResumeArg(['--profile', 'tui'])).toBeUndefined()
     expect(() => parseResumeArg(['--resume'])).toThrow(/requires a session id/u)
+  })
+
+  it('maps legacy showReasoning and explicit display modes', () => {
+    expect(resolveConfig({ showReasoning: false }).thinkingDisplay).toBe('hidden')
+    const explicit = resolveConfig({
+      showReasoning: false,
+      thinkingDisplay: 'compact',
+      runCodeDisplay: 'hidden',
+    })
+    expect(explicit.thinkingDisplay).toBe('compact')
+    expect(explicit.runCodeDisplay).toBe('hidden')
   })
 
   it('keeps explicit values', () => {
