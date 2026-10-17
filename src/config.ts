@@ -3,6 +3,8 @@ import type { Volatile } from '@deepseek-ai/cordis'
 
 /** How one optional transcript block is rendered. */
 export type DisplayMode = 'hidden' | 'compact' | 'detailed'
+/** Terminal palette selection. */
+export type Theme = 'auto' | 'dark' | 'light' | 'plain'
 
 /** Display mode value in direct config or Loader volatile form. */
 type DisplayConfig = DisplayMode | Volatile<DisplayMode>
@@ -20,11 +22,11 @@ export interface Config {
   /** run_code tool block rendering: hidden, compact summary, or detailed arguments/result. */
   runCodeDisplay?: DisplayConfig
   /** Maximum transcript entries retained in the terminal view. */
-  maxTranscriptEntries?: number
+  maxTranscriptEntries?: number | Volatile<number>
   /** Use the alternate screen with application-owned scrolling and mouse support. */
-  fullscreen?: boolean
+  fullscreen?: boolean | Volatile<boolean>
   /** ANSI palette selection. */
-  theme?: 'auto' | 'dark' | 'light' | 'plain'
+  theme?: Theme | Volatile<Theme>
   /** Agent preset used for new sessions; defaults to the registry's configured default. */
   agentPreset?: string
   /** Product title shown in the header. */
@@ -40,7 +42,7 @@ export interface ResolvedConfig {
   runCodeDisplay: DisplayMode
   maxTranscriptEntries: number
   fullscreen: boolean
-  theme: 'auto' | 'dark' | 'light' | 'plain'
+  theme: Theme
   agentPreset: string | undefined
   title: string
 }
@@ -80,9 +82,9 @@ export const Config = z.object({
   showReasoning: z.boolean().default(true),
   thinkingDisplay: z.union(['hidden', 'compact', 'detailed'] as const).volatile(),
   runCodeDisplay: z.union(['hidden', 'compact', 'detailed'] as const).volatile(),
-  maxTranscriptEntries: z.number().step(1).min(50).default(2000),
-  fullscreen: z.boolean().default(false),
-  theme: z.union(['auto', 'dark', 'light', 'plain'] as const).default('auto'),
+  maxTranscriptEntries: z.number().step(1).min(50).default(2000).volatile(),
+  fullscreen: z.boolean().default(false).volatile(),
+  theme: z.union(['auto', 'dark', 'light', 'plain'] as const).default('auto').volatile(),
   agentPreset: z.string(),
   title: z.string().default('DeepSeek Harness'),
 })
@@ -93,8 +95,13 @@ export const Config = z.object({
  * @returns complete runtime configuration.
  */
 export function resolveDisplayMode(value: DisplayConfig | undefined): DisplayMode | undefined {
-  if (value !== null && typeof value === 'object' && 'get' in value) return value.get()
-  return value
+  return resolveVolatileValue(value)
+}
+
+/** Unwrap a plain config value or Loader volatile reference. */
+export function resolveVolatileValue<T>(value: T | Volatile<T> | undefined): T | undefined {
+  if (value !== null && typeof value === 'object' && 'get' in value) return value.get() as T | undefined
+  return value as T | undefined
 }
 
 export function resolveConfig(config: Config | undefined): ResolvedConfig {
@@ -104,9 +111,9 @@ export function resolveConfig(config: Config | undefined): ResolvedConfig {
     showReasoning: config?.showReasoning ?? true,
     thinkingDisplay: resolveDisplayMode(config?.thinkingDisplay) ?? (config?.showReasoning === false ? 'hidden' : 'detailed'),
     runCodeDisplay: resolveDisplayMode(config?.runCodeDisplay) ?? 'detailed',
-    maxTranscriptEntries: config?.maxTranscriptEntries ?? 2000,
-    fullscreen: config?.fullscreen ?? false,
-    theme: config?.theme ?? 'auto',
+    maxTranscriptEntries: resolveVolatileValue(config?.maxTranscriptEntries) ?? 2000,
+    fullscreen: resolveVolatileValue(config?.fullscreen) ?? false,
+    theme: resolveVolatileValue(config?.theme) ?? 'auto',
     agentPreset: config?.agentPreset,
     title: config?.title ?? 'DeepSeek Harness',
   }

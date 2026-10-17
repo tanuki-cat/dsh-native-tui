@@ -62,6 +62,7 @@ import { diffLines } from './diff.js'
 /** Terminal application lifecycle. */
 export interface TerminalApp {
   setDisplayModes(thinkingDisplay: DisplayMode, runCodeDisplay: DisplayMode): void
+  setMaxEntries(maxEntries: number): void
   dispose(): Promise<void>
 }
 
@@ -756,9 +757,15 @@ export async function startTerminalApp(
       }
       const thinking = String(descriptor.value.thinkingDisplay ?? config.thinkingDisplay);
       const runCode = String(descriptor.value.runCodeDisplay ?? config.runCodeDisplay);
+      const maxEntries = String(descriptor.value.maxTranscriptEntries ?? config.maxTranscriptEntries);
+      const theme = String(descriptor.value.theme ?? config.theme);
+      const fullscreen = String(descriptor.value.fullscreen ?? config.fullscreen);
       const pick = await showChoice(tui, palette, 'TUI settings', [
         { value: 'thinking', label: 'Thinking display', description: 'current: ' + thinking + ' · hidden | compact | detailed' },
         { value: 'runCode', label: 'run_code display', description: 'current: ' + runCode + ' · hidden | compact | detailed' },
+        { value: 'entries', label: 'Transcript entries', description: 'current: ' + maxEntries + ' · applies immediately' },
+        { value: 'theme', label: 'Theme', description: 'current: ' + theme + ' · restart required' },
+        { value: 'fullscreen', label: 'Fullscreen', description: 'current: ' + fullscreen + ' · restart required' },
         { value: 'host', label: 'Host settings…', description: 'Advanced plugin namespaces, arrays, and JSON values' },
         { value: 'done', label: 'Done' },
       ], 'Enter selects · Esc closes', interactionAbort.signal);
@@ -767,19 +774,55 @@ export async function startTerminalApp(
         showHostSettings();
         return;
       }
-      const field = pick === 'thinking' ? 'thinkingDisplay' : 'runCodeDisplay';
-      const value = await showChoice(tui, palette, pick === 'thinking' ? 'Thinking display' : 'run_code display',
-        modes.map(mode => ({ value: mode, label: mode, description: mode === (pick === 'thinking' ? thinking : runCode) ? 'current' : 'apply immediately' })),
-        'Enter applies · Esc cancels', interactionAbort.signal);
-      if (value === undefined) continue;
       const latest = descriptorFor();
       if (latest === undefined) {
         pushNotice('warning', 'native-tui settings are no longer available.');
         return;
       }
+      let field: string;
+      let rawValue: string | boolean | number | undefined;
+      if (pick === 'thinking' || pick === 'runCode') {
+        field = pick === 'thinking' ? 'thinkingDisplay' : 'runCodeDisplay';
+        const value = await showChoice(tui, palette, pick === 'thinking' ? 'Thinking display' : 'run_code display',
+          modes.map(mode => ({ value: mode, label: mode, description: mode === (pick === 'thinking' ? thinking : runCode) ? 'current' : 'apply immediately' })),
+          'Enter applies · Esc cancels', interactionAbort.signal);
+        if (value === undefined) continue;
+        rawValue = value;
+      }
+      else if (pick === 'entries') {
+        field = 'maxTranscriptEntries';
+        const raw = await showTextInput(tui, palette, 'Transcript entries', maxEntries, 'Integer >= 50; applies immediately · Esc cancels', interactionAbort.signal, maxEntries);
+        if (raw === undefined) continue;
+        const parsed = Number(raw);
+        if (!Number.isSafeInteger(parsed) || parsed < 50) {
+          pushNotice('warning', 'Transcript entries must be an integer >= 50.');
+          continue;
+        }
+        rawValue = parsed;
+      }
+      else if (pick === 'theme') {
+        field = 'theme';
+        const value = await showChoice(tui, palette, 'Theme', ['auto', 'dark', 'light', 'plain'].map(value => ({
+          value,
+          label: value,
+          description: value === theme ? 'current' : 'restart TUI to apply',
+        })), 'Enter saves · Esc cancels', interactionAbort.signal);
+        if (value === undefined) continue;
+        rawValue = value;
+      }
+      else {
+        field = 'fullscreen';
+        const value = await showChoice(tui, palette, 'Fullscreen', [
+          { value: 'false', label: 'off', description: fullscreen === 'false' ? 'current' : 'restart TUI to apply' },
+          { value: 'true', label: 'on', description: fullscreen === 'true' ? 'current' : 'restart TUI to apply' },
+        ], 'Enter saves · Esc cancels', interactionAbort.signal);
+        if (value === undefined) continue;
+        rawValue = value === 'true';
+      }
       try {
-        await settings.update('native-tui', { [field]: value }, latest.revision);
-        pushNotice('info', 'Updated native-tui.' + field + ': ' + value);
+        await settings.update('native-tui', { [field]: rawValue }, latest.revision);
+        pushNotice('info', 'Updated native-tui.' + field + ': ' + String(rawValue)
+          + (field === 'theme' || field === 'fullscreen' ? ' · restart TUI to apply' : ''));
       }
       catch (error) {
         pushNotice('error', 'Could not update native-tui settings: ' + errorMessage(error));
@@ -2965,6 +3008,11 @@ export async function startTerminalApp(
         setDisplayModes: (thinkingDisplay, runCodeDisplay) => {
             if (disposed) return;
             renderer.setDisplayModes(thinkingDisplay, runCodeDisplay);
+            tui.requestRender();
+        },
+        setMaxEntries: (maxEntries) => {
+            if (disposed) return;
+            renderer.setMaxEntries(maxEntries);
             tui.requestRender();
         },
         dispose: async () => {

@@ -187,6 +187,14 @@ export function reduceTranscript(
   const runCodeDisplay = options.runCodeDisplay ?? 'detailed'
   const showReasoning = thinkingDisplay !== 'hidden' && (options.thinkingDisplay !== undefined || options.showReasoning)
   const compactionByCall = new Map<string, number>()
+  const finishOpenCompactions = (seq: number): void => {
+    for (const index of compactionByCall.values()) {
+      const prior = blocks[index]
+      if (prior?.kind === 'compaction' && prior.state === 'running') {
+        blocks[index] = { ...prior, state: 'error', error: 'Compaction did not finish', seq }
+      }
+    }
+  }
 
   const pushLive = (event: LiveChunkEntry): void => {
     const key = stepKey(event.data.turn, event.data.step)
@@ -220,6 +228,7 @@ export function reduceTranscript(
     if (extensionType.startsWith('compaction/')) {
       const data = (event as unknown as { data: Record<string, unknown> }).data
       if (extensionType === 'compaction/start') {
+        finishOpenCompactions(seq)
         const id = String(data.compactionId)
         compactionByCall.set(id, blocks.length)
         blocks.push({ kind: 'compaction', compactionId: id, state: 'running', seq })
@@ -271,6 +280,7 @@ export function reduceTranscript(
       }
       continue
     }
+    if (event.type === 'assistant/message' || event.type === 'turn/end') finishOpenCompactions(seq)
     switch (event.type) {
       case 'user/message': {
         const source = event.data.source
@@ -424,6 +434,12 @@ export class TranscriptRenderer {
   /** Switch reasoning/run_code density and rebuild the existing event window. */
   setDisplayModes(thinkingDisplay: DisplayMode, runCodeDisplay: DisplayMode): void {
     this.options = { ...this.options, thinkingDisplay, runCodeDisplay }
+    this.rebuild()
+  }
+
+  /** Change the retained transcript row budget and rebuild. */
+  setMaxEntries(maxEntries: number): void {
+    this.options = { ...this.options, maxEntries }
     this.rebuild()
   }
 

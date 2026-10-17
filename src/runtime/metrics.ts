@@ -46,6 +46,13 @@ export function collectSessionMetrics(
   for (const event of events) {
     if (stats === undefined && event.type === 'turn/start') turns += 1
     if (stats === undefined && event.type === 'step/end') steps += 1
+    if ((event.type as string) === 'compaction/summary') {
+      const shadowed = (event.data as { readonly shadowedTokenCount?: unknown }).shadowedTokenCount
+      if (typeof shadowed === 'number' && Number.isFinite(shadowed) && shadowed > 0) {
+        latestPromptTokens = Math.max(0, latestPromptTokens - shadowed)
+      }
+      continue
+    }
     if (event.type !== 'assistant/message') continue
     const raw = event.data.usage
     if (raw === null || typeof raw !== 'object') continue

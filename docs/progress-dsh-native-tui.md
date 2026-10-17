@@ -62,7 +62,7 @@ pnpm check
   tsc -p tsconfig.build.json
 
 Test Files  17 passed (17)
-Tests       84 passed (84)
+Tests       86 passed (86)
 ```
 
 ### 安装与启动
@@ -106,7 +106,7 @@ src/index.ts                 Cordis 入口、TTY 守卫
 src/config.ts                schemastery 配置、fullscreen
 src/runtime/                 agent/session、attachments、bundle、html、images、open、providers、settings、tool-log
 src/ui/                      app、autocomplete、dialogs、transcript、diff、theme
-tests/                       23 个测试文件，84 个测试
+tests/                       23 个测试文件，86 个测试
 scripts/fake-tty-*.mjs       fake-TTY 验证脚本
 README.md
 docs/design-task-feature-dsh-native-tui-host-native.md
@@ -123,7 +123,7 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - PDF/Office 富文档预览未实现；Markdown/文本/图片已支持。
 - 远端连接未实现；当前是本地/SSH 终端使用。
 - MCP 状态只覆盖初始连接；运行中断线/重连状态不实时回推。
-- Computer-use 实际桌面操作等待用户实机验证。
+- Computer-use 已经可用（用户实机验证）。
 - 自动上下文压缩已接入 preset 并有事件渲染；真实长上下文自动触发仍缺 E2E 验收。
 - 生产与开发依赖已统一为 `0.2.1-rc.2`。
 - 会话级附件管理器未实现；当前 `/attachments` 管理 staged 附件。
@@ -164,11 +164,13 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - 已验证退出后终端恢复并输出：`Session: <id>` 和 `Resume: dsh --profile tui --resume <id>`；用该命令重新启动可恢复同一 Session。
 - 已验证 `--resume <id>` 与 profile 的 `sessionId` 配置共存时，CLI 参数优先。
 - 已验证 `thinkingDisplay` / `runCodeDisplay` 的 hidden/compact/detailed 解析与渲染：compact 只保留首行/摘要，hidden 完全移除对应块。
-- 已验证 `/settings` 独立 TUI settings 弹窗：显示当前 thinking/run_code 模式，选择后通过 native-tui volatile settings 立即生效并持久化；`/settings host` 保留高级 Host settings 入口。
+- 已验证 `/settings` 独立 TUI settings 弹窗：显示当前 thinking/run_code 模式、transcript entries、theme、fullscreen；前两者通过 native-tui volatile settings 立即生效并持久化，theme/fullscreen 保存后重启生效；`/settings host` 保留高级 Host settings 入口。
 - 已验证恢复 Session 后 `/status` 保留 mock/mock-model 与 preset minimal；新增 sessionModelSelection/sessionAgentPreset 单测覆盖 request/header 和 agent-preset/selected。
 - 已为 `/model` 增加内联搜索弹窗：按 value/label/description 过滤，Enter 选择；单测覆盖过滤与选择。
 - 修复 MCP fiber 激活失败后 Loader row 未清理的问题，并新增对应单测。
 - compact run_code 现在同时显示 description/action 与 result 首行。
+- 新增 approval 弹窗选择测试：Allow once / Reject / Esc cancel，并验证 reason 渲染。
+- compaction 后 context 估算会减去 shadowedTokenCount；新的 compaction start / assistant / turn end 会把未结束的旧 compaction 标记为 error。
 
 ## 7. 建议验收步骤
 
@@ -188,4 +190,4 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 | 14–20 | Plugin remove/market、剪贴板图片、图片预览、alt-screen、`@@session` |
 | 21–25 | 附件预览、ZIP/HTML 导出、Deliverables reveal、工具结果 pager、Markdown |
 | 26–30 | 独立 Diff、附件管理器、Settings 数组、Deliverables panel、收尾验证 |
-| 后续 | 第三方模型 `/provider add|list|edit|models|remove` 引导与自动模型发现，23 个测试文件 / 84 个测试 |
+| 后续 | 第三方模型 `/provider add|list|edit|models|remove` 引导与自动模型发现，23 个测试文件 / 86 个测试 |

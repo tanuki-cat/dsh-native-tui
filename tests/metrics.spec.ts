@@ -39,6 +39,14 @@ describe('session metrics', () => {
     expect(formatTokenCount(478_000_000)).toBe('478M')
   })
 
+  it('reduces the latest context after a compaction summary', () => {
+    const events = [
+      usageEvent(100, 20, 800, 0),
+      { type: 'compaction/summary', seq: 2, time: 2, data: { shadowedTokenCount: 600 } },
+    ] as unknown as SessionEvent[]
+    expect(collectSessionMetrics(events, undefined, 1000).contextPercent).toBe(30)
+  })
+
   it('falls back to event turn and step counts without the projection', () => {
     const events = [
       { type: 'turn/start', seq: 1, time: 1, data: { turn: 1 } },

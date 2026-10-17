@@ -27,7 +27,7 @@
 
 - 启动时创建新的 root Agent；Session id 为 native-tui-<uuid>。
 - 启动配置 sessionId 时恢复已持久化 Session；CLI `--resume <id>` 或 `--resume=<id>` 覆盖配置并直接恢复。恢复时从最新 `request/header` / `model/selection` 恢复模型与 reasoning effort，并从 `agent-preset/selected` / header 恢复 preset。
-- `thinkingDisplay` 与 `runCodeDisplay` 支持 `hidden | compact | detailed`，作为 native-tui volatile settings 暴露；`/settings` 打开独立 TUI settings 弹窗并可立即生效，`/settings host` 保留高级 Host settings。`showReasoning` 仅作为 legacy fallback，显式显示模式优先。compact 的 reasoning 取首行，run_code 取 description/code/result 单行摘要。
+- `thinkingDisplay`、`runCodeDisplay`、`maxTranscriptEntries`、`theme`、`fullscreen` 作为 native-tui volatile settings 暴露；`/settings` 打开独立 TUI settings 弹窗，显示模式与 transcript entries 立即生效，theme/fullscreen 保存后重启生效，`/settings host` 保留高级 Host settings。`showReasoning` 仅作为 legacy fallback，显式显示模式优先。compact 的 reasoning 取首行，run_code 取 description/code/result 单行摘要。
 - /new 创建新会话并切换。
 - /sessions 列出已持久化 Session（排除 subagent 子会话）。
 - /resume <id> 恢复并切换。
@@ -186,7 +186,7 @@ scripts/
 
 ## 5. 验证证据
 
-- pnpm check：typecheck + 84 个单元测试 + build 通过（23 个测试文件）。
+- pnpm check：typecheck + 86 个单元测试 + build 通过（23 个测试文件）。
 - 安装：在全新 DSH_HOME 执行 dsh plugin --profile tui add <repo> 成功，profile bundles = base + dsh-native-tui。
 - 打包：pnpm pack 后以 tgz 安装到全新 DSH_HOME 成功，并成功启动。
 - 启动：安装后的 profile 在 fake TTY 中启动、渲染 header/status/editor、Ctrl+D 退出码 0。
@@ -198,7 +198,7 @@ scripts/
 ## 6. 尚未完成的 Web parity / 已知差距
 
 1. MCP 已支持配置、初始连接状态和错误展示；运行中断线/重连状态未实时推送到 TUI，完整 server 工具调用由用户侧验证。
-2. Computer-use / Cua Driver native 已默认集成，但实际桌面操作、权限拒绝路径等待用户实机测试。
+2. Computer-use / Cua Driver native 已经可用（用户实机验证）。
 3. 远端连接（连接已有 dsh web Host）未实现；当前只支持本地 owned Agent。
 4. Plugin Manager 官方目录之外的市场搜索仍走 Web；PDF/Office 富文档预览未实现。
 5. 真实 PTY 下的 fullscreen 鼠标滚动/选择复制、真实模型流式/审批 waterfall 仍需普通终端和凭据环境复验。

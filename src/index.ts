@@ -1,5 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
-import { Config, parseResumeArg, resolveConfig, resolveDisplayMode, type Config as TuiConfig } from './config.js'
+import { Config, parseResumeArg, resolveConfig, resolveDisplayMode, resolveVolatileValue, type Config as TuiConfig } from './config.js'
 import { startTerminalApp, type TerminalApp } from './ui/app.js'
 import { debug } from './debug.js'
 
@@ -47,6 +47,7 @@ export async function apply(ctx: Context, config: TuiConfig): Promise<void> {
     const thinking = resolveDisplayMode(config.thinkingDisplay) ?? (config.showReasoning === false ? 'hidden' : 'detailed')
     const runCode = resolveDisplayMode(config.runCodeDisplay) ?? 'detailed'
     app?.setDisplayModes(thinking, runCode)
+    app?.setMaxEntries(resolveVolatileValue(config.maxTranscriptEntries) ?? 2000)
   }
   ctx.inject(['settings'], (child) => {
     const settings = (child as unknown as { settings: { configure(options: Record<string, unknown>, fiber: unknown): () => void } }).settings

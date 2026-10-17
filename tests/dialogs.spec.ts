@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { visibleWidth } from '@earendil-works/pi-tui'
-import { showChoice, showSearchChoice } from '../src/ui/dialogs.js'
+import { showApproval, showChoice, showSearchChoice } from '../src/ui/dialogs.js'
 import { createPalette } from '../src/ui/theme.js'
 
 describe('dialog frame', () => {
@@ -22,6 +22,31 @@ describe('dialog frame', () => {
     expect(rendered.every(line => !line.includes('\n'))).toBe(true)
     controller.abort()
     await expect(promise).resolves.toBeUndefined()
+  })
+
+  it('maps approval choices and renders the request reason', async () => {
+    const run = async (keys: string[]): Promise<{ outcome: string; rendered: string }> => {
+      let component: { render(width: number): string[]; handleInput(data: string): void } | undefined
+      const promise = showApproval({
+        showOverlay(value: { render(width: number): string[]; handleInput(data: string): void }) {
+          component = value
+          return { hide() {} }
+        },
+      } as never, createPalette('plain'), {
+        toolName: 'run_code',
+        callId: 'call-1' as never,
+        reason: 'Write outside workspace',
+      }, undefined)
+      const rendered = component!.render(80).join('\n')
+      for (const key of keys) component!.handleInput(key)
+      return { outcome: await promise, rendered }
+    }
+    await expect(run(['\r'])).resolves.toMatchObject({ outcome: 'allowed-once' })
+    const rejected = await run(['\x1b[B', '\r'])
+    expect(rejected.outcome).toBe('rejected')
+    expect(rejected.rendered).toContain('Approval required · run_code')
+    expect(rejected.rendered).toContain('Write outside workspace')
+    await expect(run(['\x1b'])).resolves.toMatchObject({ outcome: 'cancelled' })
   })
 
   it('filters a searchable choice list before selecting', async () => {

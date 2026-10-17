@@ -2,7 +2,7 @@
 
 DeepSeek Harness 的 host-native 终端前端，基于 pi-tui。
 
-> 状态：实施完成（30 轮 + 第三方模型引导 + 官方 MCP/computer-use 集成，84 个单元测试通过）；已知差距见进度记录。
+> 状态：实施完成（30 轮 + 第三方模型引导 + 官方 MCP/computer-use 集成，86 个单元测试通过）；已知差距见进度记录。
 > 目标：在 TUI 中提供 Web 模式的核心能力，而不是复制浏览器图形界面。
 > 架构说明与差距清单：[Host-native 方案](docs/design-task-feature-dsh-native-tui-host-native.md)。
 > 实施进度、验证证据与未验收项：[实施进度](docs/progress-dsh-native-tui.md)。
@@ -74,7 +74,7 @@ DSH Host 包由当前 dsh 安装提供；插件运行时还依赖 pi-tui、schem
 | /workspaces [new <path>|use <id|path>|pin|unpin|archive|unarchive] | 列出/创建/切换/固定/归档 workspace 会话 |
 | /schedule [add <seconds> <title>|delete <id>] | 列出/创建/删除一次性提醒 |
 | /plugins [list|market [query]|inspect <spec>|install <spec>|remove <bundle>|enable <entryId>|disable <entryId>] | 列出、浏览官方市场、检查/安装/移除 bundle，或启停插件项 |
-| /settings [tui|host|edit <ns>|items <ns> <field>|set <ns> <json>] | `tui` 打开基础显示配置弹窗；`host`/`edit`/`items`/`set` 进入高级 Host settings |
+| /settings [tui|host|edit <ns>|items <ns> <field>|set <ns> <json>] | `tui` 打开基础显示/终端配置弹窗（thinking、run_code、transcript、theme、fullscreen）；`host`/`edit`/`items`/`set` 进入高级 Host settings |
 | /export [path|zip [path]|html [path]] | 导出 JSONL、ZIP bundle，或静态 HTML transcript（不覆盖已有文件） |
 | /open <path> | 预览文本（16 KiB 上限）；Markdown 渲染为样式化分页 |
 | /files [path] | 目录浏览：Enter 进入目录/预览文件，Esc 退出，含 ../ |
@@ -113,7 +113,7 @@ Enter 发送；运行中 Enter 作为 steer；Ctrl+C 取消/退出；Ctrl+D 退�
 - `compact`：reasoning 只显示首行摘要；`run_code` 只显示状态 + description/code 单行摘要。
 - `detailed`：当前完整 reasoning 区带与 `run_code` args/result 卡片。
 
-`/settings` 默认打开 **TUI settings** 独立弹窗，可修改上述两个显示模式并立即生效；`/settings host` 查看高级 Host settings 命名空间，原有的 `/settings edit|items|set` 仍可用。
+`/settings` 默认打开 **TUI settings** 独立弹窗，可修改 thinking/run_code 显示模式、transcript entries，以及 theme/fullscreen；显示模式和 transcript entries 立即生效，theme/fullscreen 保存后重启生效。`/settings host` 查看高级 Host settings 命名空间，原有的 `/settings edit|items|set` 仍可用。
 
 默认模型来自 Host 的 ctx.agentDefaultModel（Base 默认 deepseek-official/deepseek-flash）。没有凭据时首个请求会显示 MISSING_CREDENTIAL。
 
@@ -205,7 +205,7 @@ dsh --profile tui
 ## 开发与验证
 
 ~~~sh
-pnpm check          # typecheck + 84 unit tests + build
+pnpm check          # typecheck + 86 unit tests + build
 pnpm test
 pnpm build
 ~~~
@@ -230,7 +230,7 @@ python3 scripts/pty-smoke.py
 
 ## 已知差距
 
-Plugin Manager 官方目录之外的市场搜索（官方目录浏览已实现）、PDF/Office 富文档预览（Markdown 已支持）、会话级附件管理器（当前覆盖 staged 附件）、远端连接尚未实现。computer-use 实际桌面操作等待用户实机验证；MCP 运行中断线状态不实时推送；自动压缩已接入 preset 并有事件卡，但真实长上下文 E2E 仍需补。详见架构文档第 6 节。
+Plugin Manager 官方目录之外的市场搜索（官方目录浏览已实现）、PDF/Office 富文档预览（Markdown 已支持）、会话级附件管理器（当前覆盖 staged 附件）、远端连接尚未实现。computer-use 已经可用；MCP 运行中断线状态不实时推送；自动压缩已接入 preset 并有事件卡，但真实长上下文 E2E 仍需补。详见架构文档第 6 节。
 
 ## 兼容性
 
