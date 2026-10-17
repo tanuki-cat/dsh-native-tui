@@ -110,6 +110,7 @@
 - 已验证状态栏指标行渲染和 metrics 折叠单测；fake TTY 验证全宽 band 排版。
 - 已验证多行 approval title 的 dialog frame 渲染：每行宽度受限、边框完整、无嵌入换行；Markdown/Text Pager 与 Image overlay 复用同一 FramedOverlay/dialogFrame。
 - 已验证 mcp-manager 对 fake MCP server 的 `connected` 和失败连接的 `error` 状态；`/mcp list` 显示初始连接结果。
+- 已验证四个 preset 均挂载 compaction-basic/command-compact；`/compact` 可用，transcript 渲染 compaction lifecycle 与 tool-result prune。自动压缩的真实长上下文触发仍需 E2E。
 - 已验证 `/reasoning high` 后状态栏显示 `effort high`，`/status` 显示 `Reasoning: high`。
 - 已验证 `/provider` 补全显示 add/list/remove，`/provider re` 过滤为 remove。
 - 已验证 `/preset minimal` 写入 `selectedDefault`，重启后仍以 minimal 创建 Session。
@@ -184,7 +185,7 @@ scripts/
 
 ## 5. 验证证据
 
-- pnpm check：typecheck + 74 个单元测试 + build 通过（22 个测试文件）。
+- pnpm check：typecheck + 77 个单元测试 + build 通过（23 个测试文件）。
 - 安装：在全新 DSH_HOME 执行 dsh plugin --profile tui add <repo> 成功，profile bundles = base + dsh-native-tui。
 - 打包：pnpm pack 后以 tgz 安装到全新 DSH_HOME 成功，并成功启动。
 - 启动：安装后的 profile 在 fake TTY 中启动、渲染 header/status/editor、Ctrl+D 退出码 0。

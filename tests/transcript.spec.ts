@@ -79,6 +79,38 @@ describe('reduceTranscript', () => {
     expect(formatted).toContain('timeoutMs: 60000')
   })
 
+  it('renders compaction lifecycle and pruned tool output', () => {
+    const entries: TranscriptEntry[] = [
+      durable('compaction/start', { compactionId: 'c1', turn: 1 }, 1),
+      durable('compaction/summary', {
+        compactionId: 'c1',
+        summary: [{ type: 'text', text: 'condensed checkpoint' }],
+        shadowedSeqs: [1, 2, 3],
+        shadowedTokenCount: 1200,
+        provider: 'mock',
+        model: 'mock',
+      }, 2),
+      durable('compaction/end', { compactionId: 'c1', turn: 1 }, 3),
+      durable('compaction/prune', { shadowedSeqs: [4, 5], shadowedTokenCount: 640 }, 4),
+    ]
+    const blocks = reduceTranscript(entries, options)
+    expect(blocks[0]).toMatchObject({
+      kind: 'compaction',
+      state: 'done',
+      shadowedItems: 3,
+      shadowedTokens: 1200,
+      summary: 'condensed checkpoint',
+    })
+    expect(blocks[1]).toMatchObject({ kind: 'notice', tone: 'info', text: 'Tool output pruned · 2 item(s) · ~640 tokens' })
+    const renderer = new TranscriptRenderer(options)
+    renderer.set(entries, [])
+    const output = renderer.container.render(80).join('\n')
+    expect(output).toContain('Context compacted')
+    expect(output).toContain('3 item(s)')
+    expect(output).toContain('condensed checkpoint')
+    expect(output).toContain('Tool output pruned')
+  })
+
   it('marks turn failures and caps old rows', () => {
     const entries: TranscriptEntry[] = [
       durable('user/message', { content: [{ type: 'text', text: 'one' }], source: { kind: 'user' } }),

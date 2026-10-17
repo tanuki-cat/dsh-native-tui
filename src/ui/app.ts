@@ -2780,9 +2780,8 @@ export async function startTerminalApp(
                     if (execution === undefined) {
                         pushNotice('warning', 'Unknown command: /' + name + '. Use /help for local and host commands.');
                     }
-                    else if (execution.result.text !== undefined && execution.result.text !== '') {
-                        pushNotice(execution.result.kind === 'error' ? 'error' : 'info', execution.result.text);
-                    }
+                    // Host commands append command/done before execute() resolves, and the
+                    // transcript renders that event. Do not also surface result.text here.
                 }
                 catch (error) {
                     pushNotice('error', 'Command failed: ' + errorMessage(error));

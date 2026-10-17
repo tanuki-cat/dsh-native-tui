@@ -48,6 +48,14 @@ export type TranscriptBlock = ({
   readonly diffs?: readonly FileDiff[]
 } | {
   readonly kind: 'notice'; readonly tone: 'info' | 'warning' | 'error'; readonly text: string
+} | {
+  readonly kind: 'compaction'
+  readonly compactionId: string
+  readonly state: 'running' | 'done' | 'error'
+  readonly shadowedItems?: number
+  readonly shadowedTokens?: number
+  readonly summary?: string
+  readonly error?: string
 }) & {
   /** Durable event sequence that produced this block. */
   readonly seq?: number
@@ -151,6 +159,7 @@ export function reduceTranscript(
   const liveByStep = new Map<string, { index: number; text: string; reasoning: string }>()
   const finalizedSteps = new Set<string>()
   const toolByCall = new Map<string, number>()
+  const compactionByCall = new Map<string, number>()
 
   const pushLive = (event: LiveChunkEntry): void => {
     const key = stepKey(event.data.turn, event.data.step)
@@ -180,6 +189,61 @@ export function reduceTranscript(
     }
     const event: SessionEvent = entry.event
     const seq = Number(event.seq)
+    const extensionType = (event as unknown as { type: string }).type
+    if (extensionType.startsWith('compaction/')) {
+      const data = (event as unknown as { data: Record<string, unknown> }).data
+      if (extensionType === 'compaction/start') {
+        const id = String(data.compactionId)
+        compactionByCall.set(id, blocks.length)
+        blocks.push({ kind: 'compaction', compactionId: id, state: 'running', seq })
+      }
+      else if (extensionType === 'compaction/summary') {
+        const id = String(data.compactionId)
+        const summary = clip(contentText(data.summary as readonly ContentBlock[] | undefined), 800)
+        const shadowedSeqs = Array.isArray(data.shadowedSeqs) ? data.shadowedSeqs : []
+        const range = data.shadowedRange as { readonly start?: unknown; readonly end?: unknown } | undefined
+        const rangeCount = typeof range?.start === 'number' && typeof range.end === 'number'
+          ? Math.max(0, range.end - range.start + 1)
+          : 0
+        const block: TranscriptBlock = {
+          kind: 'compaction',
+          compactionId: id,
+          state: 'running',
+          shadowedItems: shadowedSeqs.length > 0 ? shadowedSeqs.length : rangeCount,
+          ...(typeof data.shadowedTokenCount === 'number' ? { shadowedTokens: data.shadowedTokenCount } : {}),
+          ...(summary === '' ? {} : { summary }),
+          seq,
+        }
+        const index = compactionByCall.get(id)
+        if (index === undefined) {
+          compactionByCall.set(id, blocks.length)
+          blocks.push(block)
+        }
+        else {
+          blocks[index] = block
+        }
+      }
+      else if (extensionType === 'compaction/end') {
+        const id = String(data.compactionId)
+        const error = typeof data.error === 'string' ? data.error : undefined
+        const index = compactionByCall.get(id)
+        if (index === undefined) {
+          blocks.push({ kind: 'compaction', compactionId: id, state: error === undefined ? 'done' : 'error', ...(error === undefined ? {} : { error }), seq })
+        }
+        else {
+          const prior = blocks[index]
+          if (prior?.kind === 'compaction') {
+            blocks[index] = { ...prior, state: error === undefined ? 'done' : 'error', ...(error === undefined ? {} : { error }), seq }
+          }
+        }
+      }
+      else if (extensionType === 'compaction/prune') {
+        const count = Array.isArray(data.shadowedSeqs) ? data.shadowedSeqs.length : 0
+        const tokens = typeof data.shadowedTokenCount === 'number' ? data.shadowedTokenCount : 0
+        blocks.push({ kind: 'notice', tone: 'info', text: 'Tool output pruned · ' + String(count) + ' item(s) · ~' + String(tokens) + ' tokens', seq })
+      }
+      continue
+    }
     switch (event.type) {
       case 'user/message': {
         const source = event.data.source
@@ -443,6 +507,22 @@ export class TranscriptRenderer {
           container.addChild(new Text(lines.join('\n'), 0, 0))
         }
         return band(container, palette.toolBand)
+      }
+      case 'compaction': {
+        const container = new Container()
+        const meta = [
+          block.shadowedItems === undefined ? undefined : String(block.shadowedItems) + ' item(s)',
+          block.shadowedTokens === undefined ? undefined : '~' + String(block.shadowedTokens) + ' tokens',
+        ].filter((value): value is string => value !== undefined)
+        const title = block.state === 'error'
+          ? '✕ Compaction failed'
+          : block.state === 'running' ? '⟳ Compacting context…' : '✓ Context compacted'
+        container.addChild(new Text(palette.bold(palette.accent(title)) + (meta.length === 0 ? '' : '  ' + palette.dim(meta.join(' · '))), 0, 0))
+        if (block.summary !== undefined && block.summary.trim() !== '') {
+          container.addChild(new BarText(clip(block.summary, 800), '│ ', palette.dim, palette.dim))
+        }
+        if (block.error !== undefined) container.addChild(new Text(palette.error(clip(block.error, 600)), 0, 0))
+        return container
       }
       case 'notice': {
         const text = block.text.replaceAll('\n', '\n  ')

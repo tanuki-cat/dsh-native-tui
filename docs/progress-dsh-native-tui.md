@@ -62,7 +62,7 @@ pnpm check
   tsc -p tsconfig.build.json
 
 Test Files  17 passed (17)
-Tests       74 passed (74)
+Tests       77 passed (77)
 ```
 
 ### 安装与启动
@@ -106,7 +106,7 @@ src/index.ts                 Cordis 入口、TTY 守卫
 src/config.ts                schemastery 配置、fullscreen
 src/runtime/                 agent/session、attachments、bundle、html、images、open、providers、settings、tool-log
 src/ui/                      app、autocomplete、dialogs、transcript、diff、theme
-tests/                       22 个测试文件，74 个测试
+tests/                       23 个测试文件，77 个测试
 scripts/fake-tty-*.mjs       fake-TTY 验证脚本
 README.md
 docs/design-task-feature-dsh-native-tui-host-native.md
@@ -124,6 +124,7 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - 远端连接未实现；当前是本地/SSH 终端使用。
 - MCP 状态只覆盖初始连接；运行中断线/重连状态不实时回推。
 - Computer-use 实际桌面操作等待用户实机验证。
+- 自动上下文压缩已接入 preset 并有事件渲染；真实长上下文自动触发仍缺 E2E 验收。
 - 生产与开发依赖已统一为 `0.2.1-rc.2`。
 - 会话级附件管理器未实现；当前 `/attachments` 管理 staged 附件。
 - 真实审批/工具/模型流式回合缺少凭据验收。
@@ -156,6 +157,10 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - 默认 Agent Preset 已设为 ptc：全新 profile 启动后 `/status` 显示 `Preset: ptc`；既有 Session 仍按其记录恢复。
 - 已验证空白 Session 的 `/preset minimal` 直接切换当前 Session，`/status` 显示 minimal。
 - 已验证首个 turn 失败后 `/preset ptc` 返回 `This session has already started`，并提示 next /new 使用 ptc。
+- 已验证 standard/ptc/minimal/cordis 四个 preset 都挂载 `compaction-basic` 与 `command-compact`；TUI `/help` 的 Host commands 包含 `/compact`。
+- 已验证 `/compact` 在空历史下返回一次 `No compactable history yet.`（command/done 去重后不再双输出）。
+- 新增 transcript compaction 单测：start/summary/end 渲染为 `Context compacted` 卡片，prune 渲染 tool-output 通知。
+- 自动压缩的真实长上下文触发仍未做 E2E；当前验证覆盖 preset wiring、手动命令和事件渲染。
 
 ## 7. 建议验收步骤
 
@@ -175,4 +180,4 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 | 14–20 | Plugin remove/market、剪贴板图片、图片预览、alt-screen、`@@session` |
 | 21–25 | 附件预览、ZIP/HTML 导出、Deliverables reveal、工具结果 pager、Markdown |
 | 26–30 | 独立 Diff、附件管理器、Settings 数组、Deliverables panel、收尾验证 |
-| 后续 | 第三方模型 `/provider add|list|edit|models|remove` 引导与自动模型发现，22 个测试文件 / 74 个测试 |
+| 后续 | 第三方模型 `/provider add|list|edit|models|remove` 引导与自动模型发现，23 个测试文件 / 77 个测试 |
