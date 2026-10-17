@@ -32,6 +32,7 @@ import {
   buildCustomProvider,
   isValidEnvName,
   isValidProviderRoute,
+  mergeProviderModel,
   parseReasoningLevels,
   type ProviderProtocol,
 } from '../runtime/providers.js'
@@ -2346,14 +2347,44 @@ export async function startTerminalApp(
                             input,
                             ...(reasoningEfforts === undefined ? {} : { reasoningEfforts }),
                         });
+                        const selectedModels = (provider as { models?: Record<string, unknown>[] }).models;
+                        if (Array.isArray(selectedModels)) {
+                            for (const candidate of discovered) {
+                                if (candidate.id === model.id)
+                                    continue;
+                                selectedModels.push({
+                                    id: candidate.id,
+                                    name: candidate.name ?? candidate.id,
+                                    contextWindow: typeof candidate.contextWindow === 'number' && candidate.contextWindow > 0 ? candidate.contextWindow : 128000,
+                                    maxTokens: typeof candidate.maxTokens === 'number' && candidate.maxTokens > 0 ? candidate.maxTokens : 16384,
+                                    ...(candidate.inputModalities === undefined || candidate.inputModalities.length === 0
+                                        ? {}
+                                        : { input: [...candidate.inputModalities] }),
+                                });
+                            }
+                        }
                     }
                     if (Object.hasOwn(providerRecord, route)) {
-                        const confirmed = await showChoice(tui, palette, 'Provider route ' + route + ' already exists', [
-                            { value: 'yes', label: 'Overwrite', description: 'Replace this route profile' },
-                            { value: 'no', label: 'Cancel' },
-                        ], 'Enter selects · Esc cancels', interactionAbort.signal);
-                        if (confirmed !== 'yes')
-                            return;
+                        const existing = providerRecord[route];
+                        if (kind === 'catalog') {
+                            const confirmed = await showChoice(tui, palette, 'Provider route ' + route + ' already exists', [
+                                { value: 'yes', label: 'Replace credential', description: 'Replace this catalog route profile' },
+                                { value: 'no', label: 'Cancel' },
+                            ], 'Enter selects · Esc cancels', interactionAbort.signal);
+                            if (confirmed !== 'yes')
+                                return;
+                        }
+                        else {
+                            const confirmed = await showChoice(tui, palette, 'Provider route ' + route + ' already exists', [
+                                { value: 'merge', label: 'Add/replace this model, keep other models', description: 'Append to the existing route and keep its other models' },
+                                { value: 'replace', label: 'Replace entire route', description: 'Discard the existing model list' },
+                                { value: 'cancel', label: 'Cancel' },
+                            ], 'Enter selects · Esc cancels', interactionAbort.signal);
+                            if (confirmed === undefined || confirmed === 'cancel')
+                                return;
+                            if (confirmed === 'merge')
+                                provider = mergeProviderModel(existing, provider);
+                        }
                     }
                     await settings.mutate('llm-pi-ai', [{ op: 'set', path: ['providers', route], value: provider }], descriptor.revision);
                     pushNotice('info', 'Saved provider route: ' + route + ' · key is read from ' + (provider as { apiKeyEnv?: string }).apiKeyEnv);

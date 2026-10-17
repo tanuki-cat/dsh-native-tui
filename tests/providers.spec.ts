@@ -4,6 +4,7 @@ import {
   buildCustomProvider,
   isValidEnvName,
   isValidProviderRoute,
+  mergeProviderModel,
   mergeProviderProfiles,
   normalizeBaseURL,
   parseReasoningLevels,
@@ -83,6 +84,25 @@ describe('provider config helpers', () => {
     })
     expect((provider.models as readonly { reasoningEfforts?: Record<string, string | null> }[])[0]?.reasoningEfforts)
       .toEqual({ low: 'low', high: 'high' })
+  })
+
+  it('merges a new model into an existing provider without dropping old models', () => {
+    const existing = {
+      api: 'openai-completions',
+      baseURL: 'https://api.example.com/v1',
+      apiKeyEnv: 'EXISTING_KEY',
+      models: [{ id: 'old-model', name: 'Old' }],
+    }
+    const next = {
+      api: 'openai-completions',
+      baseURL: 'https://api.example.com/v1',
+      apiKeyEnv: 'EXISTING_KEY',
+      models: [{ id: 'new-model', name: 'New' }],
+    }
+    const merged = mergeProviderModel(existing, next)
+    expect((merged.models as readonly { id: string }[]).map(model => model.id)).toEqual(['old-model', 'new-model'])
+    const replaced = mergeProviderModel(existing, { ...next, models: [{ id: 'old-model', name: 'Updated' }] })
+    expect(replaced.models).toEqual([{ id: 'old-model', name: 'Updated' }])
   })
 
   it('merges routes without dropping existing providers', () => {

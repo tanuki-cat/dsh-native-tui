@@ -127,6 +127,35 @@ export function parseReasoningLevels(raw: string): Record<string, string | null>
 }
 
 /** Build a catalog-route profile that only names a credential. */
+/**
+ * Merge one guided model into an existing hand-declared route without
+ * discarding models the operator configured earlier. A matching id is
+ * replaced; other models keep their order and settings.
+ * @param existing - current route profile, if any.
+ * @param next - profile built from the current guided selection.
+ * @returns the route profile with merged models.
+ */
+export function mergeProviderModel(existing: unknown, next: Record<string, unknown>): Record<string, unknown> {
+  const base = existing !== null && typeof existing === 'object' && !Array.isArray(existing)
+    ? { ...(existing as Record<string, unknown>) }
+    : {}
+  const existingModels = Array.isArray(base.models)
+    ? base.models.filter((model): model is Record<string, unknown> => model !== null && typeof model === 'object' && !Array.isArray(model))
+    : []
+  const nextModels = Array.isArray(next.models)
+    ? next.models.filter((model): model is Record<string, unknown> => model !== null && typeof model === 'object' && !Array.isArray(model))
+    : []
+  const byId = new Map<string, Record<string, unknown>>()
+  for (const model of existingModels) {
+    if (typeof model.id === 'string') byId.set(model.id, model)
+  }
+  for (const model of nextModels) {
+    if (typeof model.id === 'string') byId.set(model.id, model)
+  }
+  return { ...base, ...next, models: [...byId.values()] }
+}
+
+/** Build a catalog-route profile that only names a credential. */
 export function buildCatalogProvider(apiKeyEnv: string): Record<string, unknown> {
   if (!isValidEnvName(apiKeyEnv)) throw new Error('apiKeyEnv must be an uppercase environment variable name, not the API key')
   return { apiKeyEnv }
