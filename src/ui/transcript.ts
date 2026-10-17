@@ -1,4 +1,4 @@
-import { Container, Markdown, Spacer, Text, type MarkdownTheme } from '@earendil-works/pi-tui'
+import { Box, Container, Markdown, Spacer, Text, type Component, type MarkdownTheme } from '@earendil-works/pi-tui'
 import { Rule } from './rule.js'
 import { BarText } from './bar-text.js'
 import type {} from '@deepseek-ai/dsh-commands'
@@ -377,12 +377,17 @@ export class TranscriptRenderer {
 
   private renderBlock(block: TranscriptBlock) {
     const palette = this.options.palette
+    const band = (component: Component, background: (text: string) => string): Component => {
+      const box = new Box(1, 0, background)
+      box.addChild(component)
+      return box
+    }
     switch (block.kind) {
       case 'user': {
         const container = new Container()
         container.addChild(new Text(palette.bold(palette.accent('▌ You')), 0, 0))
-        container.addChild(new BarText(block.text, '│ ', line => line, palette.accent))
-        return container
+        container.addChild(new Text(block.text, 0, 0))
+        return band(container, palette.userBand)
       }
       case 'assistant': {
         const container = new Container()
@@ -390,9 +395,11 @@ export class TranscriptRenderer {
           + (block.live === true ? '  ' + palette.warning('streaming') : '')
         container.addChild(new Text(label, 0, 0))
         if (block.reasoning !== undefined && block.reasoning.trim() !== '') {
+          const reasoning = new Container()
+          reasoning.addChild(new Text(palette.dim('thinking'), 0, 0))
+          reasoning.addChild(new Text(palette.dim(clip(block.reasoning, REASONING_PREVIEW)), 0, 0))
           container.addChild(new Spacer(1))
-          container.addChild(new Text(palette.dim('thinking'), 0, 0))
-          container.addChild(new BarText(clip(block.reasoning, REASONING_PREVIEW), '│ ', palette.dim, palette.dim))
+          container.addChild(band(reasoning, palette.thinkingBand))
         }
         if (block.text.trim() !== '') {
           container.addChild(new Spacer(1))
@@ -435,7 +442,7 @@ export class TranscriptRenderer {
           }
           container.addChild(new Text(lines.join('\n'), 0, 0))
         }
-        return container
+        return band(container, palette.toolBand)
       }
       case 'notice': {
         const text = block.text.replaceAll('\n', '\n  ')

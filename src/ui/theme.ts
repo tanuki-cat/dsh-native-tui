@@ -13,6 +13,9 @@ export interface Palette {
   readonly success: (text: string) => string
   readonly warning: (text: string) => string
   readonly error: (text: string) => string
+  readonly userBand: (text: string) => string
+  readonly toolBand: (text: string) => string
+  readonly thinkingBand: (text: string) => string
 }
 
 const identity = (text: string): string => text
@@ -40,8 +43,14 @@ export function createPalette(theme: Config['theme']): Palette {
       success: identity,
       warning: identity,
       error: identity,
+      userBand: identity,
+      toolBand: identity,
+      thinkingBand: identity,
     }
   }
+  const bands = theme === 'light'
+    ? { user: '48;5;195', tool: '48;5;194', thinking: '48;5;254' }
+    : { user: '48;5;23', tool: '48;5;22', thinking: '48;5;235' }
   return {
     plain: false,
     dim: sgr('2', '22'),
@@ -53,6 +62,9 @@ export function createPalette(theme: Config['theme']): Palette {
     success: sgr('32', '39'),
     warning: sgr('33', '39'),
     error: sgr('31', '39'),
+    userBand: sgr(bands.user, '49'),
+    toolBand: sgr(bands.tool, '49'),
+    thinkingBand: sgr(bands.thinking, '49'),
   }
 }
 

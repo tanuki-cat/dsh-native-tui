@@ -70,7 +70,7 @@
 - 已验证 @@ 在真实 profile 中列出 13 个其他 Session（label + cwd）；候选值由 remoteExportCandidates 生成 canonical mention。
 - /preview <image> 使用 pi-tui Image 渲染 PNG/JPEG/GIF/WebP；不支持图形协议的终端显示文本占位；已验证 RGB PNG 2x2 的 overlay 标题、占位图与 Enter/Esc 关闭。
 - fullscreen: true 使用 TuiAltScreen + VStack/ScrollView：固定两行 header、分隔线、status/editor，transcript 为 primary follow-end 滚动区，启用鼠标滚轮与选择复制。
-- Transcript 层次：用户消息左侧 accent 色条；assistant 标签与 streaming 状态；reasoning 独立缩进；context 用 ◇ 标签；tool 用 ├ args/result 与 diff 分支；notice 用 i/!/✕ 图标；用户 turn 之间插入 dim Rule。长行使用 BarText 让每条 wrap 行保留左色条。
+- Transcript 层次：参考 pi agent 使用全宽背景带（用户消息、reasoning、tool 输出），assistant 标签与 streaming 状态；context 用 ◇ 标签；tool 用 ├ args/result 与 diff 分支；notice 用 i/!/✕ 图标；用户 turn 之间插入 dim Rule。长行使用 BarText 让每条 wrap 行保留左色条。dark/light 使用不同 band 背景，plain 取消背景。
 - 本地 notice 记录创建时的 afterSeq，渲染时按 durable event seq 插入；命令输出不再统一追加到 transcript 末尾。
 - 运行中 Esc/Ctrl+C 取消当前 turn；Esc 在 overlay 打开时不抢占，交给 dialog。
 - 状态栏固定两行：第一行状态/preset/effort/快捷键，第二行 `↳ turns · steps · tok/s · total tok · cache % · ctx %`。TPS=decodeTokens/decodeMs；cache=读取缓存/总 prompt；context=最近 prompt token/模型 contextWindow。
@@ -106,7 +106,7 @@
 - `/provider add` 自动发现后选择 Text + image，profile 写入 `input: [text, image]`；Reasoning levels=`low,medium,high` 写入 `reasoningEfforts`；auto-route 同时保存 auto-model + auto-small 两个模型。
 - 已验证 `/provider models fetch-route` 获取 2 个模型并 merge：`1 added, 1 refreshed`。
 - 已验证默认集成 boot、`/mcp add` 持久化以及 mcp-manager 的 Loader row 创建/清理。
-- 已验证状态栏指标行渲染和 metrics 折叠单测。
+- 已验证状态栏指标行渲染和 metrics 折叠单测；fake TTY 验证全宽 band 排版。
 - 已验证 `/reasoning high` 后状态栏显示 `effort high`，`/status` 显示 `Reasoning: high`。
 - 已验证 `/provider` 补全显示 add/list/remove，`/provider re` 过滤为 remove。
 - 已验证 `/preset minimal` 写入 `selectedDefault`，重启后仍以 minimal 创建 Session。

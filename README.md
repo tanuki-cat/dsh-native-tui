@@ -21,7 +21,7 @@ DeepSeek Harness 的 host-native 终端前端，基于 pi-tui。
 - Agent Presets：standard / ptc / minimal / cordis；/preset 可在首个 turn 前切换当前 Session，已开始的 Session 锁定并用于下一次 /new；选择同时写入 `agent-preset-registry.selectedDefault`，重启后继续使用。
 - Workspace 列表/创建/切换/pin/unpin/archive/unarchive；Schedule 列表/创建/删除；Settings 顶层/嵌套对象/数组字段编辑与 JSON 写入；Plugins 列表/官方市场/检查/安装/移除/启停（带确认，实时应用）。
 - 可选 `fullscreen`：TuiAltScreen + ScrollView，header/status/editor 固定，鼠标滚轮滚动、文本选择复制。
-- Transcript 层次：两行 Header + 分隔线、用户消息左侧色条、assistant/reasoning 标签、tool args/result 分支、notice 图标、turn 分隔线；本地命令输出按 durable event sequence 插入，不会一律堆在 transcript 末尾。
+- Transcript 层次：参考 pi agent 使用全宽背景带（用户消息、reasoning、tool 输出）、assistant/context 标签、notice 图标、turn 分隔线；本地命令输出按 durable event sequence 插入，不会一律堆在 transcript 末尾。
 - 运行中 `Esc` / `Ctrl+C` 取消 turn；长文本和 tool 输出按行保持左侧色条。
 - 状态栏常驻会话指标：turns/steps、tok/s、累计 token、cache hit、context 使用率；由官方 session-stats projection 和 assistant usage 折叠。
 - `@@<query>` 自动补全其他 Session 的 canonical mention；发送时 Host session-reference 自动注入快照。

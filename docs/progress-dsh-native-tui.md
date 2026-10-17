@@ -145,6 +145,7 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - 已验证 `/preset minimal` 写入 `agent-preset-registry.selectedDefault: minimal`；重启后状态栏和 `/status` 仍显示 minimal。
 - 已验证默认 bundle 加载 computer-use、Cua Driver native、mcp-client、mcp-resources、mcp-manager、session-stats；profile 启动无激活错误。
 - 已验证状态栏常驻两行：`● idle ...` + `↳ 0 turns · 0 steps · — tok/s · 0 tok · cache — · ctx 0%`。
+- 参考 pi agent 增加用户消息、reasoning、tool 输出的全宽背景带；dark/light theme 使用不同底色，plain 保持无样式。
 - 已验证 `/mcp add` 写入 `mcp-manager.servers.demo`，`/mcp list` 显示 `demo  stdio  false`；manager 动态创建 mcp-client Loader row。
 - 已验证把 `sk-proj-...` 填入 env 字段会被拒绝且不写 profile；缺 env 时同样不保存。
 - 默认 Agent Preset 已设为 ptc：全新 profile 启动后 `/status` 显示 `Preset: ptc`；既有 Session 仍按其记录恢复。
