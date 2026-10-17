@@ -11,8 +11,8 @@ const options = {
   markdown: markdownTheme(palette),
 }
 
-function durable(type: string, data: unknown): TranscriptEntry {
-  return { type: 'event', event: { type, seq: 0, time: 0, data } as unknown as SessionEvent }
+function durable(type: string, data: unknown, seq = 0): TranscriptEntry {
+  return { type: 'event', event: { type, seq, time: 0, data } as unknown as SessionEvent }
 }
 
 describe('reduceTranscript', () => {
@@ -108,5 +108,21 @@ describe('TranscriptRenderer', () => {
     expect(output).toContain('final answer')
     expect(output).toContain('├ args')
     expect(output).toContain('├ result')
+  })
+})
+
+describe('TranscriptRenderer notice ordering', () => {
+  it('places local notices at their durable sequence', () => {
+    const renderer = new TranscriptRenderer(options)
+    renderer.set([
+      durable('user/message', { content: [{ type: 'text', text: 'hello' }], source: { kind: 'user' } }, 1),
+      durable('assistant/message', { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'answer' }] } }, 2),
+    ], [
+      { kind: 'notice', tone: 'info', text: 'before turn', afterSeq: 0 },
+      { kind: 'notice', tone: 'info', text: 'after turn', afterSeq: 2 },
+    ])
+    const output = renderer.container.render(80).join('\n')
+    expect(output.indexOf('before turn')).toBeLessThan(output.indexOf('▌ You'))
+    expect(output.indexOf('after turn')).toBeGreaterThan(output.indexOf('answer'))
   })
 })

@@ -31,21 +31,29 @@ const TOOL_PREVIEW = 1200
 const REASONING_PREVIEW = 3000
 
 /** One rendered transcript row. */
-export type TranscriptBlock =
-  | { readonly kind: 'user'; readonly text: string }
-  | { readonly kind: 'assistant'; readonly text: string; readonly reasoning?: string; readonly live: boolean }
-  | { readonly kind: 'context'; readonly label: string; readonly text: string }
-  | {
-    readonly kind: 'tool'
-    readonly callId: string
-    readonly name: string
-    readonly args: string
-    readonly result?: string
-    readonly isError?: boolean
-    readonly pending: boolean
-    readonly diffs?: readonly FileDiff[]
-  }
-  | { readonly kind: 'notice'; readonly tone: 'info' | 'warning' | 'error'; readonly text: string }
+export type TranscriptBlock = ({
+  readonly kind: 'user'; readonly text: string
+} | {
+  readonly kind: 'assistant'; readonly text: string; readonly reasoning?: string; readonly live: boolean
+} | {
+  readonly kind: 'context'; readonly label: string; readonly text: string
+} | {
+  readonly kind: 'tool'
+  readonly callId: string
+  readonly name: string
+  readonly args: string
+  readonly result?: string
+  readonly isError?: boolean
+  readonly pending: boolean
+  readonly diffs?: readonly FileDiff[]
+} | {
+  readonly kind: 'notice'; readonly tone: 'info' | 'warning' | 'error'; readonly text: string
+}) & {
+  /** Durable event sequence that produced this block. */
+  readonly seq?: number
+  /** Local notice placement: show after this durable sequence. */
+  readonly afterSeq?: number
+}
 
 /** Options controlling transcript reduction. */
 export interface TranscriptOptions {
@@ -171,18 +179,19 @@ export function reduceTranscript(
       continue
     }
     const event: SessionEvent = entry.event
+    const seq = Number(event.seq)
     switch (event.type) {
       case 'user/message': {
         const source = event.data.source
         if (source.kind === 'user') {
-          blocks.push({ kind: 'user', text: contentText(event.data.content) })
+          blocks.push({ kind: 'user', text: contentText(event.data.content), seq })
         } else {
           const text = contentText(event.data.content)
           if (text.trim() !== '') {
             const label = 'plugin' in source && typeof source.plugin === 'string'
               ? source.plugin
               : source.kind
-            blocks.push({ kind: 'context', label, text })
+            blocks.push({ kind: 'context', label, text, seq })
           }
         }
         break
@@ -202,6 +211,7 @@ export function reduceTranscript(
             text,
             ...(reasoning === '' ? {} : { reasoning }),
             live: false,
+            seq,
           })
         }
         break
@@ -222,6 +232,7 @@ export function reduceTranscript(
           name: event.data.name,
           args: event.data.arguments,
           pending: true,
+          seq,
         })
         break
       }
@@ -241,6 +252,7 @@ export function reduceTranscript(
             ...(isError ? { isError: true } : {}),
             ...(diffs === undefined ? {} : { diffs }),
             pending: false,
+            seq,
           })
         } else {
           const prior = blocks[index]
@@ -251,6 +263,7 @@ export function reduceTranscript(
               ...(isError ? { isError: true } : {}),
               ...(diffs === undefined ? {} : { diffs }),
               pending: false,
+              seq,
             }
           }
         }
@@ -263,11 +276,12 @@ export function reduceTranscript(
             kind: 'notice',
             tone: 'error',
             text: `Turn failed: ${reason.error.code}: ${reason.error.message}`,
+            seq,
           })
         } else if (reason.kind === 'aborted') {
-          blocks.push({ kind: 'notice', tone: 'warning', text: 'Turn cancelled' })
+          blocks.push({ kind: 'notice', tone: 'warning', text: 'Turn cancelled', seq })
         } else if (reason.kind === 'max-tokens') {
-          blocks.push({ kind: 'notice', tone: 'warning', text: 'Turn stopped at the output-token limit' })
+          blocks.push({ kind: 'notice', tone: 'warning', text: 'Turn stopped at the output-token limit', seq })
         }
         break
       }
@@ -278,6 +292,7 @@ export function reduceTranscript(
             kind: 'notice',
             tone: result.kind === 'error' ? 'error' : 'info',
             text: result.text,
+            seq,
           })
         }
         break
@@ -337,7 +352,18 @@ export class TranscriptRenderer {
   }
 
   private rebuild(): void {
-    const blocks = [...reduceTranscript(this.entries, this.options), ...this.extra]
+    const durable = reduceTranscript(this.entries, this.options)
+    const anchored = this.extra.filter((notice): notice is TranscriptBlock & { afterSeq: number } => notice.afterSeq !== undefined)
+    const trailing = this.extra.filter(notice => notice.afterSeq === undefined)
+    const blocks: TranscriptBlock[] = []
+    const pending = [...anchored]
+    for (const block of durable) {
+      while (pending.length > 0 && pending[0]!.afterSeq < (block.seq ?? Number.POSITIVE_INFINITY)) {
+        blocks.push(pending.shift()!)
+      }
+      blocks.push(block)
+    }
+    blocks.push(...pending, ...trailing)
     this.container.clear()
     for (const [index, block] of blocks.entries()) {
       if (index > 0) this.container.addChild(new Spacer(1))

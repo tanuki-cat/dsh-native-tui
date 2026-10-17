@@ -397,7 +397,7 @@ export async function startTerminalApp(
   }
 
   const pushNotice = (tone: 'info' | 'warning' | 'error', text: string): void => {
-    localNotices.push({ kind: 'notice', tone, text })
+    localNotices.push({ kind: 'notice', tone, text, afterSeq: lastDurableSeq() ?? 0 })
     if (localNotices.length > MAX_NOTICES) localNotices = localNotices.slice(-MAX_NOTICES)
     scheduleTranscript(true)
   }
