@@ -206,6 +206,11 @@ scripts/
 7. 没有多 Agent 并发/后台会话视图；subagent 只读列出。
 8. 状态栏指标中 TPS 基于已完成 step；context 使用最近 prompt token；运行中断线状态不回推。
 9. package 仍为 private，发布名称/scope/CI 策略未确定。
+10. Settings wizard 目前覆盖 thinking/run_code/transcript entries/theme/fullscreen；title/cwd/sessionId/showReasoning 仍是 profile-only，Host settings 仍是列表入口。
+11. 自动压缩缺低 context window 长会话 E2E；MCP 运行中断线/重连与同 session 新配置加载仍未闭环。
+12. compaction open-start 在 Session 恢复时仍可能显示 running；context 百分比是 shadowedTokenCount 近似值。
+
+可执行 backlog 与验收方法记录在 [进度记录 §9](progress-dsh-native-tui.md#9-剩余事项2026-10-17-审查记录)。
 
 ## 8. 已知限制
 

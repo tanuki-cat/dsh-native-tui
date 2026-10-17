@@ -191,3 +191,39 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 | 21–25 | 附件预览、ZIP/HTML 导出、Deliverables reveal、工具结果 pager、Markdown |
 | 26–30 | 独立 Diff、附件管理器、Settings 数组、Deliverables panel、收尾验证 |
 | 后续 | 第三方模型 `/provider add|list|edit|models|remove` 引导与自动模型发现，23 个测试文件 / 86 个测试 |
+
+## 9. 剩余事项（2026-10-17 审查记录）
+
+当前代码与 86 个测试通过；以下按优先级保留，不再混入已完成项。
+
+### P1
+
+- [ ] **MCP 运行时状态**：目前只有初始 fiber 激活状态，运行中断线/重连不会回推；新增 MCP server 仍需重启 TUI 才装载。需要把 settings 更新映射为 manager reconcile，并补 connect/disconnect 事件。
+- [ ] **自动压缩 E2E**：用低 context window 模型跑多轮长历史，断言 compaction start/summary/end/prune、下一轮请求 token 下降、context 百分比下降；当前只验证 preset wiring、手动 `/compact` 和事件渲染。
+- [ ] **Settings 覆盖完整化**：当前 wizard 覆盖 thinking/run_code/transcript entries/theme/fullscreen；title、cwd、sessionId、showReasoning 仍需 profile YAML 或高级命令。`Host settings…` 仍只是 namespace 列表，不是完整内嵌编辑器。
+- [ ] **MCP 真实工具调用**：保留为用户侧已可用；仓库内仍缺真实 server tools/call 的自动化 E2E。
+
+### P2
+
+- [ ] **Compaction 中断恢复**：已能在新 start/assistant/turn end 时把未结束 compaction 标 error；若 Session 恢复时最后一个事件就是未结束的 start，仍会显示 running。需要 resume 时处理 orphan start 或加 stale 标记。
+- [ ] **Context 百分比精确性**：compaction 后只按 `shadowedTokenCount` 做近似扣减，未计 summary 本身 token；需要结合 token meter/下一次 usage 修正。
+- [ ] **真实 PTY**：fullscreen 鼠标滚动、选择复制、Ctrl+D 恢复尚未在普通终端验收。
+- [ ] **真实审批/模型/tool waterfall**：approval 已有 allow/reject/cancel 弹窗测试，但真实模型流式、工具调用和审批链路仍缺凭据环境验收。
+- [ ] **Settings wizard 自动化测试**：覆盖打开弹窗、修改 mode/entries、settings 持久化、theme/fullscreen restart 提示。
+
+### P3
+
+- [ ] 远端连接（连接已有 dsh web Host）。
+- [ ] 官方目录之外的市场搜索。
+- [ ] PDF/Office 富文档预览。
+- [ ] 多 Agent 并发/后台会话视图。
+- [ ] 发布名称、scope、CI/publish 策略；当前 package 为 private。
+
+### 已完成，不再作为剩余项
+
+- [x] Session resume 恢复 model/reasoning effort/preset。
+- [x] `/model` 内联搜索。
+- [x] computer-use 用户侧实机可用。
+- [x] approval dialog allow/reject/cancel 与 reason 渲染测试。
+- [x] MCP fiber 激活失败 Loader row 清理。
+- [x] compaction 事件卡片、`/compact` 输出去重、context 近似扣减。
