@@ -52,6 +52,7 @@ import { showApproval, showChoice, showImagePreview, showMarkdownPreview, showQu
 import { TuiAutocompleteProvider, type CommandSuggestion, type SessionReferenceService } from './autocomplete.js'
 import { createPalette, editorTheme, markdownTheme, type Palette } from './theme.js'
 import { TranscriptRenderer, type TranscriptBlock, type TranscriptEntry } from './transcript.js'
+import { Rule } from './rule.js'
 import { diffLines } from './diff.js'
 
 /** Terminal application lifecycle. */
@@ -271,6 +272,7 @@ export async function startTerminalApp(
     ? new TuiAltScreen(terminal, false, undefined, { mouse: true })
     : new TuiMainScreen(terminal, false)
   const header = new Text('', 1, 0)
+  const headerRule = new Rule(text => palette.dim(text), 1)
   const status = new Text('', 1, 0)
   const editor = new Editor(tui, editorTheme(palette), { paddingX: 1 })
   const markdown = markdownTheme(palette)
@@ -288,6 +290,7 @@ export async function startTerminalApp(
     ])
     tui.setLayoutRoot(new VStack([
       { component: header, basis: 'auto' },
+      { component: headerRule, basis: 'auto' },
       {
         component: new ScrollView(renderer.container, { follow: 'end', primary: true, overscroll: 'chain' }),
         basis: 0,
@@ -298,6 +301,7 @@ export async function startTerminalApp(
     ]))
   } else {
     tui.addChild(header)
+    tui.addChild(headerRule)
     tui.addChild(renderer.container)
     tui.addChild(status)
     tui.addChild(editor)
@@ -392,20 +396,23 @@ export async function startTerminalApp(
   const renderStatus = (): void => {
     if (disposed) return
     const options = active.agent.options
+    const provider = modelSelection.current?.provider ?? options.provider ?? 'deepseek-official'
+    const model = modelSelection.current?.model ?? options.model ?? 'deepseek-flash'
+    header.setText(
+      palette.bold(palette.brand('◆ ' + config.title)) + '  ' + palette.dim(active.id) + '\n'
+      + palette.dim((summaryCwd() ?? config.cwd) + '  ·  ' + provider + '/' + model),
+    )
     const state = active.agent.status === 'running'
-      ? palette.warning('working')
-      : palette.success('idle')
-    header.setText(palette.bold(config.title) + '  ' + palette.dim(active.id))
-    const bits = [
-      state,
-      summaryCwd() ?? config.cwd,
-      (modelSelection.current?.provider ?? options.provider ?? 'deepseek-official') + '/' + (modelSelection.current?.model ?? options.model ?? 'deepseek-flash'),
-      active.id,
-    ]
+      ? palette.warning('● working')
+      : palette.success('● idle')
+    const preset = (host.get('agentPresets') as AgentPresetService | undefined)?.composedPreset(active.agent.ctx)
+    const bits = [state]
+    if (preset !== undefined) bits.push(palette.dim('preset ' + preset))
+    if (pendingAttachments.length > 0) bits.push(palette.dim('attached ' + String(pendingAttachments.length)))
     const hint = active.agent.status === 'running'
       ? 'enter steer · esc cancel · ctrl+c cancel · ctrl+d exit'
       : 'enter send · /help · ctrl+d exit'
-    status.setText(bits.join(palette.dim(' · ')) + '  ' + palette.dim(hint))
+    status.setText(bits.join('  ') + '   ' + palette.dim(hint))
     tui.requestRender()
   }
 

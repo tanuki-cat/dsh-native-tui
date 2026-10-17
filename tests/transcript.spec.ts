@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import { createPalette, markdownTheme } from '../src/ui/theme.js'
-import { contentText, reduceTranscript, type TranscriptEntry } from '../src/ui/transcript.js'
+import { contentText, reduceTranscript, TranscriptRenderer, type TranscriptBlock, type TranscriptEntry } from '../src/ui/transcript.js'
 
 const palette = createPalette('plain')
 const options = {
@@ -77,5 +77,25 @@ describe('reduceTranscript', () => {
     const blocks = reduceTranscript(entries, { ...options, maxEntries: 2 })
     expect(blocks[0]).toMatchObject({ kind: 'notice', tone: 'info' })
     expect(blocks.some(block => block.kind === 'notice' && block.tone === 'error')).toBe(true)
+  })
+})
+
+describe('TranscriptRenderer', () => {
+  it('labels blocks and keeps reasoning with the answer', () => {
+    const renderer = new TranscriptRenderer(options)
+    const blocks: TranscriptBlock[] = [
+      { kind: 'user', text: 'hello' },
+      { kind: 'assistant', text: 'final answer', reasoning: 'inspect the request', live: false },
+      { kind: 'tool', callId: 'call-1', name: 'read', pending: false, isError: false, args: '{"path":"a.ts"}', result: 'export {}' },
+    ]
+    renderer.set([], blocks)
+    const output = renderer.container.render(80).join('\n')
+    expect(output).toContain('▌ You')
+    expect(output).toContain('◆ assistant')
+    expect(output).toContain('thinking')
+    expect(output).toContain('inspect the request')
+    expect(output).toContain('final answer')
+    expect(output).toContain('├ args')
+    expect(output).toContain('├ result')
   })
 })

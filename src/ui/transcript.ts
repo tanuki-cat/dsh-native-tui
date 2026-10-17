@@ -1,4 +1,5 @@
 import { Container, Markdown, Spacer, Text, type MarkdownTheme } from '@earendil-works/pi-tui'
+import { Rule } from './rule.js'
 import type {} from '@deepseek-ai/dsh-commands'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import type { ContentBlock, StreamChunk } from '@deepseek-ai/dsh-llm/types'
@@ -300,54 +301,85 @@ export class TranscriptRenderer {
     this.container.clear()
     for (const [index, block] of blocks.entries()) {
       if (index > 0) this.container.addChild(new Spacer(1))
+      if (index > 0 && block.kind === 'user') {
+        this.container.addChild(new Rule(this.options.palette.dim))
+        this.container.addChild(new Spacer(1))
+      }
       this.container.addChild(this.renderBlock(block))
     }
   }
 
   private renderBlock(block: TranscriptBlock) {
     const palette = this.options.palette
+    const bar = (text: string, style: (line: string) => string = line => palette.dim('│ ' + line)): string =>
+      text.split('\n').map(style).join('\n')
     switch (block.kind) {
       case 'user':
-        return new Text(`${palette.bold(palette.accent('You'))}\n${block.text}`, 0, 0)
+        return new Text(
+          palette.bold(palette.accent('▌ You')) + '\n'
+          + bar(block.text, line => palette.accent('│ ') + line),
+          0,
+          0,
+        )
       case 'assistant': {
-        const children: string[] = []
+        const container = new Container()
+        const label = palette.bold(palette.accent('◆ assistant'))
+          + (block.live === true ? '  ' + palette.warning('streaming') : '')
+        container.addChild(new Text(label, 0, 0))
         if (block.reasoning !== undefined && block.reasoning.trim() !== '') {
-          children.push(palette.dim(`thinking\n${clip(block.reasoning, REASONING_PREVIEW)}`))
+          container.addChild(new Spacer(1))
+          container.addChild(new Text(
+            palette.dim('thinking') + '\n' + bar(clip(block.reasoning, REASONING_PREVIEW), line => palette.dim('│ ' + line)),
+            0,
+            0,
+          ))
         }
         if (block.text.trim() !== '') {
-          return new Markdown(block.text, 0, 0, this.options.markdown)
+          container.addChild(new Spacer(1))
+          container.addChild(new Markdown(block.text, 0, 0, this.options.markdown))
         }
-        return new Text(children.join('\n\n'), 0, 0)
+        return container
       }
       case 'context':
-        return new Text(palette.dim(`context · ${block.label}\n${clip(block.text)}`), 0, 0)
+        return new Text(
+          palette.dim('◇ context · ' + block.label) + '\n'
+          + bar(clip(block.text), line => palette.dim('│ ' + line)),
+          0,
+          0,
+        )
       case 'tool': {
         const status = block.pending ? palette.warning('running') : block.isError === true ? palette.error('error') : palette.success('done')
-        const lines = [`${palette.bold(palette.accent(`⚙ ${block.name}`))} ${status}`]
-        if (block.args.trim() !== '') lines.push(palette.dim(clip(block.args)))
+        const lines = [palette.bold(palette.accent('⚙ ' + block.name)) + '  ' + status]
+        if (block.args.trim() !== '') {
+          lines.push(palette.dim('├ args'))
+          lines.push(bar(clip(block.args), line => palette.dim('│ ' + line)))
+        }
         if (block.result !== undefined && block.result.trim() !== '') {
-          lines.push(block.isError === true ? palette.error(clip(block.result)) : clip(block.result))
+          lines.push(palette.dim('├ result'))
+          lines.push(bar(
+            clip(block.result),
+            block.isError === true ? line => palette.error('│ ' + line) : line => palette.dim('│ ') + line,
+          ))
         }
         if (block.diffs !== undefined) {
+          lines.push(palette.dim('├ diff'))
           for (const diff of block.diffs) {
-            lines.push(palette.bold(palette.accent('diff ' + diff.path)))
+            lines.push(palette.bold(palette.accent('│ diff ' + diff.path)))
             for (const row of diffLines(diff.oldText, diff.newText, 60)) {
               lines.push(row.kind === 'add'
-                ? palette.success('+ ' + row.text)
-                : row.kind === 'remove' ? palette.error('- ' + row.text) : palette.dim('  ' + row.text))
+                ? palette.success('│ + ' + row.text)
+                : row.kind === 'remove' ? palette.error('│ - ' + row.text) : palette.dim('│   ' + row.text))
             }
           }
         }
         return new Text(lines.join('\n'), 0, 0)
       }
-      case 'notice':
-        return new Text(
-          block.tone === 'error'
-            ? palette.error(block.text)
-            : block.tone === 'warning' ? palette.warning(block.text) : palette.dim(block.text),
-          0,
-          0,
-        )
+      case 'notice': {
+        const text = block.text.replaceAll('\n', '\n  ')
+        if (block.tone === 'error') return new Text(palette.error('✕ ' + text), 0, 0)
+        if (block.tone === 'warning') return new Text(palette.warning('! ' + text), 0, 0)
+        return new Text(palette.dim('i ') + text, 0, 0)
+      }
     }
   }
 }

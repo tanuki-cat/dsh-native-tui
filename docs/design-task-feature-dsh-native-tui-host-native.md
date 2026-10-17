@@ -67,7 +67,8 @@
 - @@<query> 通过 sessionReferenceResolver.remoteExportCandidates 插入 canonical session mention；Host pre-step 自动准备引用快照。
 - 已验证 @@ 在真实 profile 中列出 13 个其他 Session（label + cwd）；候选值由 remoteExportCandidates 生成 canonical mention。
 - /preview <image> 使用 pi-tui Image 渲染 PNG/JPEG/GIF/WebP；不支持图形协议的终端显示文本占位；已验证 RGB PNG 2x2 的 overlay 标题、占位图与 Enter/Esc 关闭。
-- fullscreen: true 使用 TuiAltScreen + VStack/ScrollView：固定 header/status/editor，transcript 为 primary follow-end 滚动区，启用鼠标滚轮与选择复制。
+- fullscreen: true 使用 TuiAltScreen + VStack/ScrollView：固定两行 header、分隔线、status/editor，transcript 为 primary follow-end 滚动区，启用鼠标滚轮与选择复制。
+- Transcript 层次：用户消息左侧 accent 色条；assistant 标签与 streaming 状态；reasoning 独立缩进；context 用 ◇ 标签；tool 用 ├ args/result 与 diff 分支；notice 用 i/!/✕ 图标；用户 turn 之间插入 dim Rule。
 - 已验证 fullscreen: true 启动、输入 /help 展示完整命令列表、Ctrl+D 正常退出；默认 fullscreen: false 仍走 TuiMainScreen。
 - 图片读取上线 8 MiB，使用文件头嗅探，不依赖扩展名。
 - 字段选择器解析 schemastery uid/refs，拒绝 secret 字段，输入值按 JSON 解析后写回。

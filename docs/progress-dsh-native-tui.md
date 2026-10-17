@@ -62,7 +62,7 @@ pnpm check
   tsc -p tsconfig.build.json
 
 Test Files  17 passed (17)
-Tests       56 passed (56)
+Tests       59 passed (59)
 ```
 
 ### 安装与启动
@@ -106,7 +106,7 @@ src/index.ts                 Cordis 入口、TTY 守卫
 src/config.ts                schemastery 配置、fullscreen
 src/runtime/                 agent/session、attachments、bundle、html、images、open、providers、settings、tool-log
 src/ui/                      app、autocomplete、dialogs、transcript、diff、theme
-tests/                       17 个测试文件，56 个测试
+tests/                       18 个测试文件，59 个测试
 scripts/fake-tty-*.mjs       fake-TTY 验证脚本
 README.md
 docs/design-task-feature-dsh-native-tui-host-native.md
@@ -129,6 +129,7 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - 旧版本可能已把误填的 key 写入 `apiKeyEnv`：需 `/provider remove <route>` 并轮换 key。
 - 第三方模型引导已用 dummy key 验证配置、写入和 `/model` 选择，未发起真实推理请求。
 - 使用本地 HTTP `/v1/models` 验证自动发现：列出 auto-model/auto-small，选中后写入 64000/8192 容量并直接选中模型。
+- fake TTY 验证新 chrome：两行 Header、分隔线、`● idle  preset ptc` 状态条、`i Local commands` notice。
 - 已验证 Store API key 模式：粘贴 key → credential store（0600）→ 自动发现 stored-model → 保存并选中，`/provider list` 显示 `(stored)`。
 - 已验证裸 `quit` 退出 TUI，退出码 0。
 - 已验证把 `sk-proj-...` 填入 env 字段会被拒绝且不写 profile；缺 env 时同样不保存。
@@ -154,4 +155,4 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 | 14–20 | Plugin remove/market、剪贴板图片、图片预览、alt-screen、`@@session` |
 | 21–25 | 附件预览、ZIP/HTML 导出、Deliverables reveal、工具结果 pager、Markdown |
 | 26–30 | 独立 Diff、附件管理器、Settings 数组、Deliverables panel、收尾验证 |
-| 后续 | 第三方模型 `/provider add|list|remove` 引导与自动模型发现，17 个测试文件 / 56 个测试 |
+| 后续 | 第三方模型 `/provider add|list|remove` 引导与自动模型发现，18 个测试文件 / 59 个测试 |
