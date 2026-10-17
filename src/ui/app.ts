@@ -92,6 +92,7 @@ const LOCAL_COMMANDS: readonly CommandSuggestion[] = [
   { name: 'attach', description: 'stage or preview a file, image, or clipboard image', input: { hint: '<path>|paste|preview <i>|list|clear' } },
   { name: 'attachments', description: 'open the staged attachment manager' },
   { name: 'exit', description: 'exit the terminal front door' },
+  { name: 'quit', description: 'exit the terminal front door' },
 ]
 
 function errorMessage(error: unknown): string {
@@ -101,6 +102,17 @@ function errorMessage(error: unknown): string {
 interface LlmCatalog {
   listProviders(): readonly { readonly id: string; readonly name?: string }[]
   listModels(provider: string): Promise<readonly { readonly id: string; readonly name: string; readonly description?: string }[]>
+  discoverModels(settingsNs: string, request: {
+    readonly provider?: string
+    readonly baseURL?: string
+    readonly api?: string
+    readonly apiKey?: string
+  }, signal?: AbortSignal): Promise<readonly {
+    readonly id: string
+    readonly name?: string
+    readonly contextWindow?: number
+    readonly maxTokens?: number
+  }[]>
   resolveModelInfo(provider: string, model: string): Promise<unknown>
 }
 
@@ -604,6 +616,7 @@ export async function startTerminalApp(
         pushNotice('info', [
           'Local commands:',
           '/help · /new · /sessions · /resume [id] · /status · /clear',
+          '/exit · /quit (or bare exit/quit)',
           '/cancel · /model [provider/model] · /provider [add|list|remove <route>]',
           '/permissions [preset]',
           '/jobs [kill <id>] · /agents · /preset [id]',
@@ -2041,6 +2054,7 @@ export async function startTerminalApp(
                     }
                     const envDefault = route.toUpperCase().replace(/[^A-Z0-9]+/gu, '_') + '_API_KEY';
                     let provider: Record<string, unknown>;
+                    let chosenModel: string | undefined;
                     if (kind === 'catalog') {
                         const env = await showTextInput(tui, palette, 'API key env var NAME (not the key)', envDefault, 'UPPERCASE name like MY_GATEWAY_KEY; export the secret before launch · Esc cancels', interactionAbort.signal, envDefault);
                         if (env === undefined)
@@ -2058,25 +2072,81 @@ export async function startTerminalApp(
                             return;
                         if (!requireEnv(env))
                             return;
-                        const modelId = await showTextInput(tui, palette, 'Model id', 'gpt-4o-mini', 'Exact model id sent on the wire · Esc cancels', interactionAbort.signal);
-                        if (modelId === undefined)
+                        const readManualModel = async (): Promise<{ id: string; name?: string; contextWindow: number; maxTokens: number } | undefined> => {
+                            const modelId = await showTextInput(tui, palette, 'Model id', 'gpt-4o-mini', 'Exact model id sent on the wire · Esc cancels', interactionAbort.signal);
+                            if (modelId === undefined)
+                                return undefined;
+                            const contextRaw = await showTextInput(tui, palette, 'Context window', '128000', 'Positive integer; Enter keeps the default · Esc cancels', interactionAbort.signal, '128000');
+                            if (contextRaw === undefined)
+                                return undefined;
+                            const maxRaw = await showTextInput(tui, palette, 'Max output tokens', '16384', 'Positive integer; Enter keeps the default · Esc cancels', interactionAbort.signal, '16384');
+                            if (maxRaw === undefined)
+                                return undefined;
+                            return { id: modelId, contextWindow: Number(contextRaw), maxTokens: Number(maxRaw) };
+                        };
+                        const apiKey = process.env[env];
+                        if (apiKey === undefined)
                             return;
-                        const contextRaw = await showTextInput(tui, palette, 'Context window', '128000', 'Positive integer; Enter keeps the default · Esc cancels', interactionAbort.signal, '128000');
-                        if (contextRaw === undefined)
+                        pushNotice('info', 'Discovering models from ' + baseURL + '…');
+                        let discovered: readonly { readonly id: string; readonly name?: string; readonly contextWindow?: number; readonly maxTokens?: number }[] = [];
+                        const discoveryAbort = new AbortController();
+                        const timeout = setTimeout(() => discoveryAbort.abort(), 5000);
+                        try {
+                            discovered = await llm.discoverModels('llm-pi-ai', {
+                                baseURL,
+                                api: kind,
+                                apiKey,
+                            }, AbortSignal.any([interactionAbort.signal, discoveryAbort.signal]));
+                        }
+                        catch (error) {
+                            pushNotice('warning', 'Automatic model discovery failed: ' + errorMessage(error) + ' — falling back to manual model id.');
+                        }
+                        finally {
+                            clearTimeout(timeout);
+                        }
+                        let model: { id: string; name?: string; contextWindow: number; maxTokens: number } | undefined;
+                        if (discovered.length > 0) {
+                            const choice = await showChoice(tui, palette, 'Select model from ' + route, [
+                                ...discovered.map((candidate, index) => ({
+                                    value: String(index),
+                                    label: candidate.id,
+                                    description: candidate.name ?? 'discovered by the endpoint',
+                                })),
+                                { value: '__manual__', label: 'Enter model id manually', description: 'Use a model the endpoint did not list' },
+                            ], 'Enter selects · Esc cancels', interactionAbort.signal);
+                            if (choice === undefined)
+                                return;
+                            if (choice === '__manual__') {
+                                model = await readManualModel();
+                            }
+                            else {
+                                const found = discovered[Number(choice)];
+                                if (found !== undefined) {
+                                    model = {
+                                        id: found.id,
+                                        ...(found.name === undefined ? {} : { name: found.name }),
+                                        contextWindow: typeof found.contextWindow === 'number' && found.contextWindow > 0 ? found.contextWindow : 128000,
+                                        maxTokens: typeof found.maxTokens === 'number' && found.maxTokens > 0 ? found.maxTokens : 16384,
+                                    };
+                                }
+                            }
+                        }
+                        else {
+                            pushNotice('info', 'No models discovered from the endpoint; entering model id manually.');
+                            model = await readManualModel();
+                        }
+                        if (model === undefined)
                             return;
-                        const maxRaw = await showTextInput(tui, palette, 'Max output tokens', '16384', 'Positive integer; Enter keeps the default · Esc cancels', interactionAbort.signal, '16384');
-                        if (maxRaw === undefined)
-                            return;
-                        const contextWindow = Number(contextRaw);
-                        const maxTokens = Number(maxRaw);
+                        chosenModel = model.id;
                         provider = buildCustomProvider({
                             route,
                             api: kind as ProviderProtocol,
                             baseURL,
                             apiKeyEnv: env,
-                            modelId,
-                            contextWindow,
-                            maxTokens,
+                            modelId: model.id,
+                            ...(model.name === undefined ? {} : { modelName: model.name }),
+                            contextWindow: model.contextWindow,
+                            maxTokens: model.maxTokens,
                         });
                     }
                     if (Object.hasOwn(providerRecord, route)) {
@@ -2089,6 +2159,10 @@ export async function startTerminalApp(
                     }
                     await settings.mutate('llm-pi-ai', [{ op: 'set', path: ['providers', route], value: provider }], descriptor.revision);
                     pushNotice('info', 'Saved provider route: ' + route + ' · key is read from ' + (provider as { apiKeyEnv?: string }).apiKeyEnv);
+                    if (chosenModel !== undefined) {
+                        await selectModel(llm, route + '/' + chosenModel);
+                        return;
+                    }
                     let models: readonly { readonly id: string; readonly name: string; readonly description?: string }[] = [];
                     try {
                         models = await llm.listModels(route);
@@ -2138,6 +2212,10 @@ export async function startTerminalApp(
         if (trimmed === '' && pendingAttachments.length === 0)
             return;
         editor.setText('');
+        if (trimmed === 'exit' || trimmed === 'quit') {
+            requestExit(0);
+            return;
+        }
         if (trimmed.startsWith('/')) {
             void runCommand(trimmed);
             return;

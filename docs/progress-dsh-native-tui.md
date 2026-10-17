@@ -125,9 +125,11 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - 会话级附件管理器未实现；当前 `/attachments` 管理 staged 附件。
 - 真实审批/工具/模型流式回合缺少凭据验收。
 - Deliverables panel 的真实 present 事件路径未验收。
-- `/provider add` 只支持 UPPERCASE `apiKeyEnv` 引用，不在 TUI 输入/存储 API key，并在 env 缺失时拒绝保存；没有模型发现 UI。
+- `/provider add` 只支持 UPPERCASE `apiKeyEnv` 引用，不在 TUI 输入/存储 API key，并在 env 缺失时拒绝保存；自动发现依赖 endpoint 的 `/models` 列表，失败时回退手动输入。
 - 旧版本可能已把误填的 key 写入 `apiKeyEnv`：需 `/provider remove <route>` 并轮换 key。
 - 第三方模型引导已用 dummy key 验证配置、写入和 `/model` 选择，未发起真实推理请求。
+- 使用本地 HTTP `/v1/models` 验证自动发现：列出 auto-model/auto-small，选中后写入 64000/8192 容量并直接选中模型。
+- 已验证裸 `quit` 退出 TUI，退出码 0。
 - 已验证把 `sk-proj-...` 填入 env 字段会被拒绝且不写 profile；缺 env 时同样不保存。
 - 默认 Agent Preset 已设为 ptc：全新 profile 启动后 `/status` 显示 `Preset: ptc`；既有 Session 仍按其记录恢复。
 - 已验证空白 Session 的 `/preset minimal` 直接切换当前 Session，`/status` 显示 minimal。
@@ -151,4 +153,4 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 | 14–20 | Plugin remove/market、剪贴板图片、图片预览、alt-screen、`@@session` |
 | 21–25 | 附件预览、ZIP/HTML 导出、Deliverables reveal、工具结果 pager、Markdown |
 | 26–30 | 独立 Diff、附件管理器、Settings 数组、Deliverables panel、收尾验证 |
-| 后续 | 第三方模型 `/provider add|list|remove` 引导，17 个测试文件 / 55 个测试 |
+| 后续 | 第三方模型 `/provider add|list|remove` 引导与自动模型发现，17 个测试文件 / 56 个测试 |

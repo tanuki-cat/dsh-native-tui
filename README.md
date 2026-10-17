@@ -72,7 +72,7 @@ DSH Host 包由当前 dsh 安装提供；本插件只把 pi-tui 与 schemastery 
 | /diff [index] | 分页查看最近/指定工具调用的 write/edit diff |
 | /attach <path>|paste|preview <i>|list|clear | 暂存或预览文件/图片/剪贴板图片，随下一条 prompt 发送 |
 | /attachments | 暂存附件管理器：预览或移除 |
-| /exit, /quit | 退出并恢复终端 |
+| /exit, /quit | 退出并恢复终端；也可直接输入裸 `exit` / `quit` |
 
 Enter 发送；运行中 Enter 作为 steer；Ctrl+C 取消/退出；Ctrl+D 退出。
 
@@ -99,8 +99,8 @@ Enter 发送；运行中 Enter 作为 steer；Ctrl+C 取消/退出；Ctrl+D 退�
 `/provider add` 提供引导流程：
 
 1. 选择 Custom OpenAI-compatible / OpenAI Responses / Anthropic-compatible gateway，或 Built-in pi-ai catalog route。
-2. 输入 route、baseURL、`apiKeyEnv`（**环境变量名，不是 key**）、model id；context window 与 max tokens 有默认值。
-3. 进程内找不到该环境变量时拒绝保存；保存后刷新 `/model` 并选择模型。
+2. 输入 route、baseURL、`apiKeyEnv`（**环境变量名，不是 key**）；custom gateway 会调用 Host `discoverModels` 请求 `GET {baseURL}/models` 并列出模型（5 秒超时）。
+3. 从自动发现的模型中选择，或回退到手动输入 model id/context window/max tokens；进程内找不到该环境变量时拒绝保存。
 
 `apiKeyEnv` 只保存环境变量名，密钥本身不写入配置或终端历史。启动前导出：
 
