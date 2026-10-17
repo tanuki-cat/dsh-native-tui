@@ -89,8 +89,9 @@
 - 本地命令：/help、/new、/sessions、/resume、/status、/clear、/cancel、/model、/permissions、/jobs、/agents、/exit、/quit。
 - 宿主命令：通过 ctx.commands.execute 执行；Base 实际注册了 /compact、/feedback、/goal、/permission、/plan。
 - /model：列出 LLM catalog；目录为空时明确说明；支持直接输入 provider/model；通过 installModelSelection 接入下一 step 路由。
-- /provider add：引导配置 custom OpenAI/Responses/Anthropic gateway 或 built-in pi-ai catalog route；写入 `llm-pi-ai` settings，保存后用 `listModels` 刷新并选择模型；/provider list|remove 管理 route。apiKeyEnv 只保存变量名。
+- /provider add：引导配置 custom OpenAI/Responses/Anthropic gateway 或 built-in pi-ai catalog route；只接受 UPPERCASE `apiKeyEnv` 名称，env 未设置或形似 key 时拒绝保存；写入 `llm-pi-ai` settings，保存后用 `listModels` 刷新并选择模型；/provider list|remove 管理 route。apiKeyEnv 只保存变量名。
 - 已验证 dummy `TEST_ROUTE_API_KEY` 下 `/provider add` → `/model` 选中 `test-route/test-model`；`/provider remove` 写回 `providers: {}`。
+- 已验证把 `sk-proj-...` 填入 env 字段被拒绝，profile 未写入；`/provider list` 对非法 env 引用只显示脱敏提示。
 - /permissions：列出权限预设并写回当前 Session；支持 /permissions <preset>。
 - /jobs：列出当前 Session 的后台任务，支持 /jobs kill <id>。
 - /agents：列出当前 Session 的直接子代理。

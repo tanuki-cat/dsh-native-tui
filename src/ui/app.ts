@@ -30,6 +30,7 @@ import { collectToolCalls } from '../runtime/tool-log.js'
 import {
   buildCatalogProvider,
   buildCustomProvider,
+  isValidEnvName,
   isValidProviderRoute,
   type ProviderProtocol,
 } from '../runtime/providers.js'
@@ -1949,6 +1950,18 @@ export async function startTerminalApp(
                     return;
                 }
                 const currentProviders = descriptor.value.providers;
+                const requireEnv = (env: string): boolean => {
+                    if (!isValidEnvName(env)) {
+                        pushNotice('warning', 'The credential field must be an UPPERCASE environment variable name, not the API key. Provider was not saved.');
+                        return false;
+                    }
+                    const value = process.env[env];
+                    if (value === undefined || value.trim() === '') {
+                        pushNotice('warning', 'Environment variable ' + env + ' is not set in this dsh process. Export it before launching dsh, restart the TUI, then run /provider add again. Provider was not saved.');
+                        return false;
+                    }
+                    return true;
+                };
                 const providerRecord: Record<string, unknown> = currentProviders !== null && typeof currentProviders === 'object' && !Array.isArray(currentProviders)
                     ? currentProviders as Record<string, unknown>
                     : {};
@@ -1970,7 +1983,11 @@ export async function startTerminalApp(
                         const env = raw !== null && typeof raw === 'object' && typeof (raw as { readonly apiKeyEnv?: unknown }).apiKeyEnv === 'string'
                             ? (raw as { readonly apiKeyEnv: string }).apiKeyEnv
                             : undefined;
-                        const envState = env === undefined ? '' : (process.env[env] === undefined ? '  ' + env + ' (not set)' : '  ' + env);
+                        const envState = env === undefined
+                            ? ''
+                            : !isValidEnvName(env)
+                                ? '  (invalid env name; remove this route and rotate the key)'
+                                : process.env[env] === undefined ? '  ' + env + ' (not set)' : '  ' + env;
                         rows.push(route + '  ' + String(count) + ' model(s)' + envState);
                     }
                     pushNotice('info', 'Configured third-party providers:' + NL + rows.join(NL)
@@ -2025,8 +2042,10 @@ export async function startTerminalApp(
                     const envDefault = route.toUpperCase().replace(/[^A-Z0-9]+/gu, '_') + '_API_KEY';
                     let provider: Record<string, unknown>;
                     if (kind === 'catalog') {
-                        const env = await showTextInput(tui, palette, 'API key environment variable', envDefault, 'Name of an exported env var; the key itself is never stored · Esc cancels', interactionAbort.signal, envDefault);
+                        const env = await showTextInput(tui, palette, 'API key env var NAME (not the key)', envDefault, 'UPPERCASE name like MY_GATEWAY_KEY; export the secret before launch · Esc cancels', interactionAbort.signal, envDefault);
                         if (env === undefined)
+                            return;
+                        if (!requireEnv(env))
                             return;
                         provider = buildCatalogProvider(env);
                     }
@@ -2034,8 +2053,10 @@ export async function startTerminalApp(
                         const baseURL = await showTextInput(tui, palette, 'Base URL', 'https://api.example.com/v1', 'OpenAI-compatible API root · Esc cancels', interactionAbort.signal);
                         if (baseURL === undefined)
                             return;
-                        const env = await showTextInput(tui, palette, 'API key environment variable', envDefault, 'Name of an exported env var; the key itself is never stored · Esc cancels', interactionAbort.signal, envDefault);
+                        const env = await showTextInput(tui, palette, 'API key env var NAME (not the key)', envDefault, 'UPPERCASE name like MY_GATEWAY_KEY; export the secret before launch · Esc cancels', interactionAbort.signal, envDefault);
                         if (env === undefined)
+                            return;
+                        if (!requireEnv(env))
                             return;
                         const modelId = await showTextInput(tui, palette, 'Model id', 'gpt-4o-mini', 'Exact model id sent on the wire · Esc cancels', interactionAbort.signal);
                         if (modelId === undefined)

@@ -125,8 +125,10 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - 会话级附件管理器未实现；当前 `/attachments` 管理 staged 附件。
 - 真实审批/工具/模型流式回合缺少凭据验收。
 - Deliverables panel 的真实 present 事件路径未验收。
-- `/provider add` 只支持 `apiKeyEnv` 引用，不在 TUI 输入/存储 API key；没有模型发现 UI。
+- `/provider add` 只支持 UPPERCASE `apiKeyEnv` 引用，不在 TUI 输入/存储 API key，并在 env 缺失时拒绝保存；没有模型发现 UI。
+- 旧版本可能已把误填的 key 写入 `apiKeyEnv`：需 `/provider remove <route>` 并轮换 key。
 - 第三方模型引导已用 dummy key 验证配置、写入和 `/model` 选择，未发起真实推理请求。
+- 已验证把 `sk-proj-...` 填入 env 字段会被拒绝且不写 profile；缺 env 时同样不保存。
 - 默认 Agent Preset 已设为 ptc：全新 profile 启动后 `/status` 显示 `Preset: ptc`；既有 Session 仍按其记录恢复。
 - 已验证空白 Session 的 `/preset minimal` 直接切换当前 Session，`/status` 显示 minimal。
 - 已验证首个 turn 失败后 `/preset ptc` 返回 `This session has already started`，并提示 next /new 使用 ptc。

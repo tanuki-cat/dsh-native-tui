@@ -23,7 +23,9 @@ export function isValidProviderRoute(route: string): boolean {
 
 /** Validate an environment-variable credential reference. */
 export function isValidEnvName(name: string): boolean {
-  return /^[A-Za-z_][A-Za-z0-9_]*$/u.test(name)
+  // Uppercase-only is deliberate: it keeps API keys (mixed case, punctuation,
+  // or token prefixes) from being stored as an environment-variable name.
+  return name.length <= 64 && /^[A-Z_][A-Z0-9_]*$/u.test(name)
 }
 
 /**
@@ -47,7 +49,7 @@ export function normalizeBaseURL(value: string): string {
 export function buildCustomProvider(input: CustomProviderInput): Record<string, unknown> {
   if (!isValidProviderRoute(input.route)) throw new Error('route must be lowercase letters, digits, and hyphens, starting with a letter')
   if (!PROVIDER_PROTOCOLS.includes(input.api)) throw new Error('unsupported protocol')
-  if (!isValidEnvName(input.apiKeyEnv)) throw new Error('apiKeyEnv must be an environment variable name')
+  if (!isValidEnvName(input.apiKeyEnv)) throw new Error('apiKeyEnv must be an uppercase environment variable name, not the API key')
   if (input.modelId.trim() === '') throw new Error('model id must not be empty')
   if (!Number.isSafeInteger(input.contextWindow) || input.contextWindow <= 0) throw new Error('contextWindow must be a positive integer')
   if (!Number.isSafeInteger(input.maxTokens) || input.maxTokens <= 0) throw new Error('maxTokens must be a positive integer')
@@ -67,7 +69,7 @@ export function buildCustomProvider(input: CustomProviderInput): Record<string, 
 
 /** Build a catalog-route profile that only names a credential. */
 export function buildCatalogProvider(apiKeyEnv: string): Record<string, unknown> {
-  if (!isValidEnvName(apiKeyEnv)) throw new Error('apiKeyEnv must be an environment variable name')
+  if (!isValidEnvName(apiKeyEnv)) throw new Error('apiKeyEnv must be an uppercase environment variable name, not the API key')
   return { apiKeyEnv }
 }
 

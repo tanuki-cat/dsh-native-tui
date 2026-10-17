@@ -14,7 +14,9 @@ describe('provider config helpers', () => {
     expect(isValidProviderRoute('My_Gateway')).toBe(false)
     expect(isValidProviderRoute('-bad')).toBe(false)
     expect(isValidEnvName('MY_GATEWAY_KEY')).toBe(true)
+    expect(isValidEnvName('my_lower_key')).toBe(false)
     expect(isValidEnvName('bad-name')).toBe(false)
+    expect(isValidEnvName('sk-proj-abc123')).toBe(false)
   })
 
   it('normalizes HTTP endpoints', () => {
