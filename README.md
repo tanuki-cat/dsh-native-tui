@@ -2,7 +2,7 @@
 
 DeepSeek Harness 的 host-native 终端前端，基于 pi-tui。
 
-> 状态：实施完成（30 轮 + 第三方模型引导 + 官方 MCP/computer-use 集成，111 个单元测试通过）；已知差距见进度记录。
+> 状态：实施完成（30 轮 + 第三方模型引导 + 官方 MCP/computer-use 集成，117 个单元测试通过）；已知差距见进度记录。
 > 目标：在 TUI 中提供 Web 模式的核心能力，而不是复制浏览器图形界面。
 > 架构说明与差距清单：[Host-native 方案](docs/design-task-feature-dsh-native-tui-host-native.md)。
 > 实施进度、验证证据与未验收项：[实施进度](docs/progress-dsh-native-tui.md)。
@@ -206,7 +206,7 @@ dsh --profile tui
 ## 开发与验证
 
 ~~~sh
-pnpm check          # typecheck + 111 unit tests + build
+pnpm check          # typecheck + 117 unit tests + build
 pnpm test
 pnpm build
 ~~~

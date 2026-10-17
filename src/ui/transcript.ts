@@ -417,11 +417,42 @@ export function reduceTranscript(
   ]
 }
 
+/**
+ * Whether a rebuilt block renders exactly what its predecessor rendered.
+ * Blocks are pure data, so a field-wise comparison decides it without
+ * touching the component tree. Arrays compare by length and element identity,
+ * which fails safe: a false negative only rebuilds one component.
+ * @param left - block from the previous rebuild.
+ * @param right - block from the current rebuild.
+ * @returns true when the previous component can be reused.
+ */
+export function sameTranscriptBlock(left: TranscriptBlock, right: TranscriptBlock): boolean {
+  if (left === right) return true
+  if (left.kind !== right.kind) return false
+  const previous = right as unknown as Record<string, unknown>
+  const keys = Object.keys(left)
+  if (keys.length !== Object.keys(previous).length) return false
+  for (const key of keys) {
+    const before = (left as unknown as Record<string, unknown>)[key]
+    const after = previous[key]
+    if (before === after) continue
+    if (Array.isArray(before) && Array.isArray(after)) {
+      if (before.length !== after.length) return false
+      for (let index = 0; index < before.length; index += 1) if (before[index] !== after[index]) return false
+      continue
+    }
+    return false
+  }
+  return true
+}
+
 /** Pi-tui renderer for one reduced transcript. */
 export class TranscriptRenderer {
   readonly container = new Container()
   private entries: readonly TranscriptEntry[] = []
   private extra: readonly TranscriptBlock[] = []
+  /** Block and component of the previous rebuild, index-aligned with the blocks. */
+  private rows: readonly { readonly block: TranscriptBlock; readonly component: Component }[] = []
   private options: TranscriptOptions
 
   /**
@@ -466,6 +497,7 @@ export class TranscriptRenderer {
   clear(): void {
     this.entries = []
     this.extra = []
+    this.rows = []
     this.container.clear()
   }
 
@@ -482,6 +514,7 @@ export class TranscriptRenderer {
       blocks.push(block)
     }
     blocks.push(...pending, ...trailing)
+    const rows: { block: TranscriptBlock; component: Component }[] = []
     this.container.clear()
     for (const [index, block] of blocks.entries()) {
       if (index > 0) this.container.addChild(new Spacer(1))
@@ -489,8 +522,16 @@ export class TranscriptRenderer {
         this.container.addChild(new Rule(this.options.palette.dim))
         this.container.addChild(new Spacer(1))
       }
-      this.container.addChild(this.renderBlock(block))
+      const previous = this.rows[index]
+      // Streaming rewrites only the trailing live block; reusing the rest keeps
+      // their parsed Markdown cached instead of re-parsing the whole transcript.
+      const component = previous !== undefined && sameTranscriptBlock(previous.block, block)
+        ? previous.component
+        : this.renderBlock(block)
+      rows.push({ block, component })
+      this.container.addChild(component)
     }
+    this.rows = rows
   }
 
   private renderBlock(block: TranscriptBlock) {

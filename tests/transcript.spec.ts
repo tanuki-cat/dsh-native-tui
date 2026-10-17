@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import { createPalette, markdownTheme } from '../src/ui/theme.js'
-import { contentText, formatToolArguments, reduceTranscript, TranscriptRenderer, type TranscriptBlock, type TranscriptEntry } from '../src/ui/transcript.js'
+import { contentText, formatToolArguments, reduceTranscript, sameTranscriptBlock, TranscriptRenderer, type TranscriptBlock, type TranscriptEntry } from '../src/ui/transcript.js'
 
 const palette = createPalette('plain')
 const options = {
@@ -227,3 +227,68 @@ describe('TranscriptRenderer notice ordering', () => {
     expect(output.indexOf('after turn')).toBeGreaterThan(output.indexOf('answer'))
   })
 })
+
+describe('sameTranscriptBlock', () => {
+  it('accepts an unchanged block', () => {
+    expect(sameTranscriptBlock({ kind: 'user', text: 'hello' }, { kind: 'user', text: 'hello' })).toBe(true)
+  })
+
+  it('rejects a changed kind, text, or key set', () => {
+    expect(sameTranscriptBlock({ kind: 'user', text: 'a' }, { kind: 'assistant', text: 'a', live: false })).toBe(false)
+    expect(sameTranscriptBlock({ kind: 'user', text: 'a' }, { kind: 'user', text: 'b' })).toBe(false)
+    expect(sameTranscriptBlock(
+      { kind: 'assistant', text: 'a', live: true },
+      { kind: 'assistant', text: 'a', live: true, reasoning: 'r' },
+    )).toBe(false)
+  })
+
+  it('compares arrays by length and element identity', () => {
+    const diff = { path: 'file.txt', oldText: 'old', newText: 'new' }
+    const base: TranscriptBlock = { kind: 'tool', callId: 'c1', name: 'edit', args: '{}', pending: false, diffs: [diff] }
+    expect(sameTranscriptBlock(base, { ...base, diffs: [diff] })).toBe(true)
+    expect(sameTranscriptBlock(base, { ...base, diffs: [] })).toBe(false)
+    expect(sameTranscriptBlock(base, { ...base, diffs: [{ ...diff, newText: 'changed' }] })).toBe(false)
+  })
+})
+
+describe('TranscriptRenderer component reuse', () => {
+  const user = (seq: number, text: string): TranscriptEntry =>
+    durable('user/message', { content: [{ type: 'text', text }], source: { kind: 'user' } }, seq)
+  const assistant = (seq: number, text: string): TranscriptEntry =>
+    durable('assistant/message', { turn: 1, step: 1, message: { content: [{ type: 'text', text }] } }, seq)
+
+  it('reuses unchanged block components when nothing changed', () => {
+    const renderer = new TranscriptRenderer(options)
+    const entries = [user(1, 'hello'), assistant(2, 'world')]
+    renderer.set(entries, [])
+    const before = [...renderer.container.children]
+    renderer.set(entries, [])
+    const after = [...renderer.container.children]
+    expect(after).toHaveLength(before.length)
+    // Index 0 is the user block and the last child the assistant block; the
+    // separating Spacer/Rule rows are cheap and intentionally rebuilt each time.
+    expect(after[0]).toBe(before[0])
+    expect(after[after.length - 1]).toBe(before[before.length - 1])
+  })
+
+  it('rebuilds only the block whose text changed', () => {
+    const renderer = new TranscriptRenderer(options)
+    renderer.set([user(1, 'hello'), assistant(2, 'first')], [])
+    const before = [...renderer.container.children]
+    renderer.set([user(1, 'hello'), assistant(2, 'second')], [])
+    const after = [...renderer.container.children]
+    expect(after[0]).toBe(before[0])
+    expect(after[after.length - 1]).not.toBe(before[before.length - 1])
+  })
+
+  it('rebuilds after clear() resets the reuse window', () => {
+    const renderer = new TranscriptRenderer(options)
+    const entries = [user(1, 'hello')]
+    renderer.set(entries, [])
+    const before = renderer.container.children[0]
+    renderer.clear()
+    renderer.set(entries, [])
+    expect(renderer.container.children[0]).not.toBe(before)
+  })
+})
+

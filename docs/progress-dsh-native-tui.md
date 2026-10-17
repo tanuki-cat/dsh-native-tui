@@ -194,7 +194,7 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 
 ## 9. 剩余事项（2026-10-17 审查记录）
 
-当前代码与 111 个测试通过（25 个测试文件）；以下按优先级保留，不再混入已完成项。
+当前代码与 117 个测试通过（25 个测试文件）；以下按优先级保留，不再混入已完成项。
 
 ### P1
 
@@ -230,4 +230,5 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - [x] 修复 MCP 状态探测导致的误判：mcp-manager 原先直接读 `ctx.tools`，但它未 inject `tools`，而 Cordis 代理对未注入服务读属性会抛 `cannot get property "tools" without inject`，使连接成功的 server 被判为 error 并卸载。改为 `ctx.get('tools')` 并对探测失败完全容错；单测补了对应回归防护（mock 复现该抛错行为）。
 - [x] 修复 `/mcp add`（stdio）参数输入：arguments/environment 原先预填 `[]`/`{}`，用户输入会被插到前面并保存成 `path[]`，导致 `Cannot find module ...path[]`。改为不预填、由 placeholder 提示，并让 `showTextInput` 支持空提交（新增 `allowEmpty`），回车即表示无参数/无额外环境变量。
 - [x] MCP 真实服务器实测：官方 mcp-client 直连 profile 中的 `idea`（streamable-http，`127.0.0.1:64342/stream`），注册 67 个工具，`get_all_open_file_paths`、`get_project_modules` 两次只读 `tools/call` 均返回真实数据。IDEA 侧要求显式 `projectPath`，未传时以业务错误返回当前打开项目列表。
+- [x] 流式渲染组件复用：`TranscriptRenderer.rebuild` 原先每帧重建全部 block 组件，于是每个 Markdown 每帧重新解析。改为按 block 内容判定并复用未变化的组件（`sameTranscriptBlock`），流式时每帧只重建尾部一个 block，分隔用 Spacer/Rule 仍按帧新建（成本可忽略）。基准 `scripts/bench-transcript.ts`：600 轮会话每帧 76.5 ms → 2.4 ms；流式在途 100 chunks 每帧 24.4 ms → 0.4 ms，均降到 33 ms 节流窗口以下。
 - [x] compaction 事件卡片、`/compact` 输出去重、context 近似扣减。
