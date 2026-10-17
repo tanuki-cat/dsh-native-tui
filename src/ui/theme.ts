@@ -16,6 +16,8 @@ export interface Palette {
   readonly userBand: (text: string) => string
   readonly toolBand: (text: string) => string
   readonly thinkingBand: (text: string) => string
+  readonly dialogBand: (text: string) => string
+  readonly dialogBorder: (text: string) => string
 }
 
 const identity = (text: string): string => text
@@ -46,6 +48,8 @@ export function createPalette(theme: Config['theme']): Palette {
       userBand: identity,
       toolBand: identity,
       thinkingBand: identity,
+      dialogBand: identity,
+      dialogBorder: identity,
     }
   }
   const bands = theme === 'light'
@@ -65,6 +69,8 @@ export function createPalette(theme: Config['theme']): Palette {
     userBand: sgr(bands.user, '49'),
     toolBand: sgr(bands.tool, '49'),
     thinkingBand: sgr(bands.thinking, '49'),
+    dialogBand: sgr(theme === 'light' ? '48;5;255' : '48;5;236', '49'),
+    dialogBorder: sgr(theme === 'light' ? '38;5;24' : '38;5;39', '39'),
   }
 }
 

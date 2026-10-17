@@ -5,6 +5,8 @@ import {
   Markdown,
   SelectList,
   Text,
+  truncateToWidth,
+  visibleWidth,
   type Component,
   type TUI,
 } from '@earendil-works/pi-tui'
@@ -31,6 +33,21 @@ function localeText(value: { readonly en: string; readonly [locale: string]: str
   return value.en ?? Object.values(value)[0]
 }
 
+/** Render a full-width, opaque dialog surface so the transcript cannot bleed through. */
+function dialogFrame(lines: readonly string[], width: number, palette: Palette): string[] {
+  const outer = Math.max(20, width)
+  const inner = Math.max(1, outer - 4)
+  const content = lines.map((line) => {
+    const clipped = truncateToWidth(line, inner)
+    return '│ ' + clipped + ' '.repeat(Math.max(0, inner - visibleWidth(clipped))) + ' │'
+  })
+  const framed = ['┌' + '─'.repeat(outer - 2) + '┐', ...content, '└' + '─'.repeat(outer - 2) + '┘']
+  return framed.map((line) => {
+    const clipped = truncateToWidth(line, outer)
+    return palette.dialogBand(clipped + ' '.repeat(Math.max(0, outer - visibleWidth(clipped))))
+  })
+}
+
 /** SelectList wrapper that owns its title and key hint. */
 class ChoiceDialog implements Component {
   private readonly list: SelectList
@@ -51,12 +68,13 @@ class ChoiceDialog implements Component {
 
   render(width: number): string[] {
     const inner = Math.max(20, width - 4)
-    const lines = [
-      `  ${this.palette.bold(this.palette.accent(this.title))}`,
-      ...this.list.render(inner).map(line => `  ${line}`),
-      `  ${this.palette.dim(this.hint)}`,
-    ]
-    return lines
+    return dialogFrame([
+      ...new Text(this.title, 0, 0).render(inner),
+      '',
+      ...this.list.render(inner),
+      '',
+      ...new Text(this.palette.dim(this.hint), 0, 0).render(inner),
+    ], width, this.palette)
   }
 
   handleInput(data: string): void { this.list.handleInput(data) }
@@ -80,11 +98,13 @@ class TextInputDialog implements Component {
 
   render(width: number): string[] {
     const inner = Math.max(20, width - 4)
-    return [
-      `  ${this.palette.bold(this.palette.accent(this.title))}`,
-      ...this.input.render(inner).map(line => `  ${line}`),
-      `  ${this.palette.dim(this.hint)}`,
-    ]
+    return dialogFrame([
+      ...new Text(this.title, 0, 0).render(inner),
+      '',
+      ...this.input.render(inner),
+      '',
+      ...new Text(this.palette.dim(this.hint), 0, 0).render(inner),
+    ], width, this.palette)
   }
 
   handleInput(data: string): void { this.input.handleInput(data) }
@@ -331,7 +351,7 @@ export async function showApproval(
   const reason = localeText(request.displayReason) ?? request.reason
   const title = [
     `Approval required · ${request.toolName}`,
-    ...(reason === undefined ? [] : [palette.dim(reason)]),
+    ...(reason === undefined ? [] : [palette.dim(clip(reason, 800))]),
     ...(request.callId === undefined ? [] : [palette.dim(`call ${request.callId}`)]),
   ].join('\n')
   const choice = await showChoice(

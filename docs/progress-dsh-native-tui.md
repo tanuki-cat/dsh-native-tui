@@ -62,7 +62,7 @@ pnpm check
   tsc -p tsconfig.build.json
 
 Test Files  17 passed (17)
-Tests       72 passed (72)
+Tests       73 passed (73)
 ```
 
 ### 安装与启动
@@ -106,7 +106,7 @@ src/index.ts                 Cordis 入口、TTY 守卫
 src/config.ts                schemastery 配置、fullscreen
 src/runtime/                 agent/session、attachments、bundle、html、images、open、providers、settings、tool-log
 src/ui/                      app、autocomplete、dialogs、transcript、diff、theme
-tests/                       21 个测试文件，72 个测试
+tests/                       22 个测试文件，73 个测试
 scripts/fake-tty-*.mjs       fake-TTY 验证脚本
 README.md
 docs/design-task-feature-dsh-native-tui-host-native.md
@@ -146,6 +146,7 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - 已验证默认 bundle 加载 computer-use、Cua Driver native、mcp-client、mcp-resources、mcp-manager、session-stats；profile 启动无激活错误。
 - 已验证状态栏常驻两行：`● idle ...` + `↳ 0 turns · 0 steps · — tok/s · 0 tok · cache — · ctx 0%`。
 - 参考 pi agent 增加用户消息、reasoning、tool 输出的全宽背景带；dark/light theme 使用不同底色，plain 保持无样式。
+- Choice/TextInput/Approval 弹窗改为全宽边框面板：标题按行 wrap、长 reason 限制、每行补齐背景，避免底层 transcript 透出和串行。
 - 已验证 `/mcp add` 写入 `mcp-manager.servers.demo`，`/mcp list` 显示 `demo  stdio  false`；manager 动态创建 mcp-client Loader row。
 - 已验证把 `sk-proj-...` 填入 env 字段会被拒绝且不写 profile；缺 env 时同样不保存。
 - 默认 Agent Preset 已设为 ptc：全新 profile 启动后 `/status` 显示 `Preset: ptc`；既有 Session 仍按其记录恢复。
@@ -170,4 +171,4 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 | 14–20 | Plugin remove/market、剪贴板图片、图片预览、alt-screen、`@@session` |
 | 21–25 | 附件预览、ZIP/HTML 导出、Deliverables reveal、工具结果 pager、Markdown |
 | 26–30 | 独立 Diff、附件管理器、Settings 数组、Deliverables panel、收尾验证 |
-| 后续 | 第三方模型 `/provider add|list|edit|models|remove` 引导与自动模型发现，21 个测试文件 / 72 个测试 |
+| 后续 | 第三方模型 `/provider add|list|edit|models|remove` 引导与自动模型发现，22 个测试文件 / 73 个测试 |

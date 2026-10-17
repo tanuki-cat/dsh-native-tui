@@ -107,6 +107,7 @@
 - 已验证 `/provider models fetch-route` 获取 2 个模型并 merge：`1 added, 1 refreshed`。
 - 已验证默认集成 boot、`/mcp add` 持久化以及 mcp-manager 的 Loader row 创建/清理。
 - 已验证状态栏指标行渲染和 metrics 折叠单测；fake TTY 验证全宽 band 排版。
+- 已验证多行 approval title 的 dialog frame 渲染：每行宽度受限、边框完整、无嵌入换行。
 - 已验证 `/reasoning high` 后状态栏显示 `effort high`，`/status` 显示 `Reasoning: high`。
 - 已验证 `/provider` 补全显示 add/list/remove，`/provider re` 过滤为 remove。
 - 已验证 `/preset minimal` 写入 `selectedDefault`，重启后仍以 minimal 创建 Session。
