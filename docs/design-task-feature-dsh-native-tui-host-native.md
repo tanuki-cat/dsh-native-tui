@@ -74,7 +74,7 @@
 - Transcript 层次：参考 pi agent 使用全宽背景带（用户消息、reasoning、tool 输出），assistant 标签与 streaming 状态；context 用 ◇ 标签；tool 用 ├ args/result 与 diff 分支；notice 用 i/!/✕ 图标；用户 turn 之间插入 dim Rule。长行使用 BarText 让每条 wrap 行保留左色条。dark/light 使用不同 band 背景，plain 取消背景。
 - 本地 notice 记录创建时的 afterSeq，渲染时按 durable event seq 插入；命令输出不再统一追加到 transcript 末尾。
 - 运行中 Esc/Ctrl+C 取消当前 turn；Esc 在 overlay 打开时不抢占，交给 dialog。
-- 状态栏固定两行：第一行状态/preset/effort/快捷键，第二行 `↳ turns · steps · tok/s · total tok · cache % · ctx %`。TPS=decodeTokens/decodeMs；cache=读取缓存/总 prompt；context=最近 prompt token/模型 contextWindow。
+- 状态栏固定三行：第一行 `● state  model provider/model`，第二行 preset/effort/快捷键，第三行 `↳ turns · steps · tok/s · total tok · cache % · ctx %`。模型常驻状态栏，header 第二行只保留 cwd。TPS=decodeTokens/decodeMs；cache=读取缓存/总 prompt；context=最近 prompt token/模型 contextWindow。
 - 已验证 fullscreen: true 启动、输入 /help 展示完整命令列表、Ctrl+D 正常退出；默认 fullscreen: false 仍走 TuiMainScreen。
 - 图片读取上线 8 MiB，使用文件头嗅探，不依赖扩展名。
 - 字段选择器解析 schemastery uid/refs，拒绝 secret 字段，输入值按 JSON 解析后写回。

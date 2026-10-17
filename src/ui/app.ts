@@ -468,24 +468,26 @@ export async function startTerminalApp(
     const model = modelSelection.current?.model ?? options.model ?? 'deepseek-flash'
     header.setText(
       palette.bold(palette.brand('◆ ' + config.title)) + '  ' + palette.dim(active.id) + '\n'
-      + palette.dim((summaryCwd() ?? config.cwd) + '  ·  ' + provider + '/' + model),
+      + palette.dim(summaryCwd() ?? config.cwd),
     )
     const state = active.agent.status === 'running'
       ? palette.warning('● working')
       : palette.success('● idle')
     const preset = (host.get('agentPresets') as AgentPresetService | undefined)?.composedPreset(active.agent.ctx)
-    const bits = [state]
-    if (preset !== undefined) bits.push(palette.dim('preset ' + preset))
+    const metaBits: string[] = []
+    if (preset !== undefined) metaBits.push(palette.dim('preset ' + preset))
     const effort = modelSelection.current?.reasoningEffort
-    if (effort !== undefined) bits.push(palette.dim('effort ' + String(effort)))
-    if (pendingAttachments.length > 0) bits.push(palette.dim('attached ' + String(pendingAttachments.length)))
+    if (effort !== undefined) metaBits.push(palette.dim('effort ' + String(effort)))
+    if (pendingAttachments.length > 0) metaBits.push(palette.dim('attached ' + String(pendingAttachments.length)))
     const hint = active.agent.status === 'running'
       ? 'enter steer · esc cancel · ctrl+c cancel · ctrl+d exit'
       : 'enter send · /help · ctrl+d exit'
     const projections = host.get('sessionProjections') as SessionProjectionsService | undefined
     const stats = projections?.stateOf(active.agent.session, 'sessionStats') as SessionStats | undefined
     const metrics = collectSessionMetrics(active.agent.session.snapshotEvents(), stats, contextWindow)
-    status.setText(bits.join('  ') + '   ' + palette.dim(hint) + '\n'
+    const modelLine = state + '  ' + palette.bold(palette.accent('model ' + provider + '/' + model))
+    const metaLine = [...metaBits, palette.dim(hint)].join('   ')
+    status.setText(modelLine + '\n' + metaLine + '\n'
       + palette.dim('↳ ' + formatSessionMetrics(metrics)))
     tui.requestRender()
   }
