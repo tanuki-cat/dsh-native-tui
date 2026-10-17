@@ -71,7 +71,7 @@ const LOCAL_COMMANDS: readonly CommandSuggestion[] = [
   { name: 'cancel', description: 'cancel the running turn' },
   { name: 'model', description: 'select a model', input: { hint: 'provider/model' } },
   { name: 'permissions', description: 'select a permission preset', input: { hint: 'preset' } },
-  { name: 'preset', description: 'select the preset for /new', input: { hint: 'id' } },
+  { name: 'preset', description: 'select the preset for the current or next session', input: { hint: 'id' } },
   { name: 'workspaces', description: 'list/create/use/pin/archive workspaces' },
   { name: 'schedule', description: 'list/add/delete reminders' },
   { name: 'jobs', description: 'list or kill background jobs' },
@@ -1394,7 +1394,7 @@ export async function startTerminalApp(
                 return;
             }
             case 'preset': {
-                const presetService = host.get('agentPresets');
+                const presetService = host.get('agentPresets') as AgentPresetService | undefined;
                 if (presetService === undefined) {
                     pushNotice('warning', 'The agent-preset registry is unavailable.');
                     return;
@@ -1402,15 +1402,27 @@ export async function startTerminalApp(
                 try {
                     const rows = await presetService.list();
                     const currentPreset = presetService.composedPreset(active.agent.ctx);
+                    const applyPreset = async (id: string): Promise<void> => {
+                        selectedPreset = id;
+                        try {
+                            const applied = await presetService.select(active.agent, id);
+                            selectedPreset = applied;
+                            pushNotice('info', 'Agent preset for current session: ' + applied);
+                            renderStatus();
+                        }
+                        catch (error) {
+                            pushNotice('warning', 'Current session cannot switch preset: ' + errorMessage(error)
+                                + ' — next /new will use ' + id + '.');
+                        }
+                    };
                     if (args === '') {
                         const choice = await showChoice(tui, palette, 'Agent preset (current: ' + (currentPreset ?? 'none') + ')', rows.map((row: { id: string; name?: string; description?: string }) => ({
                             value: row.id,
                             label: (row.id === currentPreset ? '* ' : row.id === selectedPreset ? '+ ' : '  ') + row.id,
                             description: (row.name ?? '') + (row.description === undefined ? '' : ' — ' + row.description),
-                        })), 'Enter selects for the next /new · Esc cancels', interactionAbort.signal);
+                        })), 'Enter applies to a blank current session; started sessions use next /new · Esc cancels', interactionAbort.signal);
                         if (choice !== undefined) {
-                            selectedPreset = choice;
-                            pushNotice('info', 'Next /new will use preset: ' + choice);
+                            await applyPreset(choice);
                         }
                         return;
                     }
@@ -1418,8 +1430,7 @@ export async function startTerminalApp(
                         pushNotice('warning', 'Unknown preset "' + args + '". Available: ' + rows.map((row: { id: string }) => row.id).join(', '));
                         return;
                     }
-                    selectedPreset = args;
-                    pushNotice('info', 'Next /new will use preset: ' + args);
+                    await applyPreset(args);
                 }
                 catch (error) {
                     pushNotice('error', 'Could not read presets: ' + errorMessage(error));

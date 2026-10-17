@@ -2,7 +2,7 @@
 
 DeepSeek Harness 的 host-native 终端前端，基于 pi-tui。
 
-> 状态：实施完成（30 轮 + 第三方模型引导，55 个单元测试通过）；已知差距见进度记录。  
+> 状态：实施完成（30 轮 + 第三方模型引导，56 个单元测试通过）；已知差距见进度记录。  
 > 目标：在 TUI 中提供 Web 模式的核心能力，而不是复制浏览器图形界面。  
 > 架构说明与差距清单：[Host-native 方案](docs/design-task-feature-dsh-native-tui-host-native.md)。  
 > 实施进度、验证证据与未验收项：[实施进度](docs/progress-dsh-native-tui.md)。
@@ -15,7 +15,7 @@ DeepSeek Harness 的 host-native 终端前端，基于 pi-tui。
 - 审批与问答 waterfall；question probe 已通过真实 Host 验证。
 - 模型选择器（LLM catalog 为空时明确提示）、权限预设、后台任务、子代理列表。
 - 第三方模型：`/provider add` 引导配置 pi-ai gateway/catalog route，`/provider list|remove` 管理。
-- Agent Presets：standard / ptc / minimal / cordis；/preset 选择后用于下一次 /new。
+- Agent Presets：standard / ptc / minimal / cordis；/preset 可在首个 turn 前切换当前 Session，已开始的 Session 锁定并用于下一次 /new。
 - Workspace 列表/创建/切换/pin/unpin/archive/unarchive；Schedule 列表/创建/删除；Settings 顶层/嵌套对象/数组字段编辑与 JSON 写入；Plugins 列表/官方市场/检查/安装/移除/启停（带确认，实时应用）。
 - 可选 `fullscreen`：TuiAltScreen + ScrollView，header/status/editor 固定，鼠标滚轮滚动、文本选择复制。
 - `@@<query>` 自动补全其他 Session 的 canonical mention；发送时 Host session-reference 自动注入快照。
@@ -57,7 +57,7 @@ DSH Host 包由当前 dsh 安装提供；本插件只把 pi-tui 与 schemastery 
 | /permissions [preset] | 列出或切换权限预设 |
 | /jobs [kill <id>] | 列出或终止后台任务 |
 | /agents | 列出直接子代理 |
-| /preset [id] | 列出/选择下一次 /new 使用的 Agent Preset |
+| /preset [id] | 首个 turn 前切换当前 Session；已开始则用于下一次 /new |
 | /workspaces [new <path>|use <id|path>|pin|unpin|archive|unarchive] | 列出/创建/切换/固定/归档 workspace 会话 |
 | /schedule [add <seconds> <title>|delete <id>] | 列出/创建/删除一次性提醒 |
 | /plugins [list|market [query]|inspect <spec>|install <spec>|remove <bundle>|enable <entryId>|disable <entryId>] | 列出、浏览官方市场、检查/安装/移除 bundle，或启停插件项 |
@@ -114,7 +114,7 @@ dsh --profile tui
 ## 开发与验证
 
 ~~~sh
-pnpm check          # typecheck + 55 unit tests + build
+pnpm check          # typecheck + 56 unit tests + build
 pnpm test
 pnpm build
 ~~~

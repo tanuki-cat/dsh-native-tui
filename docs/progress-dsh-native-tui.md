@@ -38,7 +38,8 @@ dsh --profile tui
 | 对话 | 流式 assistant/reasoning、Markdown、steer、cancel、失败 turn 展示 |
 | 工具 | 工具卡片、write/edit diff 行、`/tools`、`/tool <index>` 分页、`/diff [index]` |
 | 审批/问答 | approval waterfall、question 面板、Other 自由文本 |
-| 模型/命令 | 模型选择、权限预设、Host commands、jobs、subagents |
+| 模型/命令 | 模型选择、第三方 provider 引导、权限预设、Host commands、jobs、subagents |
+| Preset | 首个 turn 前切换当前 Session；开始后锁定，改用 /new |
 | Presets | standard / ptc / minimal / cordis |
 | Workspace | list/create/use/pin/unpin/archive/unarchive |
 | Schedule | list/add/delete |
@@ -61,7 +62,7 @@ pnpm check
   tsc -p tsconfig.build.json
 
 Test Files  17 passed (17)
-Tests       55 passed (55)
+Tests       56 passed (56)
 ```
 
 ### 安装与启动
@@ -105,7 +106,7 @@ src/index.ts                 Cordis 入口、TTY 守卫
 src/config.ts                schemastery 配置、fullscreen
 src/runtime/                 agent/session、attachments、bundle、html、images、open、providers、settings、tool-log
 src/ui/                      app、autocomplete、dialogs、transcript、diff、theme
-tests/                       17 个测试文件，55 个测试
+tests/                       17 个测试文件，56 个测试
 scripts/fake-tty-*.mjs       fake-TTY 验证脚本
 README.md
 docs/design-task-feature-dsh-native-tui-host-native.md
@@ -126,6 +127,8 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - Deliverables panel 的真实 present 事件路径未验收。
 - `/provider add` 只支持 `apiKeyEnv` 引用，不在 TUI 输入/存储 API key；没有模型发现 UI。
 - 第三方模型引导已用 dummy key 验证配置、写入和 `/model` 选择，未发起真实推理请求。
+- 已验证空白 Session 的 `/preset minimal` 直接切换当前 Session，`/status` 显示 minimal。
+- 已验证首个 turn 失败后 `/preset ptc` 返回 `This session has already started`，并提示 next /new 使用 ptc。
 
 ## 7. 建议验收步骤
 

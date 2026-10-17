@@ -48,7 +48,8 @@
 
 - 引入 agent-preset-registry，默认 standard；复制并加载 standard / ptc / minimal / cordis 四个 preset patch。
 - Base 的进程级 agent-plane 行被禁用，工具/提示词/技能改由 preset 按 Session 组合。
-- /preset 列出当前 preset，选择后用于下一次 /new；/status 展示 current preset。
+- /preset 列出当前 preset；首个 turn 前通过 Host `agentPresets.select(agent, id)` 切换当前 Session，已开始的 Session 由 Host 锁定，选择回退为下一次 /new；/status 展示 current preset。
+- resume 使用最后一个 `agent-preset/selected` 事件恢复 preset，header 的旧值只作 fallback。
 - /workspaces 列出 workspace；/workspaces new <path> 创建；/workspaces use <id|path> 在新 workspace 创建会话。
 - /schedule 列出当前会话的提醒；支持 add <seconds> <title> 与 delete <id>。
 - /plugins 列出 bundle 与插件项，/plugins market 浏览官方 on-demand catalog，支持 inspect、install、remove、enable/disable；写操作先确认，安装/移除走与 dsh plugin 相同的 pnpm 实现。

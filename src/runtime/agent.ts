@@ -27,6 +27,7 @@ export interface AgentPresetService {
   list(): Promise<readonly AgentPresetRow[]>
   resolve(id?: string): Promise<{ readonly id: string; readonly broken?: unknown }>
   mount(ctx: Context, id?: string): Promise<unknown>
+  select(agent: Agent, id: string): Promise<string>
   composedPreset(ctx: Context): string | undefined
 }
 
@@ -94,7 +95,13 @@ export async function resumeHostSession(ctx: Context, id: SessionId): Promise<Ho
       ? {}
       : {
         setup: async (agentCtx: Context, agent: Agent) => {
-          const presetId = agent.session.header.agentPreset ?? presets.defaultId
+          const selected = agent.session.snapshotEvents()
+            .filter(event => (event.type as string) === 'agent-preset/selected')
+            .at(-1)
+          const selectedId = (selected?.data as { readonly agentPreset?: unknown } | undefined)?.agentPreset
+          const presetId = typeof selectedId === 'string'
+            ? selectedId
+            : agent.session.header.agentPreset ?? presets.defaultId
           await presets.mount(agentCtx, presetId)
         },
       }),

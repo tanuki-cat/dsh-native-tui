@@ -16,13 +16,13 @@ const config: ResolvedConfig = {
   title: 'TUI',
 }
 
-function fakeHandle(sessionId: ReturnType<typeof SessionId>): AgentHandle {
+function fakeHandle(sessionId: ReturnType<typeof SessionId>, events: readonly unknown[] = []): AgentHandle {
   return {
     agent: {
       id: sessionId,
       status: 'idle',
       options: { provider: 'p', model: 'm' },
-      session: { header: { cwd: '/tmp/workspace', createdAt: 0 } },
+      session: { header: { cwd: '/tmp/workspace', createdAt: 0 }, snapshotEvents: () => events },
     },
     dispose: async () => {},
   } as unknown as AgentHandle
@@ -87,6 +87,38 @@ describe('host runtime', () => {
     })
     await createHostSession(ctx, { ...config, agentPreset: 'minimal' })
     expect(captured).toMatchObject({ meta: { cwd: '/tmp/workspace', agentPreset: 'minimal' } })
+    expect(mounted).toBe('minimal')
+  })
+
+  it('resumes with the last selected preset event', async () => {
+    let mounted: string | undefined
+    const id = SessionId('session-selected')
+    const ctx = fakeContext({
+      get: (key: string) => key === 'agentPresets'
+        ? {
+          defaultId: 'standard',
+          list: async () => [],
+          resolve: async (preset?: string) => ({ id: preset ?? 'standard' }),
+          mount: async (_ctx: unknown, preset?: string) => { mounted = preset },
+          select: async () => 'standard',
+          composedPreset: () => undefined,
+        }
+        : undefined,
+      agents: {
+        resume: async (options: unknown) => {
+          const candidate = options as {
+            resumeSessionId: ReturnType<typeof SessionId>
+            setup?: (agentCtx: unknown, agent: unknown) => Promise<void>
+          }
+          const handle = fakeHandle(candidate.resumeSessionId, [
+            { type: 'agent-preset/selected', data: { agentPreset: 'minimal' } },
+          ])
+          await candidate.setup?.({}, handle.agent)
+          return handle
+        },
+      },
+    })
+    await resumeHostSession(ctx, id)
     expect(mounted).toBe('minimal')
   })
 
