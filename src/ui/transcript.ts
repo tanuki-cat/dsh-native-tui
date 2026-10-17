@@ -30,6 +30,12 @@ import { asFileDiffs, diffLines, type FileDiff } from './diff.js'
 const TOOL_PREVIEW = 1200
 /** Maximum characters retained in one reasoning preview. */
 const REASONING_PREVIEW = 3000
+/** Tools whose cards follow the code-execution density setting. */
+const CODE_EXECUTION_TOOLS: ReadonlySet<string> = new Set(['run_code', 'bash', 'pwsh'])
+
+function isCodeExecutionTool(name: string): boolean {
+  return CODE_EXECUTION_TOOLS.has(name)
+}
 
 /** One rendered transcript row. */
 export type TranscriptBlock = ({
@@ -143,14 +149,15 @@ function toolResultText(message: { readonly content?: readonly ContentBlock[] })
   return contentText(message.content)
 }
 
-/** Extract a one-line description for a compact run_code row. */
-function compactRunCodePreview(block: { readonly args: string; readonly result?: string }): string {
+/** Extract a one-line description for a compact code-execution row. */
+function compactCodeExecutionPreview(block: { readonly args: string; readonly result?: string }): string {
   let description: string | undefined
   try {
     const parsed: unknown = JSON.parse(block.args)
     if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
       const record = parsed as Record<string, unknown>
       if (typeof record.description === 'string' && record.description.trim() !== '') description = record.description
+      else if (typeof record.command === 'string' && record.command.trim() !== '') description = record.command
       else if (typeof record.code === 'string' && record.code.trim() !== '') description = record.code
     }
   }
@@ -182,7 +189,7 @@ export function reduceTranscript(
   const liveByStep = new Map<string, { index: number; text: string; reasoning: string }>()
   const finalizedSteps = new Set<string>()
   const toolByCall = new Map<string, number>()
-  const hiddenRunCodeCalls = new Set<string>()
+  const hiddenCodeExecutionCalls = new Set<string>()
   const thinkingDisplay = options.thinkingDisplay ?? 'detailed'
   const runCodeDisplay = options.runCodeDisplay ?? 'detailed'
   const showReasoning = thinkingDisplay !== 'hidden' && (options.thinkingDisplay !== undefined || options.showReasoning)
@@ -325,8 +332,8 @@ export function reduceTranscript(
         break
       }
       case 'tool/call': {
-        if (runCodeDisplay === 'hidden' && event.data.name === 'run_code') {
-          hiddenRunCodeCalls.add(event.data.callId)
+        if (runCodeDisplay === 'hidden' && isCodeExecutionTool(event.data.name)) {
+          hiddenCodeExecutionCalls.add(event.data.callId)
           break
         }
         const index = blocks.length
@@ -343,7 +350,7 @@ export function reduceTranscript(
       }
       case 'tool/result': {
         const callId = event.data.message.source.callId
-        if (hiddenRunCodeCalls.delete(callId)) break
+        if (hiddenCodeExecutionCalls.delete(callId)) break
         const index = toolByCall.get(callId)
         const result = toolResultText(event.data.message)
         const isError = event.data.message.isError === true
@@ -462,9 +469,14 @@ export class TranscriptRenderer {
     this.options = options
   }
 
-  /** Switch reasoning/run_code density and rebuild the existing event window. */
+  /** Switch reasoning/code-execution density and rebuild the existing event window. */
   setDisplayModes(thinkingDisplay: DisplayMode, runCodeDisplay: DisplayMode): void {
+    if (this.options.thinkingDisplay === thinkingDisplay && this.options.runCodeDisplay === runCodeDisplay) return
     this.options = { ...this.options, thinkingDisplay, runCodeDisplay }
+    // Density is a render option rather than part of TranscriptBlock, so a block
+    // can stay equal while its component must switch representation. Drop the
+    // reuse window; otherwise the previous density keeps rendering.
+    this.rows = []
     this.rebuild()
   }
 
@@ -582,9 +594,9 @@ export class TranscriptRenderer {
       }
       case 'tool': {
         const status = block.pending ? palette.warning('running') : block.isError === true ? palette.error('error') : palette.success('done')
-        if (block.name === 'run_code' && (this.options.runCodeDisplay ?? 'detailed') === 'compact') {
-          const preview = compactRunCodePreview(block)
-          return new Text(palette.bold(palette.accent('⚙ run_code')) + '  ' + status
+        if (isCodeExecutionTool(block.name) && (this.options.runCodeDisplay ?? 'detailed') === 'compact') {
+          const preview = compactCodeExecutionPreview(block)
+          return new Text(palette.bold(palette.accent('⚙ ' + block.name)) + '  ' + status
             + (preview === '' ? '' : '  ·  ' + palette.dim(preview)), 0, 0)
         }
         const container = new Container()

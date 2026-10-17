@@ -19,7 +19,7 @@ export interface Config {
   showReasoning?: boolean
   /** Reasoning/thinking block rendering: hidden, compact one-line preview, or detailed. */
   thinkingDisplay?: DisplayConfig
-  /** run_code tool block rendering: hidden, compact summary, or detailed arguments/result. */
+  /** Code-execution tool (run_code/bash/pwsh) block rendering: hidden, compact summary, or detailed arguments/result. */
   runCodeDisplay?: DisplayConfig
   /** Maximum transcript entries retained in the terminal view. */
   maxTranscriptEntries?: number | Volatile<number>

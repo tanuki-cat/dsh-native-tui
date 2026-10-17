@@ -154,6 +154,39 @@ describe('reduceTranscript', () => {
     expect(hidden.some(block => block.kind === 'tool')).toBe(false)
   })
 
+  it('applies code-execution density to shell tool cards', () => {
+    const shellEntries = (callId: string, name: string, args: unknown): TranscriptEntry[] => [
+      durable('tool/call', { turn: 1, step: 1, callId, name, arguments: JSON.stringify(args) }, 1),
+      durable('tool/result', {
+        turn: 1,
+        step: 1,
+        message: { source: { callId }, content: [{ type: 'text', text: 'file.txt\nsecond line' }], isError: false },
+      }, 2),
+    ]
+    for (const name of ['bash', 'pwsh']) {
+      const entries = shellEntries('call-' + name, name, { description: 'List files', command: 'ls -la' })
+      const renderer = new TranscriptRenderer({ ...options, runCodeDisplay: 'compact' })
+      renderer.set(entries, [])
+      const output = renderer.container.render(100).join('\n')
+      expect(output).toContain('⚙ ' + name)
+      expect(output).toContain('List files')
+      expect(output).toContain('file.txt')
+      expect(output).not.toContain('├ args')
+      expect(output).not.toContain('second line')
+
+      const hiddenRenderer = new TranscriptRenderer({ ...options, runCodeDisplay: 'hidden' })
+      hiddenRenderer.set(entries, [])
+      const hiddenOutput = hiddenRenderer.container.render(100).join('\n')
+      expect(hiddenOutput).not.toContain('⚙ ' + name)
+      expect(hiddenOutput).not.toContain('file.txt')
+    }
+
+    const renderer = new TranscriptRenderer({ ...options, runCodeDisplay: 'compact' })
+    renderer.set(shellEntries('call-command', 'bash', { command: 'echo hi' }), [])
+    const output = renderer.container.render(100).join('\n')
+    expect(output).toContain('echo hi')
+  })
+
   it('marks turn failures and caps old rows', () => {
     const entries: TranscriptEntry[] = [
       durable('user/message', { content: [{ type: 'text', text: 'one' }], source: { kind: 'user' } }),
@@ -191,6 +224,51 @@ describe('TranscriptRenderer', () => {
     const compact = renderer.container.render(100).join('\n')
     expect(compact).toContain('thinking · live thought')
     expect(compact).toContain('Press AC')
+  })
+
+  it('rebuilds cached components when display modes change between detailed and compact', () => {
+    const entries: TranscriptEntry[] = [
+      durable('assistant/message', {
+        turn: 1,
+        step: 1,
+        message: { content: [
+          { type: 'reasoning', text: 'first thought\nsecond thought' },
+          { type: 'text', text: 'answer' },
+        ] },
+      }, 1),
+      durable('tool/call', {
+        turn: 1,
+        step: 1,
+        callId: 'c1',
+        name: 'run_code',
+        arguments: JSON.stringify({ description: 'Press AC', code: 'long code body' }),
+      }, 2),
+      durable('tool/result', {
+        turn: 1,
+        step: 1,
+        message: { source: { callId: 'c1' }, content: [{ type: 'text', text: 'long result body' }], isError: false },
+      }, 3),
+    ]
+    const renderer = new TranscriptRenderer({ ...options, thinkingDisplay: 'detailed', runCodeDisplay: 'detailed' })
+    renderer.set(entries, [])
+    const detailed = renderer.container.render(100).join('\n')
+    expect(detailed).toContain('second thought')
+    expect(detailed).toContain('├ args')
+    expect(detailed).toContain('long code body')
+
+    renderer.setDisplayModes('detailed', 'compact')
+    const compactRunCode = renderer.container.render(100).join('\n')
+    expect(compactRunCode).not.toContain('├ args')
+    expect(compactRunCode).toContain('⚙ run_code')
+    expect(compactRunCode).toContain('Press AC')
+    expect(compactRunCode).not.toContain('long code body')
+
+    renderer.setDisplayModes('compact', 'detailed')
+    const compactThinking = renderer.container.render(100).join('\n')
+    expect(compactThinking).toContain('thinking · first thought')
+    expect(compactThinking).not.toContain('second thought')
+    expect(compactThinking).toContain('├ args')
+    expect(compactThinking).toContain('long code body')
   })
 
   it('labels blocks and keeps reasoning with the answer', () => {

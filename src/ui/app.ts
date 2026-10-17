@@ -58,6 +58,7 @@ import {
 import { showApproval, showChoice, showImagePreview, showMarkdownPreview, showQuestionBatch, showSearchChoice, showTextInput, showTextPager } from './dialogs.js'
 import { TuiAutocompleteProvider, type CommandSuggestion, type SessionReferenceService } from './autocomplete.js'
 import { createPalette, editorTheme, markdownTheme, type Palette } from './theme.js'
+import { globalShortcut } from './keymap.js'
 import { TranscriptRenderer, type TranscriptBlock, type TranscriptEntry } from './transcript.js'
 import { Rule } from './rule.js'
 import { diffLines } from './diff.js'
@@ -778,7 +779,7 @@ export async function startTerminalApp(
       const fullscreen = String(descriptor.value.fullscreen ?? config.fullscreen);
       const pick = await showChoice(tui, palette, 'TUI settings', [
         { value: 'thinking', label: 'Thinking display', description: 'current: ' + thinking + ' · hidden | compact | detailed' },
-        { value: 'runCode', label: 'run_code display', description: 'current: ' + runCode + ' · hidden | compact | detailed' },
+        { value: 'runCode', label: 'Code execution display', description: 'run_code/bash/pwsh · current: ' + runCode + ' · hidden | compact | detailed' },
         { value: 'entries', label: 'Transcript entries', description: 'current: ' + maxEntries + ' · applies immediately' },
         { value: 'theme', label: 'Theme', description: 'current: ' + theme + ' · restart required' },
         { value: 'fullscreen', label: 'Fullscreen', description: 'current: ' + fullscreen + ' · restart required' },
@@ -799,7 +800,7 @@ export async function startTerminalApp(
       let rawValue: string | boolean | number | undefined;
       if (pick === 'thinking' || pick === 'runCode') {
         field = pick === 'thinking' ? 'thinkingDisplay' : 'runCodeDisplay';
-        const value = await showChoice(tui, palette, pick === 'thinking' ? 'Thinking display' : 'run_code display',
+        const value = await showChoice(tui, palette, pick === 'thinking' ? 'Thinking display' : 'Code execution display',
           modes.map(mode => ({ value: mode, label: mode, description: mode === (pick === 'thinking' ? thinking : runCode) ? 'current' : 'apply immediately' })),
           'Enter applies · Esc cancels', interactionAbort.signal);
         if (value === undefined) continue;
@@ -2985,28 +2986,17 @@ export async function startTerminalApp(
     };
     editor.onSubmit = handleSubmit;
     tui.addInputListener((data) => {
-        if (data === '\u001B') {
+        const shortcut = globalShortcut(data, active.agent.status === 'running');
+        if (shortcut === undefined)
+            return undefined;
+        if (shortcut === 'cancel-turn') {
             if (tui.hasOverlay())
                 return undefined;
-            if (active.agent.status === 'running') {
-                active.agent.cancel({ kind: 'user' });
-                return { consume: true };
-            }
-            return undefined;
-        }
-        if (data === String.fromCharCode(3)) {
-            if (active.agent.status === 'running') {
-                active.agent.cancel({ kind: 'user' });
-                return { consume: true };
-            }
-            requestExit(0);
+            active.agent.cancel({ kind: 'user' });
             return { consume: true };
         }
-        if (data === String.fromCharCode(4)) {
-            requestExit(0);
-            return { consume: true };
-        }
-        return undefined;
+        requestExit(0);
+        return { consume: true };
     });
     process.once('SIGTERM', onSignal);
     process.once('SIGHUP', onSignal);

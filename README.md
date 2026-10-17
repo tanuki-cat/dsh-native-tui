@@ -24,7 +24,7 @@ DeepSeek Harness 的 host-native 终端前端，基于 pi-tui。
 - Transcript 层次：参考 pi agent 使用全宽背景带（用户消息、reasoning、tool 输出）、assistant/context 标签、notice 图标、turn 分隔线；本地命令输出按 durable event sequence 插入，不会一律堆在 transcript 末尾。
 - 运行中 `Esc` / `Ctrl+C` 取消 turn；长文本和 tool 输出按行保持左侧色条。
 - 上下文压缩：默认 preset 启用 `compaction-basic` 自动压力压缩与 context-overflow 恢复，以及 tool-result pruner；TUI 渲染 compaction start/summary/end 和 prune 通知，`/compact` 作为 Host command 可手动触发。
-- 显示密度可配置：`thinkingDisplay` 与 `runCodeDisplay` 均支持 `hidden | compact | detailed`。
+- 显示密度可配置：`thinkingDisplay` 与 `runCodeDisplay` 均支持 `hidden | compact | detailed`；后者覆盖 `run_code`、`bash`、`pwsh` 等代码执行工具卡。
 - 状态栏常驻当前模型和会话指标：`● idle  model provider/model`、preset/effort/快捷键、turns/steps、tok/s、累计 token、cache hit、context 使用率；header 只保留 Session id 和 cwd。
 - `@@<query>` 自动补全其他 Session 的 canonical mention；发送时 Host session-reference 自动注入快照。
 - `/export [path]` 导出 Session JSONL；`/export zip [path]` 导出含 manifest、attachments、deliverables 的 ZIP bundle；`/export html [path]` 导出静态 HTML transcript；`/open` 预览文本文件，Markdown 以 pi-tui Markdown 样式分页渲染；`/preview` 渲染 PNG/JPEG/GIF/WebP 图片；`/files` 浏览目录并预览；`/attach` 暂存文件/图片或剪贴板图片并随下一条 prompt 发送（8 MiB 上限），`/attach preview <i>` 可内联预览暂存项，`/attachments` 打开暂存附件管理器（预览/移除）；`/deliverables` 可列出、打开 panel、预览或用系统文件管理器定位 present 交付文件；`/tools` 列出工具调用，`/tool <index>` 分页查看完整参数/结果，`/diff [index]` 查看 write/edit 的独立 diff。
@@ -75,7 +75,7 @@ DSH Host 包由当前 dsh 安装提供；插件运行时还依赖 pi-tui、schem
 | /workspaces [new <path>|use <id|path>|pin|unpin|archive|unarchive] | 列出/创建/切换/固定/归档 workspace 会话 |
 | /schedule [add <seconds> <title>|delete <id>] | 列出/创建/删除一次性提醒 |
 | /plugins [list|market [query]|inspect <spec>|install <spec>|remove <bundle>|enable <entryId>|disable <entryId>] | 列出、浏览官方市场、检查/安装/移除 bundle，或启停插件项 |
-| /settings [tui|host|edit <ns>|items <ns> <field>|set <ns> <json>] | `tui` 打开基础显示/终端配置弹窗（thinking、run_code、transcript、theme、fullscreen）；`host`/`edit`/`items`/`set` 进入高级 Host settings |
+| /settings [tui|host|edit <ns>|items <ns> <field>|set <ns> <json>] | `tui` 打开基础显示/终端配置弹窗（thinking、code execution、transcript、theme、fullscreen）；`host`/`edit`/`items`/`set` 进入高级 Host settings |
 | /export [path|zip [path]|html [path]] | 导出 JSONL、ZIP bundle，或静态 HTML transcript（不覆盖已有文件） |
 | /open <path> | 预览文本（16 KiB 上限）；Markdown 渲染为样式化分页 |
 | /files [path] | 目录浏览：Enter 进入目录/预览文件，Esc 退出，含 ../ |
@@ -100,7 +100,7 @@ Enter 发送；运行中 Enter 作为 steer；Ctrl+C 取消/退出；Ctrl+D 退�
     cwd: /path/to/workspace
     showReasoning: true         # legacy boolean; false maps thinkingDisplay to hidden
     thinkingDisplay: detailed   # hidden | compact | detailed
-    runCodeDisplay: detailed    # hidden | compact | detailed
+    runCodeDisplay: detailed    # code execution cards (run_code/bash/pwsh): hidden | compact | detailed
     maxTranscriptEntries: 2000
     fullscreen: false              # true 使用 alt-screen + 鼠标/应用滚动
     theme: auto                    # auto | dark | light | plain
@@ -110,11 +110,11 @@ Enter 发送；运行中 Enter 作为 steer；Ctrl+C 取消/退出；Ctrl+D 退�
 
 显示模式：
 
-- `hidden`：不渲染 reasoning / `run_code` 块。
-- `compact`：reasoning 只显示首行摘要；`run_code` 只显示状态 + description/code 单行摘要。
-- `detailed`：当前完整 reasoning 区带与 `run_code` args/result 卡片。
+- `hidden`：不渲染 reasoning / `run_code` / `bash` / `pwsh` 块。
+- `compact`：reasoning 只显示首行摘要；代码执行工具只显示状态 + description/command/code 单行摘要。
+- `detailed`：当前完整 reasoning 区带与代码执行工具 args/result 卡片。
 
-`/settings` 默认打开 **TUI settings** 独立弹窗，可修改 thinking/run_code 显示模式、transcript entries，以及 theme/fullscreen；显示模式和 transcript entries 立即生效，theme/fullscreen 保存后重启生效。`/settings host` 查看高级 Host settings 命名空间，原有的 `/settings edit|items|set` 仍可用。
+`/settings` 默认打开 **TUI settings** 独立弹窗，可修改 thinking/code execution 显示模式、transcript entries，以及 theme/fullscreen；显示模式和 transcript entries 立即生效，theme/fullscreen 保存后重启生效。`/settings host` 查看高级 Host settings 命名空间，原有的 `/settings edit|items|set` 仍可用。
 
 默认模型来自 Host 的 ctx.agentDefaultModel（Base 默认 deepseek-official/deepseek-flash）。没有凭据时首个请求会显示 MISSING_CREDENTIAL。
 
