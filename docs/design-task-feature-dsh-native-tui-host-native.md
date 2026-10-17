@@ -47,7 +47,7 @@
 ### Agent Presets / Workspace / Schedule / Plugins / Settings
 
 - 引入 agent-preset-registry，默认 ptc；复制并加载 standard / ptc / minimal / cordis 四个 preset patch。
-- 默认集成官方 computer-use、experimental computer-use Cua Driver native、mcp-client、mcp-resources；版本按 DSH runtime 兼容的 0.2.1-rc.1 固定。
+- 默认集成官方 computer-use、experimental computer-use Cua Driver native、mcp-client、mcp-resources、session-stats；版本按 DSH runtime 兼容的 0.2.1-rc.1 固定。
 - 新增 mcp-manager：把 `mcp-manager.servers` 中的 stdio/Streamable HTTP 服务映射为官方 mcp-client Loader rows，删除配置时移除 rows；manager 异步加载，避免 `/mcp` 保存阻塞。
 - Base 的进程级 agent-plane 行被禁用，工具/提示词/技能改由 preset 按 Session 组合。
 - /preset 列出当前 preset；首个 turn 前通过 Host `agentPresets.select(agent, id)` 切换当前 Session，已开始的 Session 由 Host 锁定，选择回退为下一次 /new；选择同时更新 settings `agent-preset-registry.selectedDefault` 持久化为默认 preset；/status 展示 current preset。
@@ -73,6 +73,7 @@
 - Transcript 层次：用户消息左侧 accent 色条；assistant 标签与 streaming 状态；reasoning 独立缩进；context 用 ◇ 标签；tool 用 ├ args/result 与 diff 分支；notice 用 i/!/✕ 图标；用户 turn 之间插入 dim Rule。长行使用 BarText 让每条 wrap 行保留左色条。
 - 本地 notice 记录创建时的 afterSeq，渲染时按 durable event seq 插入；命令输出不再统一追加到 transcript 末尾。
 - 运行中 Esc/Ctrl+C 取消当前 turn；Esc 在 overlay 打开时不抢占，交给 dialog。
+- 状态栏固定两行：第一行状态/preset/effort/快捷键，第二行 `↳ turns · steps · tok/s · total tok · cache % · ctx %`。TPS=decodeTokens/decodeMs；cache=读取缓存/总 prompt；context=最近 prompt token/模型 contextWindow。
 - 已验证 fullscreen: true 启动、输入 /help 展示完整命令列表、Ctrl+D 正常退出；默认 fullscreen: false 仍走 TuiMainScreen。
 - 图片读取上线 8 MiB，使用文件头嗅探，不依赖扩展名。
 - 字段选择器解析 schemastery uid/refs，拒绝 secret 字段，输入值按 JSON 解析后写回。
@@ -105,6 +106,7 @@
 - `/provider add` 自动发现后选择 Text + image，profile 写入 `input: [text, image]`；Reasoning levels=`low,medium,high` 写入 `reasoningEfforts`；auto-route 同时保存 auto-model + auto-small 两个模型。
 - 已验证 `/provider models fetch-route` 获取 2 个模型并 merge：`1 added, 1 refreshed`。
 - 已验证默认集成 boot、`/mcp add` 持久化以及 mcp-manager 的 Loader row 创建/清理。
+- 已验证状态栏指标行渲染和 metrics 折叠单测。
 - 已验证 `/reasoning high` 后状态栏显示 `effort high`，`/status` 显示 `Reasoning: high`。
 - 已验证 `/provider` 补全显示 add/list/remove，`/provider re` 过滤为 remove。
 - 已验证 `/preset minimal` 写入 `selectedDefault`，重启后仍以 minimal 创建 Session。

@@ -49,6 +49,9 @@
     - id: mcp-resources
       name: '@deepseek-ai/dsh-mcp-resources'
 
+    - id: session-stats
+      name: '@deepseek-ai/dsh-session-stats'
+
     - id: mcp-manager
       name: dsh-native-tui/mcp-manager
       config:

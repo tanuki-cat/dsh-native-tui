@@ -24,6 +24,7 @@ import { exportSessionHtml } from '../runtime/html.js'
 import { isMarkdownPath, listDirectory, readTextPreview, sanitizeTerminalText } from '../runtime/files.js'
 import { settingsChildFields, settingsFields, settingsSetAt, settingsValueAt } from '../runtime/settings.js'
 import { readImagePreview } from '../runtime/images.js'
+import { collectSessionMetrics, formatSessionMetrics, type SessionStats } from '../runtime/metrics.js'
 import { revealWithSystemApp, systemRevealCommand } from '../runtime/open.js'
 import { collectDeliverables, formatDeliverables, type PresentedFileView } from '../runtime/deliverables.js'
 import { collectToolCalls } from '../runtime/tool-log.js'
@@ -153,6 +154,7 @@ interface LlmCatalog {
     readonly inputModalities?: readonly ('text' | 'image')[]
   }[]>
   resolveModelInfo(provider: string, model: string): Promise<{
+    readonly context?: { readonly contextWindow?: number }
     readonly reasoning?: {
       readonly efforts: readonly { readonly id: string; readonly name: string; readonly description?: string }[]
       readonly defaultEffort?: string
@@ -280,6 +282,10 @@ interface WorkspaceChangesService {
   diff(sessionId: SessionId, seq: number, index: number, signal: AbortSignal): Promise<WorkspaceDiffView | undefined>
 }
 
+interface SessionProjectionsService {
+  stateOf(session: Session, key: string): unknown
+}
+
 interface AgentDefaultModelService {
   saveSelection(selection: ModelSelection): Promise<void>
 }
@@ -389,6 +395,7 @@ export async function startTerminalApp(
   let interactionDisposers: Array<() => void> = []
   const interactionAbort = new AbortController()
   const attemptPositions = new Map<string, { turn: number; step: number }>()
+  let contextWindow: number | undefined
   let modelSelection: ModelSelectionRef = {
     current: {
       provider: active.agent.options.provider ?? 'deepseek-official',
@@ -463,8 +470,26 @@ export async function startTerminalApp(
     const hint = active.agent.status === 'running'
       ? 'enter steer · esc cancel · ctrl+c cancel · ctrl+d exit'
       : 'enter send · /help · ctrl+d exit'
-    status.setText(bits.join('  ') + '   ' + palette.dim(hint))
+    const projections = host.get('sessionProjections') as SessionProjectionsService | undefined
+    const stats = projections?.stateOf(active.agent.session, 'sessionStats') as SessionStats | undefined
+    const metrics = collectSessionMetrics(active.agent.session.snapshotEvents(), stats, contextWindow)
+    status.setText(bits.join('  ') + '   ' + palette.dim(hint) + '\n'
+      + palette.dim('↳ ' + formatSessionMetrics(metrics)))
     tui.requestRender()
+  }
+
+  const refreshContextWindow = async (): Promise<void> => {
+    const llm = host.get('llm') as LlmCatalog | undefined
+    const current = modelSelection.current
+    if (llm === undefined || current === undefined) return
+    try {
+      const info = await llm.resolveModelInfo(current.provider, current.model)
+      contextWindow = info.context?.contextWindow
+      renderStatus()
+    }
+    catch {
+      // The model may be temporarily unroutable; metrics keep the last known capacity.
+    }
   }
 
   const subscribeActive = (): void => {
@@ -613,8 +638,10 @@ export async function startTerminalApp(
         assembled: undefined,
       }
       disposeModelSelection = installModelSelection(active.agent.ctx, modelSelection)
+      contextWindow = undefined
       registerInteractions()
       subscribeActive()
+      void refreshContextWindow()
       pushNotice('info', 'Switched to ' + active.id)
     } catch (error) {
       pushNotice('error', 'Could not open the session: ' + errorMessage(error))
@@ -666,6 +693,7 @@ export async function startTerminalApp(
     }
     try {
       const info = await llm.resolveModelInfo(provider, model)
+      contextWindow = info.context?.contextWindow
       const reasoning = info.reasoning
       let effort = modelSelection.current?.reasoningEffort
       if (effort !== undefined && reasoning?.efforts.some(candidate => candidate.id === effort) !== true)
@@ -2817,6 +2845,7 @@ export async function startTerminalApp(
         tui.start();
         tui.setFocus(editor);
         tui.requestRender();
+        void refreshContextWindow();
     }
     catch (error) {
         process.off('SIGTERM', onSignal);

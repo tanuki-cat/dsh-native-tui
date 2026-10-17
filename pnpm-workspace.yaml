@@ -78,3 +78,4 @@ minimumReleaseAgeExclude:
   - '@deepseek-ai/dsh-experimental-computer-use-cua-driver-native@0.2.1-rc.1'
   - '@deepseek-ai/dsh-mcp-client@0.2.1-rc.1'
   - '@deepseek-ai/dsh-mcp-resources@0.2.1-rc.1'
+  - '@deepseek-ai/dsh-session-stats@0.2.1-rc.1'
