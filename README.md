@@ -2,7 +2,7 @@
 
 DeepSeek Harness 的 host-native 终端前端，基于 pi-tui。
 
-> 状态：实施完成（30 轮 + 第三方模型引导 + 官方 MCP/computer-use 集成，86 个单元测试通过）；已知差距见进度记录。
+> 状态：实施完成（30 轮 + 第三方模型引导 + 官方 MCP/computer-use 集成，111 个单元测试通过）；已知差距见进度记录。
 > 目标：在 TUI 中提供 Web 模式的核心能力，而不是复制浏览器图形界面。
 > 架构说明与差距清单：[Host-native 方案](docs/design-task-feature-dsh-native-tui-host-native.md)。
 > 实施进度、验证证据与未验收项：[实施进度](docs/progress-dsh-native-tui.md)。
@@ -190,23 +190,23 @@ dsh --profile tui
 
 `/mcp add` 支持：
 
-- `stdio`：command、args（空格分隔或 JSON 数组）、env JSON
+- `stdio`：command、args（空格分隔或 JSON 数组）、env JSON；args/env 留空即表示无参数、无额外环境变量
 - `streamable-http`：URL、headers JSON
 
-配置写入 profile 的 `mcp-manager.servers`；mcp-manager 将每个条目映射为官方 `mcp-client` Loader row，并在 Loader fiber 激活后记录状态。
+配置写入 profile 的 `mcp-manager.servers`；mcp-manager 将每个条目映射为官方 `mcp-client` Loader row，并在 Loader fiber 激活后记录状态。settings 变更会实时 reconcile 这组 row，因此新增、修改、删除服务都无需重启 TUI。
 
 ```text
 /mcp list
 ```
 
-每行显示 `connected` / `starting` / `error: ...`。mcp-manager 使用 `failOnStartupError` 并 await fiber，因此初始连接失败会显示错误，而不是静默成功。当前状态反映初始连接；运行中后续断线由 mcp-client 自行重连，状态栏不推送实时状态变化。
+每行显示 `connected` / `starting` / `error: ...` / `disconnected: ...` / `not loaded`。mcp-manager 使用 `failOnStartupError` 并 await fiber，因此初始连接失败会显示错误，而不是静默成功。运行中 mcp-client 会自行重连：重连期间其工具保持注册，状态仍为 `connected`；一旦重连耗尽或禁用重连，mcp-client 注销该服务的工具，mcp-manager 通过 `tools/change` 观测到后标记 `disconnected`。
 
-新增配置需要重启一次 TUI 让 mcp-manager 重新载入 servers；之后 `/mcp list` 可查看初始连接状态。MCP tools 以 `mcp__<serverName>__<toolName>` 暴露。
+新增或修改配置后 mcp-manager 立即装载（`/mcp list` 会短暂显示 `not loaded`/`starting`），无需重启。MCP tools 以 `mcp__<serverName>__<toolName>` 暴露。
 
 ## 开发与验证
 
 ~~~sh
-pnpm check          # typecheck + 86 unit tests + build
+pnpm check          # typecheck + 111 unit tests + build
 pnpm test
 pnpm build
 ~~~
@@ -231,7 +231,7 @@ python3 scripts/pty-smoke.py
 
 ## 已知差距
 
-Plugin Manager 官方目录之外的市场搜索（官方目录浏览已实现）、PDF/Office 富文档预览（Markdown 已支持）、会话级附件管理器（当前覆盖 staged 附件）、远端连接尚未实现。computer-use 已经可用；MCP 运行中断线状态不实时推送；自动压缩已接入 preset 并有事件卡，但真实长上下文 E2E 仍需补。详见架构文档第 6 节。
+Plugin Manager 官方目录之外的市场搜索（官方目录浏览已实现）、PDF/Office 富文档预览（Markdown 已支持）、会话级附件管理器（当前覆盖 staged 附件）、远端连接尚未实现。computer-use 已经可用；MCP 状态覆盖初始激活与运行中的工具注销，但 `dsh-mcp-client` 未暴露"重连进行中"的中间态；自动压缩已接入 preset 并有事件卡，但真实长上下文 E2E 仍需补。详见架构文档第 6 节。
 
 ## 兼容性
 

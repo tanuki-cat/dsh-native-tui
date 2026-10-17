@@ -1,4 +1,18 @@
 import { stdin, stdout } from 'node:process'
+
+/** One placeholder tool so a client can exercise the full tools/list + tools/call path. */
+const TOOLS = [
+  {
+    name: 'echo',
+    description: 'Echo the provided text back',
+    inputSchema: {
+      type: 'object',
+      properties: { text: { type: 'string', description: 'Text to echo' } },
+      required: ['text'],
+    },
+  },
+]
+
 const send = (message) => { stdout.write(JSON.stringify(message) + '\n') }
 let buffer = ''
 stdin.setEncoding('utf8')
@@ -20,7 +34,18 @@ stdin.on('data', chunk => {
       } })
     }
     else if (message.method === 'tools/list') {
-      send({ jsonrpc: '2.0', id: message.id, result: { tools: [] } })
+      send({ jsonrpc: '2.0', id: message.id, result: { tools: TOOLS } })
+    }
+    else if (message.method === 'tools/call') {
+      if (message.params?.name !== 'echo') {
+        send({ jsonrpc: '2.0', id: message.id, error: { code: -32602, message: 'unknown tool: ' + String(message.params?.name) } })
+        continue
+      }
+      const text = String(message.params?.arguments?.text ?? '')
+      send({ jsonrpc: '2.0', id: message.id, result: {
+        content: [{ type: 'text', text: 'echo:' + text }],
+        structuredContent: { echoed: text },
+      } })
     }
     else if (message.method === 'ping') {
       send({ jsonrpc: '2.0', id: message.id, result: {} })

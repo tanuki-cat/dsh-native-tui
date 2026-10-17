@@ -122,7 +122,7 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - 官方目录之外的市场搜索未实现；官方 catalog 浏览和任意 spec 安装已实现。
 - PDF/Office 富文档预览未实现；Markdown/文本/图片已支持。
 - 远端连接未实现；当前是本地/SSH 终端使用。
-- MCP 状态只覆盖初始连接；运行中断线/重连状态不实时回推。
+- MCP 连接状态覆盖初始激活与运行中的工具注销（重连耗尽或禁用重连）；`dsh-mcp-client` 未暴露"重连进行中"的中间态，因此重连期间仍显示 connected。
 - Computer-use 已经可用（用户实机验证）。
 - 自动上下文压缩已接入 preset 并有事件渲染；真实长上下文自动触发仍缺 E2E 验收。
 - 生产与开发依赖已统一为 `0.2.1-rc.2`。
@@ -194,14 +194,12 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 
 ## 9. 剩余事项（2026-10-17 审查记录）
 
-当前代码与 86 个测试通过；以下按优先级保留，不再混入已完成项。
+当前代码与 111 个测试通过（25 个测试文件）；以下按优先级保留，不再混入已完成项。
 
 ### P1
 
-- [ ] **MCP 运行时状态**：目前只有初始 fiber 激活状态，运行中断线/重连不会回推；新增 MCP server 仍需重启 TUI 才装载。需要把 settings 更新映射为 manager reconcile，并补 connect/disconnect 事件。
 - [ ] **自动压缩 E2E**：用低 context window 模型跑多轮长历史，断言 compaction start/summary/end/prune、下一轮请求 token 下降、context 百分比下降；当前只验证 preset wiring、手动 `/compact` 和事件渲染。
 - [ ] **Settings 覆盖完整化**：当前 wizard 覆盖 thinking/run_code/transcript entries/theme/fullscreen；title、cwd、sessionId、showReasoning 仍需 profile YAML 或高级命令。`Host settings…` 仍只是 namespace 列表，不是完整内嵌编辑器。
-- [ ] **MCP 真实工具调用**：保留为用户侧已可用；仓库内仍缺真实 server tools/call 的自动化 E2E。
 
 ### P2
 
@@ -226,4 +224,10 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - [x] computer-use 用户侧实机可用。
 - [x] approval dialog allow/reject/cancel 与 reason 渲染测试。
 - [x] MCP fiber 激活失败 Loader row 清理。
+- [x] MCP settings 实时 reconcile：`settings/document-updated` 驱动 manager 对新增/修改/删除 server 就地装载或卸载，不再需要重启 TUI；`tools/change` 加工具集合驱动 connect/disconnect 回推（mcp-manager 共 13 个单测）。
+- [x] MCP 真实 tools/call E2E：`scripts/mcp-tools-call-e2e.mjs` 用真实 cordis 加官方 mcp-client 连接 `scripts/fake-mcp-stdio.mjs`，断言 `mcp__demo__echo` 的 stdio 往返结果。
+- [x] MCP 真实 TUI 回归：`scripts/fake-tty-mcp.mjs` 以绝对路径 `node` 启动 `scripts/fake-mcp-stdio.mjs`，`/mcp add` 后**不重启**直接 `/mcp list` 显示 `connected`，证明 settings → reconcile 与状态回推在真实 Host 中生效。
+- [x] 修复 MCP 状态探测导致的误判：mcp-manager 原先直接读 `ctx.tools`，但它未 inject `tools`，而 Cordis 代理对未注入服务读属性会抛 `cannot get property "tools" without inject`，使连接成功的 server 被判为 error 并卸载。改为 `ctx.get('tools')` 并对探测失败完全容错；单测补了对应回归防护（mock 复现该抛错行为）。
+- [x] 修复 `/mcp add`（stdio）参数输入：arguments/environment 原先预填 `[]`/`{}`，用户输入会被插到前面并保存成 `path[]`，导致 `Cannot find module ...path[]`。改为不预填、由 placeholder 提示，并让 `showTextInput` 支持空提交（新增 `allowEmpty`），回车即表示无参数/无额外环境变量。
+- [x] MCP 真实服务器实测：官方 mcp-client 直连 profile 中的 `idea`（streamable-http，`127.0.0.1:64342/stream`），注册 67 个工具，`get_all_open_file_paths`、`get_project_modules` 两次只读 `tools/call` 均返回真实数据。IDEA 侧要求显式 `projectPath`，未传时以业务错误返回当前打开项目列表。
 - [x] compaction 事件卡片、`/compact` 输出去重、context 近似扣减。

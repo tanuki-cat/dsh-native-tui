@@ -293,7 +293,7 @@ interface WorkspaceChangesService {
 }
 
 interface McpManagerStatus {
-  snapshot(): Record<string, { readonly status: 'starting' | 'connected' | 'error'; readonly error?: string }>
+  snapshot(): Record<string, { readonly status: 'starting' | 'connected' | 'disconnected' | 'error'; readonly error?: string }>
 }
 
 interface SessionProjectionsService {
@@ -2321,10 +2321,11 @@ export async function startTerminalApp(
                             : typeof raw.url === 'string' ? raw.url : '';
                         const state = runtime[name];
                         const status = state === undefined
-                            ? palette.dim('not loaded (restart TUI)')
+                            ? palette.dim('not loaded')
                             : state.status === 'connected' ? palette.success('connected')
                                 : state.status === 'error' ? palette.error('error: ' + (state.error ?? 'unknown').slice(0, 120))
-                                    : palette.warning('starting');
+                                    : state.status === 'disconnected' ? palette.error('disconnected: ' + (state.error ?? 'unknown').slice(0, 110))
+                                        : palette.warning('starting');
                         const targetText = target.length > 72 ? target.slice(0, 69) + '...' : target;
                         return name + '  ' + transport + (targetText === '' ? '' : '  ' + targetText) + '  ' + status;
                     });
@@ -2362,7 +2363,7 @@ export async function startTerminalApp(
                             pushNotice('warning', 'MCP command must not be empty.');
                             return;
                         }
-                        const argsRaw = await showTextInput(tui, palette, 'MCP arguments', '[]', 'Space-separated, or a JSON string array; optional · Esc cancels', interactionAbort.signal, '[]');
+                        const argsRaw = await showTextInput(tui, palette, 'MCP arguments', '[]', 'Space-separated, or a JSON string array; empty uses no arguments · Esc cancels', interactionAbort.signal, undefined, true);
                         if (argsRaw === undefined)
                             return;
                         let argsValue: string[] = [];
@@ -2378,7 +2379,7 @@ export async function startTerminalApp(
                                 return;
                             }
                         }
-                        const envRaw = await showTextInput(tui, palette, 'MCP environment JSON', '{}', 'Optional JSON object; values merge over the scrubbed environment · Esc cancels', interactionAbort.signal, '{}');
+                        const envRaw = await showTextInput(tui, palette, 'MCP environment JSON', '{}', 'Optional JSON object; empty merges nothing over the scrubbed environment · Esc cancels', interactionAbort.signal, undefined, true);
                         if (envRaw === undefined)
                             return;
                         pushNotice('info', 'Applying MCP server ' + name + '…');
@@ -2437,7 +2438,7 @@ export async function startTerminalApp(
                     }
                     try {
                         await settings.update('mcp-manager', { servers: { [name]: config } }, descriptor.revision);
-                        pushNotice('info', 'MCP server saved: ' + name + ' · ' + transport + '. Restart the TUI, then /mcp list shows its connection status.');
+                        pushNotice('info', 'MCP server saved: ' + name + ' · ' + transport + '. The manager loads it now; /mcp list shows its connection status.');
                     }
                     catch (error) {
                         pushNotice('error', 'Could not save MCP server: ' + errorMessage(error));
@@ -2458,7 +2459,7 @@ export async function startTerminalApp(
                         return;
                     try {
                         await settings.mutate('mcp-manager', [{ op: 'unset', path: ['servers', name] }], descriptor.revision);
-                        pushNotice('info', 'MCP server removed: ' + name);
+                        pushNotice('info', 'MCP server removed: ' + name + '. Its client row is unloaded.');
                     }
                     catch (error) {
                         pushNotice('error', 'Could not remove MCP server: ' + errorMessage(error));

@@ -269,6 +269,7 @@ export function showTextInput(
   hint: string,
   signal?: AbortSignal,
   initialValue?: string,
+  allowEmpty?: boolean,
 ): Promise<string | undefined> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted === true) {
@@ -290,7 +291,7 @@ export function showTextInput(
       handle = tui.showOverlay(dialog, { width: 76, maxHeight: '80%', anchor: 'center' })
       dialog.input.onSubmit = value => {
         const trimmed = value.trim()
-        finish(trimmed === '' ? undefined : trimmed)
+        finish(trimmed === '' && allowEmpty !== true ? undefined : trimmed)
       }
       dialog.input.onEscape = () => { finish(undefined) }
     } catch (error) {
