@@ -92,13 +92,15 @@
 - 本地命令：/help、/new、/sessions、/resume、/status、/clear、/cancel、/model、/reasoning、/provider、/permissions、/jobs、/agents、/exit、/quit；裸 `exit` / `quit` 也退出。slash 命令支持子命令补全：精确命令后显示其 subcommands，命令后参数位置按前缀过滤。
 - 宿主命令：通过 ctx.commands.execute 执行；Base 实际注册了 /compact、/feedback、/goal、/permission、/plan。
 - /model：列出 LLM catalog；目录为空时明确说明；支持直接输入 provider/model；通过 installModelSelection 接入下一 step 路由，并调用 agentDefaultModel.saveSelection 持久化默认选择。
-- /provider add：引导配置 custom OpenAI/Responses/Anthropic gateway 或 built-in pi-ai catalog route；Credential source 支持 Store API key（写 DSH credential store，0600，不写 profile）或 UPPERCASE env 引用；env 未设置或形似 key 时拒绝保存。custom gateway 在保存前调用 Host `discoverModels` 读取 `/models`，**把发现列表中的其他模型也写入 route**，选择本次模型后为它写 Input modalities、Reasoning levels、`input` 与 `reasoningEfforts`；已有 route 重跑时默认 merge，保留其他模型；/provider list|remove 管理 route。
+- /provider add：引导配置 custom OpenAI/Responses/Anthropic gateway 或 built-in pi-ai catalog route；Credential source 支持 Store API key（写 DSH credential store，0600，不写 profile）或 UPPERCASE env 引用；env 未设置或形似 key 时拒绝保存。custom gateway 在保存前调用 Host `discoverModels` 读取 `/models`，**把发现列表中的其他模型也写入 route**，选择本次模型后为它写 Input modalities、Reasoning levels、`input` 与 `reasoningEfforts`；已有 route 重跑时默认 merge，保留其他模型。
+- /provider edit|models：打开已有 provider 或直接按 route 调用 `discoverModels({ provider, baseURL, api })`，使用已存 credential 获取模型并合并：新模型追加、已有模型更新容量、保留既有 input/reasoningEfforts；/provider list|remove 管理 route。
 - /reasoning：读取 `resolveModelInfo().reasoning.efforts`，列出/切换当前模型的 reasoning effort；写入 `ModelSelectionRef.current.reasoningEffort`，下一 step 生效；`default` 清除显式 effort；变更同时通过 agentDefaultModel.saveSelection 持久化。
 - 已验证 dummy `TEST_ROUTE_API_KEY` 下 `/provider add` → `/model` 选中 `test-route/test-model`；`/provider remove` 写回 `providers: {}`。
 - 已验证本地 HTTP `/v1/models` 自动发现 → 选择 auto-model → 写入 64000/8192 容量并直接选中；已验证裸 `quit` 退出。
 - 已验证 Store API key → credential store → stored-model 自动发现/选中，`/provider list` 显示 `(stored)`。
 - mock SSE 端到端验证运行中 Esc：取消后状态 idle、显示 `! Turn cancelled`，HTTP 请求关闭。
 - `/provider add` 自动发现后选择 Text + image，profile 写入 `input: [text, image]`；Reasoning levels=`low,medium,high` 写入 `reasoningEfforts`；auto-route 同时保存 auto-model + auto-small 两个模型。
+- 已验证 `/provider models fetch-route` 获取 2 个模型并 merge：`1 added, 1 refreshed`。
 - 已验证 `/reasoning high` 后状态栏显示 `effort high`，`/status` 显示 `Reasoning: high`。
 - 已验证 `/provider` 补全显示 add/list/remove，`/provider re` 过滤为 remove。
 - 已验证 `/preset minimal` 写入 `selectedDefault`，重启后仍以 minimal 创建 Session。

@@ -2,7 +2,7 @@
 
 DeepSeek Harness 的 host-native 终端前端，基于 pi-tui。
 
-> 状态：实施完成（30 轮 + 第三方模型引导，68 个单元测试通过）；已知差距见进度记录。  
+> 状态：实施完成（30 轮 + 第三方模型引导，69 个单元测试通过）；已知差距见进度记录。  
 > 目标：在 TUI 中提供 Web 模式的核心能力，而不是复制浏览器图形界面。  
 > 架构说明与差距清单：[Host-native 方案](docs/design-task-feature-dsh-native-tui-host-native.md)。  
 > 实施进度、验证证据与未验收项：[实施进度](docs/progress-dsh-native-tui.md)。
@@ -57,7 +57,7 @@ DSH Host 包由当前 dsh 安装提供；本插件只把 pi-tui 与 schemastery 
 | /cancel | 取消当前 turn |
 | /model [provider/model] | 列出或切换模型；选择同时保存为默认模型 |
 | /reasoning [effort|default] | 列出或切换当前模型的思考强度并保存；default 清除显式 effort |
-| /provider [add|list|remove <route>] | 引导配置/查看/删除第三方模型 provider |
+| /provider [add|list|edit [route]|models <route>|remove <route>] | 配置/查看 provider；打开配置获取可用模型；刷新或删除 route |
 | /permissions [preset] | 列出或切换权限预设 |
 | /jobs [kill <id>] | 列出或终止后台任务 |
 | /agents | 列出直接子代理 |
@@ -146,12 +146,22 @@ dsh --profile tui
 
 `/provider list` 显示已配置 route、可见模型数以及 credential 状态（`(stored)` / `(not set)`）；`/provider remove <route>` 删除 route。若 `/model` 仍为空，确认 credential 可用；llm-pi-ai 在凭据缺失时会故意返回空模型列表。
 
+刷新已有 provider 的模型目录：
+
+```text
+/provider
+/provider edit command-code
+/provider models command-code
+```
+
+`/provider` 打开 provider 选择；`edit` 进入配置菜单（Fetch available models）；`models` 直接获取。查询使用已保存的 baseURL/API 协议/credential，把 endpoint 返回的模型合并进 route：新模型追加，已有模型更新容量，保留已有 input/reasoningEfforts。
+
 **不要在 env 模式把 key 填进变量名。** 流程要求 UPPERCASE 环境变量名，并拒绝形似 key 的输入。若旧配置已经把 key 写入 `apiKeyEnv`，立即执行 `/provider remove <route>`，检查 `cordis.patch.yml` 中对应配置，并轮换该 key。手工 JSON 配置仍可通过 `/settings set llm-pi-ai ...` 或 Web Models page 完成。
 
 ## 开发与验证
 
 ~~~sh
-pnpm check          # typecheck + 68 unit tests + build
+pnpm check          # typecheck + 69 unit tests + build
 pnpm test
 pnpm build
 ~~~

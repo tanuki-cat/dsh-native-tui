@@ -4,6 +4,7 @@ import {
   buildCustomProvider,
   isValidEnvName,
   isValidProviderRoute,
+  mergeDiscoveredProviderModels,
   mergeProviderModel,
   mergeProviderProfiles,
   normalizeBaseURL,
@@ -103,6 +104,39 @@ describe('provider config helpers', () => {
     expect((merged.models as readonly { id: string }[]).map(model => model.id)).toEqual(['old-model', 'new-model'])
     const replaced = mergeProviderModel(existing, { ...next, models: [{ id: 'old-model', name: 'Updated' }] })
     expect(replaced.models).toEqual([{ id: 'old-model', name: 'Updated' }])
+  })
+
+  it('upserts discovered models while preserving existing model settings', () => {
+    const existing = {
+      api: 'openai-completions',
+      baseURL: 'https://api.example.com/v1',
+      apiKeyEnv: 'EXISTING_KEY',
+      models: [{
+        id: 'old-model',
+        name: 'Old',
+        contextWindow: 32000,
+        maxTokens: 4096,
+        input: ['text', 'image'],
+        reasoningEfforts: { high: 'high' },
+      }],
+    }
+    const merged = mergeDiscoveredProviderModels(existing, [
+      { id: 'old-model', name: 'Old updated', contextWindow: 64000, maxTokens: 8192 },
+      { id: 'new-model', name: 'New', contextWindow: 16000, maxTokens: 2048, inputModalities: ['text'] },
+    ])
+    expect(merged.added).toBe(1)
+    expect(merged.updated).toBe(1)
+    expect(merged.provider.models).toEqual([
+      {
+        id: 'old-model',
+        name: 'Old updated',
+        contextWindow: 64000,
+        maxTokens: 8192,
+        input: ['text', 'image'],
+        reasoningEfforts: { high: 'high' },
+      },
+      { id: 'new-model', name: 'New', contextWindow: 16000, maxTokens: 2048, input: ['text'] },
+    ])
   })
 
   it('merges routes without dropping existing providers', () => {

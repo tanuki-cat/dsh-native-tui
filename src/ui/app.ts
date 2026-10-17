@@ -32,6 +32,7 @@ import {
   buildCustomProvider,
   isValidEnvName,
   isValidProviderRoute,
+  mergeDiscoveredProviderModels,
   mergeProviderModel,
   parseReasoningLevels,
   type ProviderProtocol,
@@ -105,9 +106,11 @@ const LOCAL_COMMANDS: readonly CommandSuggestion[] = [
     { name: 'items', description: 'edit an array item', hint: '<ns> <field>' },
     { name: 'set', description: 'merge JSON into a namespace', hint: '<ns> <json>' },
   ] },
-  { name: 'provider', description: 'guided third-party model provider setup', input: { hint: '[add|list|remove <route>]' }, subcommands: [
-    { name: 'add', description: 'guide a new provider route', hint: '' },
+  { name: 'provider', description: 'guided third-party model provider setup', input: { hint: '[add|list|edit|models|remove <route>]' }, subcommands: [
+    { name: 'add', description: 'guide a new provider route' },
     { name: 'list', description: 'list configured providers' },
+    { name: 'edit', description: 'open a provider and fetch its models', hint: '[route]' },
+    { name: 'models', description: 'refresh models for a provider route', hint: '<route>' },
     { name: 'remove', description: 'delete a provider route', hint: '<route>' },
   ] },
   { name: 'export', description: 'export JSONL, ZIP bundle, or static HTML', input: { hint: '[path|zip [path]|html [path]]' } },
@@ -694,7 +697,7 @@ export async function startTerminalApp(
           'Local commands:',
           '/help · /new · /sessions · /resume [id] · /status · /clear',
           '/exit · /quit (or bare exit/quit)',
-          '/cancel · /model [provider/model] · /reasoning [effort] · /provider [add|list|remove <route>]',
+          '/cancel · /model [provider/model] · /reasoning [effort] · /provider [add|list|edit|models|remove <route>]',
           '/permissions [preset]',
           '/jobs [kill <id>] · /agents · /preset [id]',
           '/plugins [list|market [q]|inspect <spec>|install <spec>|remove <bundle>|enable <id>|disable <id>] · /exit',
@@ -2140,7 +2143,76 @@ export async function startTerminalApp(
                 const providerRecord: Record<string, unknown> = currentProviders !== null && typeof currentProviders === 'object' && !Array.isArray(currentProviders)
                     ? currentProviders as Record<string, unknown>
                     : {};
-                if (args === 'list' || (args === '' && providerRecord !== undefined)) {
+                const chooseProviderRoute = async (title: string): Promise<string | undefined> => {
+                    const routes = Object.keys(providerRecord);
+                    if (routes.length === 0) {
+                        pushNotice('info', 'No third-party providers configured. Use /provider add.');
+                        return undefined;
+                    }
+                    return showChoice(tui, palette, title, routes.map(route => ({
+                        value: route,
+                        label: route,
+                        description: 'open provider configuration',
+                    })), 'Enter opens · Esc cancels', interactionAbort.signal);
+                };
+                const fetchProviderModels = async (route: string): Promise<void> => {
+                    const latest = settings.describe({ redactSecrets: true }).find(row => row.ns === 'llm-pi-ai');
+                    const providers = latest?.value.providers;
+                    const raw = providers !== null && typeof providers === 'object' && !Array.isArray(providers)
+                        ? (providers as Record<string, unknown>)[route]
+                        : undefined;
+                    if (latest === undefined || raw === undefined) {
+                        pushNotice('warning', 'No configured provider route "' + route + '".');
+                        return;
+                    }
+                    const profile = raw !== null && typeof raw === 'object'
+                        ? raw as { readonly baseURL?: unknown; readonly api?: unknown }
+                        : {};
+                    pushNotice('info', 'Fetching available models for ' + route + '…');
+                    const discoveryAbort = new AbortController();
+                    const timeout = setTimeout(() => discoveryAbort.abort(), 8000);
+                    let discovered: readonly { readonly id: string; readonly name?: string; readonly contextWindow?: number; readonly maxTokens?: number; readonly inputModalities?: readonly ('text' | 'image')[] }[] = [];
+                    try {
+                        discovered = await llm.discoverModels('llm-pi-ai', {
+                            provider: route,
+                            ...(typeof profile.baseURL === 'string' ? { baseURL: profile.baseURL } : {}),
+                            ...(typeof profile.api === 'string' ? { api: profile.api } : {}),
+                        }, AbortSignal.any([interactionAbort.signal, discoveryAbort.signal]));
+                    }
+                    catch (error) {
+                        pushNotice('error', 'Could not fetch models for ' + route + ': ' + errorMessage(error));
+                        return;
+                    }
+                    finally {
+                        clearTimeout(timeout);
+                    }
+                    if (discovered.length === 0) {
+                        pushNotice('warning', 'The provider returned no models for ' + route + '.');
+                        return;
+                    }
+                    const merged = mergeDiscoveredProviderModels(raw, discovered);
+                    try {
+                        await settings.mutate('llm-pi-ai', [{ op: 'set', path: ['providers', route], value: merged.provider }], latest.revision);
+                    }
+                    catch (error) {
+                        pushNotice('error', 'Fetched models but could not save them: ' + errorMessage(error));
+                        return;
+                    }
+                    pushNotice('info', 'Fetched ' + String(discovered.length) + ' model(s) for ' + route + ': ' + String(merged.added) + ' added, ' + String(merged.updated) + ' refreshed. Use /model to switch.');
+                };
+                const editProvider = async (route: string): Promise<void> => {
+                    if (!Object.hasOwn(providerRecord, route)) {
+                        pushNotice('warning', 'No configured provider route "' + route + '".');
+                        return;
+                    }
+                    const action = await showChoice(tui, palette, 'Provider ' + route, [
+                        { value: 'fetch', label: 'Fetch available models', description: 'Discover models from the configured endpoint and merge them into this route' },
+                        { value: 'cancel', label: 'Cancel' },
+                    ], 'Enter selects · Esc cancels', interactionAbort.signal);
+                    if (action === 'fetch')
+                        await fetchProviderModels(route);
+                };
+                if (args === 'list') {
                     const entries = Object.entries(providerRecord);
                     if (entries.length === 0) {
                         pushNotice('info', 'No third-party providers configured. Use /provider add.');
@@ -2182,7 +2254,32 @@ export async function startTerminalApp(
                         rows.push(route + '  ' + String(count) + ' model(s)' + envState);
                     }
                     pushNotice('info', 'Configured third-party providers:' + NL + rows.join(NL)
-                        + NL + 'Use /provider add to add one, /provider remove <route> to delete one.');
+                        + NL + 'Use /provider add to add one, /provider edit <route> to fetch models, /provider remove <route> to delete one.');
+                    return;
+                }
+                if (args === '') {
+                    const route = await chooseProviderRoute('Open provider');
+                    if (route !== undefined)
+                        await editProvider(route);
+                    return;
+                }
+                if (args === 'edit' || args.startsWith('edit ')) {
+                    const route = args === 'edit' ? await chooseProviderRoute('Open provider') : args.slice('edit '.length).trim();
+                    if (route !== undefined)
+                        await editProvider(route);
+                    return;
+                }
+                if (args === 'models' || args.startsWith('models ')) {
+                    const route = args === 'models' ? undefined : args.slice('models '.length).trim();
+                    if (route === undefined || route === '') {
+                        pushNotice('warning', 'Usage: /provider models <route>');
+                        return;
+                    }
+                    if (!isValidProviderRoute(route)) {
+                        pushNotice('warning', 'Invalid provider route "' + route + '".');
+                        return;
+                    }
+                    await fetchProviderModels(route);
                     return;
                 }
                 if (args.startsWith('remove ')) {
@@ -2211,7 +2308,7 @@ export async function startTerminalApp(
                     return;
                 }
                 if (args !== '' && args !== 'add') {
-                    pushNotice('warning', 'Usage: /provider [add | list | remove <route>]');
+                    pushNotice('warning', 'Usage: /provider [add | list | edit [route] | models <route> | remove <route>]');
                     return;
                 }
                 try {

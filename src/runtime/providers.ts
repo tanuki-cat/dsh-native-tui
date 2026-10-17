@@ -126,7 +126,6 @@ export function parseReasoningLevels(raw: string): Record<string, string | null>
   return Object.fromEntries(levels.map(level => [level, level === 'off' ? null : level]))
 }
 
-/** Build a catalog-route profile that only names a credential. */
 /**
  * Merge one guided model into an existing hand-declared route without
  * discarding models the operator configured earlier. A matching id is
@@ -153,6 +152,69 @@ export function mergeProviderModel(existing: unknown, next: Record<string, unkno
     if (typeof model.id === 'string') byId.set(model.id, model)
   }
   return { ...base, ...next, models: [...byId.values()] }
+}
+
+/** One model returned by endpoint discovery, as used by an existing route. */
+export interface DiscoveredProviderModel {
+  readonly id: string
+  readonly name?: string
+  readonly contextWindow?: number
+  readonly maxTokens?: number
+  readonly inputModalities?: readonly string[]
+}
+
+/** Result of refreshing one existing provider route from its model listing. */
+export interface MergedDiscoveredModels {
+  readonly provider: Record<string, unknown>
+  readonly added: number
+  readonly updated: number
+}
+
+/**
+ * Upsert every endpoint-discovered model into an existing route profile.
+ * Existing model settings (reasoning maps, custom input) survive a refresh;
+ * discovered capacities and names replace stale metadata.
+ * @param existing - current route profile.
+ * @param discovered - models returned by discovery.
+ * @returns the updated provider plus added and updated counts.
+ */
+export function mergeDiscoveredProviderModels(
+  existing: unknown,
+  discovered: readonly DiscoveredProviderModel[],
+): MergedDiscoveredModels {
+  const base = existing !== null && typeof existing === 'object' && !Array.isArray(existing)
+    ? { ...(existing as Record<string, unknown>) }
+    : {}
+  const models = Array.isArray(base.models)
+    ? base.models.filter((model): model is Record<string, unknown> => model !== null && typeof model === 'object' && !Array.isArray(model))
+    : []
+  const byId = new Map<string, Record<string, unknown>>()
+  for (const model of models) {
+    if (typeof model.id === 'string') byId.set(model.id, model)
+  }
+  let added = 0
+  let updated = 0
+  for (const candidate of discovered) {
+    if (candidate.id.trim() === '') continue
+    const current = byId.get(candidate.id)
+    const input = candidate.inputModalities?.filter(modality => modality === 'text' || modality === 'image')
+    const next: Record<string, unknown> = {
+      ...(current ?? {}),
+      id: candidate.id,
+      name: candidate.name ?? (typeof current?.name === 'string' ? current.name : candidate.id),
+      contextWindow: typeof candidate.contextWindow === 'number' && candidate.contextWindow > 0
+        ? candidate.contextWindow
+        : (typeof current?.contextWindow === 'number' ? current.contextWindow : 128000),
+      maxTokens: typeof candidate.maxTokens === 'number' && candidate.maxTokens > 0
+        ? candidate.maxTokens
+        : (typeof current?.maxTokens === 'number' ? current.maxTokens : 16384),
+      ...(current?.input === undefined && input !== undefined && input.length > 0 ? { input } : {}),
+    }
+    if (current === undefined) added += 1
+    else updated += 1
+    byId.set(candidate.id, next)
+  }
+  return { provider: { ...base, models: [...byId.values()] }, added, updated }
 }
 
 /** Build a catalog-route profile that only names a credential. */
