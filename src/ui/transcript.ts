@@ -409,13 +409,19 @@ export class TranscriptRenderer {
   readonly container = new Container()
   private entries: readonly TranscriptEntry[] = []
   private extra: readonly TranscriptBlock[] = []
-  private readonly options: TranscriptOptions
+  private options: TranscriptOptions
 
   /**
    * @param options - reduction and styling options.
    */
   constructor(options: TranscriptOptions) {
     this.options = options
+  }
+
+  /** Switch reasoning/run_code density and rebuild the existing event window. */
+  setDisplayModes(thinkingDisplay: DisplayMode, runCodeDisplay: DisplayMode): void {
+    this.options = { ...this.options, thinkingDisplay, runCodeDisplay }
+    this.rebuild()
   }
 
   /** Replace both the event window and local notices in one rebuild. */

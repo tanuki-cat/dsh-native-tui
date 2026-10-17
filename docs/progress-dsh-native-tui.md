@@ -62,7 +62,7 @@ pnpm check
   tsc -p tsconfig.build.json
 
 Test Files  17 passed (17)
-Tests       80 passed (80)
+Tests       81 passed (81)
 ```
 
 ### 安装与启动
@@ -106,7 +106,7 @@ src/index.ts                 Cordis 入口、TTY 守卫
 src/config.ts                schemastery 配置、fullscreen
 src/runtime/                 agent/session、attachments、bundle、html、images、open、providers、settings、tool-log
 src/ui/                      app、autocomplete、dialogs、transcript、diff、theme
-tests/                       23 个测试文件，80 个测试
+tests/                       23 个测试文件，81 个测试
 scripts/fake-tty-*.mjs       fake-TTY 验证脚本
 README.md
 docs/design-task-feature-dsh-native-tui-host-native.md
@@ -164,6 +164,7 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - 已验证退出后终端恢复并输出：`Session: <id>` 和 `Resume: dsh --profile tui --resume <id>`；用该命令重新启动可恢复同一 Session。
 - 已验证 `--resume <id>` 与 profile 的 `sessionId` 配置共存时，CLI 参数优先。
 - 已验证 `thinkingDisplay` / `runCodeDisplay` 的 hidden/compact/detailed 解析与渲染：compact 只保留首行/摘要，hidden 完全移除对应块。
+- 已验证 `/settings` 独立 TUI settings 弹窗：显示当前 thinking/run_code 模式，选择后通过 native-tui volatile settings 立即生效并持久化；`/settings host` 保留高级 Host settings 入口。
 
 ## 7. 建议验收步骤
 
@@ -183,4 +184,4 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 | 14–20 | Plugin remove/market、剪贴板图片、图片预览、alt-screen、`@@session` |
 | 21–25 | 附件预览、ZIP/HTML 导出、Deliverables reveal、工具结果 pager、Markdown |
 | 26–30 | 独立 Diff、附件管理器、Settings 数组、Deliverables panel、收尾验证 |
-| 后续 | 第三方模型 `/provider add|list|edit|models|remove` 引导与自动模型发现，23 个测试文件 / 80 个测试 |
+| 后续 | 第三方模型 `/provider add|list|edit|models|remove` 引导与自动模型发现，23 个测试文件 / 81 个测试 |

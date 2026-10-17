@@ -1,5 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
-import { Config, parseResumeArg, resolveConfig, type Config as TuiConfig } from './config.js'
+import { Config, parseResumeArg, resolveConfig, resolveDisplayMode, type Config as TuiConfig } from './config.js'
 import { startTerminalApp, type TerminalApp } from './ui/app.js'
 import { debug } from './debug.js'
 
@@ -43,6 +43,18 @@ export async function apply(ctx: Context, config: TuiConfig): Promise<void> {
   const resolved = resolveConfig(resume === undefined ? config : { ...config, sessionId: resume })
   let app: TerminalApp | undefined
   let exiting = false
+  const syncDisplayModes = (): void => {
+    const thinking = resolveDisplayMode(config.thinkingDisplay) ?? (config.showReasoning === false ? 'hidden' : 'detailed')
+    const runCode = resolveDisplayMode(config.runCodeDisplay) ?? 'detailed'
+    app?.setDisplayModes(thinking, runCode)
+  }
+  ctx.inject(['settings'], (child) => {
+    const settings = (child as unknown as { settings: { configure(options: Record<string, unknown>, fiber: unknown): () => void } }).settings
+    child.effect(() => settings.configure({ auto: false }, ctx.fiber))
+  })
+  const offSettings = (ctx as unknown as { on(event: string, callback: (ns: string) => void): () => void })
+    .on('settings/document-updated', (ns) => { if (ns === 'native-tui') syncDisplayModes() })
+  ctx.effect(() => offSettings)
 
   const exit = (code: number): void => {
     if (exiting) return
@@ -55,6 +67,7 @@ export async function apply(ctx: Context, config: TuiConfig): Promise<void> {
   try {
     debug('apply: starting terminal')
     app = await startTerminalApp(ctx, resolved, exit)
+    syncDisplayModes()
     debug('apply: terminal started')
   } catch (error) {
     throw error

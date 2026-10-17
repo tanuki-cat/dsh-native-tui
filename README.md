@@ -2,7 +2,7 @@
 
 DeepSeek Harness 的 host-native 终端前端，基于 pi-tui。
 
-> 状态：实施完成（30 轮 + 第三方模型引导 + 官方 MCP/computer-use 集成，80 个单元测试通过）；已知差距见进度记录。
+> 状态：实施完成（30 轮 + 第三方模型引导 + 官方 MCP/computer-use 集成，81 个单元测试通过）；已知差距见进度记录。
 > 目标：在 TUI 中提供 Web 模式的核心能力，而不是复制浏览器图形界面。
 > 架构说明与差距清单：[Host-native 方案](docs/design-task-feature-dsh-native-tui-host-native.md)。
 > 实施进度、验证证据与未验收项：[实施进度](docs/progress-dsh-native-tui.md)。
@@ -74,7 +74,7 @@ DSH Host 包由当前 dsh 安装提供；插件运行时还依赖 pi-tui、schem
 | /workspaces [new <path>|use <id|path>|pin|unpin|archive|unarchive] | 列出/创建/切换/固定/归档 workspace 会话 |
 | /schedule [add <seconds> <title>|delete <id>] | 列出/创建/删除一次性提醒 |
 | /plugins [list|market [query]|inspect <spec>|install <spec>|remove <bundle>|enable <entryId>|disable <entryId>] | 列出、浏览官方市场、检查/安装/移除 bundle，或启停插件项 |
-| /settings [edit <ns>|items <ns> <field>|set <ns> <json>] | 字段编辑、数组项编辑，或 JSON 合并写入 |
+| /settings [tui|host|edit <ns>|items <ns> <field>|set <ns> <json>] | `tui` 打开基础显示配置弹窗；`host`/`edit`/`items`/`set` 进入高级 Host settings |
 | /export [path|zip [path]|html [path]] | 导出 JSONL、ZIP bundle，或静态 HTML transcript（不覆盖已有文件） |
 | /open <path> | 预览文本（16 KiB 上限）；Markdown 渲染为样式化分页 |
 | /files [path] | 目录浏览：Enter 进入目录/预览文件，Esc 退出，含 ../ |
@@ -112,6 +112,8 @@ Enter 发送；运行中 Enter 作为 steer；Ctrl+C 取消/退出；Ctrl+D 退�
 - `hidden`：不渲染 reasoning / `run_code` 块。
 - `compact`：reasoning 只显示首行摘要；`run_code` 只显示状态 + description/code 单行摘要。
 - `detailed`：当前完整 reasoning 区带与 `run_code` args/result 卡片。
+
+`/settings` 默认打开 **TUI settings** 独立弹窗，可修改上述两个显示模式并立即生效；`/settings host` 查看高级 Host settings 命名空间，原有的 `/settings edit|items|set` 仍可用。
 
 默认模型来自 Host 的 ctx.agentDefaultModel（Base 默认 deepseek-official/deepseek-flash）。没有凭据时首个请求会显示 MISSING_CREDENTIAL。
 
@@ -203,7 +205,7 @@ dsh --profile tui
 ## 开发与验证
 
 ~~~sh
-pnpm check          # typecheck + 80 unit tests + build
+pnpm check          # typecheck + 81 unit tests + build
 pnpm test
 pnpm build
 ~~~

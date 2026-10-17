@@ -1,7 +1,11 @@
 import z from '@deepseek-ai/schemastery'
+import type { Volatile } from '@deepseek-ai/cordis'
 
 /** How one optional transcript block is rendered. */
 export type DisplayMode = 'hidden' | 'compact' | 'detailed'
+
+/** Display mode value in direct config or Loader volatile form. */
+type DisplayConfig = DisplayMode | Volatile<DisplayMode>
 
 /** Terminal presentation and startup configuration. */
 export interface Config {
@@ -12,9 +16,9 @@ export interface Config {
   /** Legacy boolean: false hides reasoning unless thinkingDisplay is explicitly set. */
   showReasoning?: boolean
   /** Reasoning/thinking block rendering: hidden, compact one-line preview, or detailed. */
-  thinkingDisplay?: DisplayMode
+  thinkingDisplay?: DisplayConfig
   /** run_code tool block rendering: hidden, compact summary, or detailed arguments/result. */
-  runCodeDisplay?: DisplayMode
+  runCodeDisplay?: DisplayConfig
   /** Maximum transcript entries retained in the terminal view. */
   maxTranscriptEntries?: number
   /** Use the alternate screen with application-owned scrolling and mouse support. */
@@ -74,8 +78,8 @@ export const Config = z.object({
   sessionId: z.string(),
   cwd: z.string(),
   showReasoning: z.boolean().default(true),
-  thinkingDisplay: z.union(['hidden', 'compact', 'detailed'] as const),
-  runCodeDisplay: z.union(['hidden', 'compact', 'detailed'] as const),
+  thinkingDisplay: z.union(['hidden', 'compact', 'detailed'] as const).volatile(),
+  runCodeDisplay: z.union(['hidden', 'compact', 'detailed'] as const).volatile(),
   maxTranscriptEntries: z.number().step(1).min(50).default(2000),
   fullscreen: z.boolean().default(false),
   theme: z.union(['auto', 'dark', 'light', 'plain'] as const).default('auto'),
@@ -88,13 +92,18 @@ export const Config = z.object({
  * @param config - deployment configuration.
  * @returns complete runtime configuration.
  */
+export function resolveDisplayMode(value: DisplayConfig | undefined): DisplayMode | undefined {
+  if (value !== null && typeof value === 'object' && 'get' in value) return value.get()
+  return value
+}
+
 export function resolveConfig(config: Config | undefined): ResolvedConfig {
   return {
     sessionId: config?.sessionId,
     cwd: config?.cwd ?? process.cwd(),
     showReasoning: config?.showReasoning ?? true,
-    thinkingDisplay: config?.thinkingDisplay ?? (config?.showReasoning === false ? 'hidden' : 'detailed'),
-    runCodeDisplay: config?.runCodeDisplay ?? 'detailed',
+    thinkingDisplay: resolveDisplayMode(config?.thinkingDisplay) ?? (config?.showReasoning === false ? 'hidden' : 'detailed'),
+    runCodeDisplay: resolveDisplayMode(config?.runCodeDisplay) ?? 'detailed',
     maxTranscriptEntries: config?.maxTranscriptEntries ?? 2000,
     fullscreen: config?.fullscreen ?? false,
     theme: config?.theme ?? 'auto',

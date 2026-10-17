@@ -16,7 +16,7 @@ import type { ContentBlock } from '@deepseek-ai/dsh-llm/types'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { dirname, resolve } from 'node:path'
-import type { ResolvedConfig } from '../config.js'
+import type { DisplayMode, ResolvedConfig } from '../config.js'
 import { createHostSession, resumeHostSession, type AgentPresetService, type HostSession } from '../runtime/agent.js'
 import { exportSessionLog } from '../runtime/export.js'
 import { exportSessionBundle } from '../runtime/bundle.js'
@@ -61,6 +61,7 @@ import { diffLines } from './diff.js'
 
 /** Terminal application lifecycle. */
 export interface TerminalApp {
+  setDisplayModes(thinkingDisplay: DisplayMode, runCodeDisplay: DisplayMode): void
   dispose(): Promise<void>
 }
 
@@ -102,7 +103,9 @@ const LOCAL_COMMANDS: readonly CommandSuggestion[] = [
     { name: 'enable', description: 'enable one entry', hint: '<entryId>' },
     { name: 'disable', description: 'disable one entry', hint: '<entryId>' },
   ] },
-  { name: 'settings', description: 'list, field/array-edit, or JSON-set settings', input: { hint: '[edit <ns>|items <ns> <field>|set <ns> <json>]' }, subcommands: [
+  { name: 'settings', description: 'TUI base settings wizard, or advanced host settings', input: { hint: '[tui|host|edit <ns>|items <ns> <field>|set <ns> <json>]' }, subcommands: [
+    { name: 'tui', description: 'open the base TUI settings wizard' },
+    { name: 'host', description: 'list advanced host settings namespaces' },
     { name: 'edit', description: 'edit a settings namespace', hint: '<ns>' },
     { name: 'items', description: 'edit an array item', hint: '<ns> <field>' },
     { name: 'set', description: 'merge JSON into a namespace', hint: '<ns> <json>' },
@@ -719,6 +722,69 @@ export async function startTerminalApp(
     }
   }
 
+  const showHostSettings = (): void => {
+    const settings = host.get('settings') as unknown as SettingsService | undefined;
+    if (settings === undefined) {
+      pushNotice('warning', 'The settings service is unavailable in this profile.');
+      return;
+    }
+    const descriptors = settings.describe({ redactSecrets: true });
+    if (descriptors.length === 0) {
+      pushNotice('info', 'No configurable plugin namespaces are active.');
+      return;
+    }
+    pushNotice('info', 'Host settings namespaces:' + NL + descriptors.map((descriptor) => {
+      const keys = Object.keys(descriptor.value);
+      return descriptor.ns + (keys.length === 0 ? '' : '  ' + keys.join(', '));
+    }).join(NL) + NL + 'Use /settings edit <ns>, /settings items <ns> <field>, or /settings set <ns> <json>.');
+  };
+  const openTuiSettings = async (): Promise<void> => {
+    const settings = host.get('settings') as unknown as SettingsService | undefined;
+    if (settings === undefined) {
+      pushNotice('warning', 'The settings service is unavailable in this profile.');
+      return;
+    }
+    const modes: readonly DisplayMode[] = ['hidden', 'compact', 'detailed'];
+    const descriptorFor = () => settings.describe({ redactSecrets: true }).find(row => row.ns === 'native-tui');
+    while (!interactionAbort.signal.aborted) {
+      const descriptor = descriptorFor();
+      if (descriptor === undefined) {
+        pushNotice('warning', 'native-tui settings are not registered in this profile; edit the profile config instead.');
+        return;
+      }
+      const thinking = String(descriptor.value.thinkingDisplay ?? config.thinkingDisplay);
+      const runCode = String(descriptor.value.runCodeDisplay ?? config.runCodeDisplay);
+      const pick = await showChoice(tui, palette, 'TUI settings', [
+        { value: 'thinking', label: 'Thinking display', description: 'current: ' + thinking + ' · hidden | compact | detailed' },
+        { value: 'runCode', label: 'run_code display', description: 'current: ' + runCode + ' · hidden | compact | detailed' },
+        { value: 'host', label: 'Host settings…', description: 'Advanced plugin namespaces, arrays, and JSON values' },
+        { value: 'done', label: 'Done' },
+      ], 'Enter selects · Esc closes', interactionAbort.signal);
+      if (pick === undefined || pick === 'done') return;
+      if (pick === 'host') {
+        showHostSettings();
+        return;
+      }
+      const field = pick === 'thinking' ? 'thinkingDisplay' : 'runCodeDisplay';
+      const value = await showChoice(tui, palette, pick === 'thinking' ? 'Thinking display' : 'run_code display',
+        modes.map(mode => ({ value: mode, label: mode, description: mode === (pick === 'thinking' ? thinking : runCode) ? 'current' : 'apply immediately' })),
+        'Enter applies · Esc cancels', interactionAbort.signal);
+      if (value === undefined) continue;
+      const latest = descriptorFor();
+      if (latest === undefined) {
+        pushNotice('warning', 'native-tui settings are no longer available.');
+        return;
+      }
+      try {
+        await settings.update('native-tui', { [field]: value }, latest.revision);
+        pushNotice('info', 'Updated native-tui.' + field + ': ' + value);
+      }
+      catch (error) {
+        pushNotice('error', 'Could not update native-tui settings: ' + errorMessage(error));
+      }
+    }
+  };
+
   const runCommand = async (line: string): Promise<void> => {
     const withoutSlash = line.slice(1)
     const space = withoutSlash.indexOf(' ')
@@ -744,7 +810,7 @@ export async function startTerminalApp(
           '/plugins [list|market [q]|inspect <spec>|install <spec>|remove <bundle>|enable <id>|disable <id>] · /exit',
           '/workspaces [new|use|pin|unpin|archive|unarchive] · /schedule [add|delete]',
           '/schedule [add <seconds> <title>|delete <id>] · /plugins · /exit',
-          '/settings [edit <ns>|items <ns> <field>|set <ns> <json>] · /export [path|zip|html] · /open <path> · /preview <image>',
+          '/settings [tui|host|edit <ns>|items <ns> <field>|set <ns> <json>] · /export [path|zip|html] · /open <path> · /preview <image>',
           '/files [path] · /changes [diff <index>] · /deliverables [panel|open|reveal <index>]',
           '/tools · /tool <index> · /diff [index] · /exit',
           '/attach <path>|paste|preview <i>|list|clear · /attachments · /exit',
@@ -1355,6 +1421,14 @@ export async function startTerminalApp(
           return
         }
         try {
+          if (args === '' || args === 'tui') {
+            await openTuiSettings();
+            return;
+          }
+          if (args === 'host') {
+            showHostSettings();
+            return;
+          }
           if (args === 'edit' || args.startsWith('edit ')) {
             const nsArg = args.slice('edit'.length).trim()
             const descriptors = settings.describe({ redactSecrets: true })
@@ -2886,6 +2960,11 @@ export async function startTerminalApp(
         throw error;
     }
     return {
+        setDisplayModes: (thinkingDisplay, runCodeDisplay) => {
+            if (disposed) return;
+            renderer.setDisplayModes(thinkingDisplay, runCodeDisplay);
+            tui.requestRender();
+        },
         dispose: async () => {
             await dispose();
         },

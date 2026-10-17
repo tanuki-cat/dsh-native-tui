@@ -167,6 +167,32 @@ describe('reduceTranscript', () => {
 })
 
 describe('TranscriptRenderer', () => {
+  it('rebuilds when display modes change live', () => {
+    const renderer = new TranscriptRenderer({ ...options, thinkingDisplay: 'detailed', runCodeDisplay: 'detailed' })
+    const entries: TranscriptEntry[] = [
+      durable('assistant/message', {
+        turn: 1,
+        step: 1,
+        message: { content: [
+          { type: 'reasoning', text: 'live thought' },
+          { type: 'text', text: 'answer' },
+        ] },
+      }, 1),
+      durable('tool/call', { turn: 1, step: 1, callId: 'c1', name: 'run_code', arguments: '{"description":"Press AC"}' }, 2),
+      durable('tool/result', { turn: 1, step: 1, message: { source: { callId: 'c1' }, content: [{ type: 'text', text: 'done' }], isError: false } }, 3),
+    ]
+    renderer.set(entries, [])
+    expect(renderer.container.render(100).join('\n')).toContain('live thought')
+    renderer.setDisplayModes('hidden', 'hidden')
+    const hidden = renderer.container.render(100).join('\n')
+    expect(hidden).not.toContain('live thought')
+    expect(hidden).not.toContain('run_code')
+    renderer.setDisplayModes('compact', 'compact')
+    const compact = renderer.container.render(100).join('\n')
+    expect(compact).toContain('thinking · live thought')
+    expect(compact).toContain('Press AC')
+  })
+
   it('labels blocks and keeps reasoning with the answer', () => {
     const renderer = new TranscriptRenderer(options)
     const blocks: TranscriptBlock[] = [
