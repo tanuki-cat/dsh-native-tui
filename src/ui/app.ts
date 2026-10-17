@@ -3,6 +3,7 @@ import {
   getNativeClipboard,
   ProcessTerminal,
   ScrollView,
+  Spacer,
   Text,
   TuiAltScreen,
   TuiMainScreen,
@@ -363,12 +364,14 @@ export async function startTerminalApp(
         grow: 1,
         minSize: 1,
       },
+      { component: new Spacer(1), basis: 'auto' },
       { component: footer, basis: 'auto', shrink: 1, minSize: 1 },
     ]))
   } else {
     tui.addChild(header)
     tui.addChild(headerRule)
     tui.addChild(renderer.container)
+    tui.addChild(new Spacer(1))
     tui.addChild(status)
     tui.addChild(editor)
   }
