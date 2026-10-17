@@ -21,6 +21,17 @@ export interface Config {
   servers: Volatile<McpServers>
 }
 
+/** Runtime state of one configured MCP server. */
+export interface McpServerState {
+  readonly status: 'starting' | 'connected' | 'error'
+  readonly error?: string
+}
+
+/** Shared runtime status exposed to the TUI. */
+export interface McpManagerStatus {
+  snapshot(): Record<string, McpServerState>
+}
+
 /** Settings schema; mcp-client owns transport-level validation. */
 export const Config = z.object({
   servers: z.dict(z.any()).default({}).volatile(),
@@ -28,6 +39,7 @@ export const Config = z.object({
 
 interface LoaderLike {
   create(options: { id: string; name: string; config: Record<string, unknown> }): Promise<string>
+  resolve(id: string): { readonly fiber?: { state: number; await(): Promise<unknown> } }
   remove(id: string): void
 }
 
@@ -49,27 +61,40 @@ export function apply(ctx: Context, config: Config): void {
     ? (config.servers as unknown as { get(): McpServers }).get()
     : config.servers as unknown as McpServers
   const ids = new Set<string>()
+  const states = new Map<string, McpServerState>()
+  for (const serverName of Object.keys(configured ?? {})) states.set(serverName, { status: 'starting' })
+  const status: McpManagerStatus = { snapshot: () => Object.fromEntries(states) }
+  const withdraw = (ctx as unknown as { provide(name: string, value: unknown): () => void }).provide('mcpManagerStatus', status)
   let disposed = false
   const load = async (): Promise<void> => {
     for (const [serverName, raw] of Object.entries(configured ?? {})) {
       if (disposed) return
-      if (!SERVER_NAME.test(serverName)) continue
-      if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) continue
+      if (!SERVER_NAME.test(serverName) || raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+        states.set(serverName, { status: 'error', error: 'invalid server configuration' })
+        continue
+      }
       const entryId = 'native-tui-mcp-' + serverName
+      states.set(serverName, { status: 'starting' })
       try {
         await loader.create({
           id: entryId,
           name: '@deepseek-ai/dsh-mcp-client',
-          config: { ...raw, serverName },
+          config: { ...raw, serverName, failOnStartupError: true },
         })
+        const fiber = loader.resolve(entryId).fiber
+        if (fiber === undefined) throw new Error('MCP client entry did not activate')
+        await fiber.await()
+        // Cordis FiberState.ACTIVE is 2; the enum is not exported at runtime.
+        if (fiber.state !== 2) throw new Error('MCP client entry is not active')
         if (disposed) {
           loader.remove(entryId)
           return
         }
         ids.add(entryId)
+        states.set(serverName, { status: 'connected' })
       }
-      catch {
-        // A failed server remains configured; its next Manager reload retries it.
+      catch (error) {
+        states.set(serverName, { status: 'error', error: error instanceof Error ? error.message : String(error) })
       }
     }
   }
@@ -78,6 +103,7 @@ export function apply(ctx: Context, config: Config): void {
   setTimeout(() => { void load() }, 250)
   ctx.effect(() => () => {
     disposed = true
+    withdraw()
     for (const id of ids) {
       try { loader.remove(id) }
       catch { /* A row may already have been removed by a reload. */ }

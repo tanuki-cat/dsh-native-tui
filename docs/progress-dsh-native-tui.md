@@ -1,9 +1,9 @@
 # dsh-native-tui 实施进度
 
-> 记录时间：2026-10-17 17:48 CST  
-> 工作区：`/Users/wangzy/WorkSpace/WebStormProjects/dsh-native-tui`  
-> 状态：**Goal complete**（30/30 轮），插件可构建、可测试、可安装  
-> 包版本：`dsh-native-tui@0.1.0`  
+> 记录时间：2026-10-17 17:48 CST
+> 工作区：`/Users/wangzy/WorkSpace/WebStormProjects/dsh-native-tui`
+> 状态：**Goal complete**（30/30 轮），插件可构建、可测试、可安装
+> 包版本：`dsh-native-tui@0.1.0`
 > 关联文档：[README](../README.md)、[Host-native 方案](design-task-feature-dsh-native-tui-host-native.md)
 
 ## 1. 结论
@@ -62,7 +62,7 @@ pnpm check
   tsc -p tsconfig.build.json
 
 Test Files  17 passed (17)
-Tests       73 passed (73)
+Tests       74 passed (74)
 ```
 
 ### 安装与启动
@@ -106,14 +106,14 @@ src/index.ts                 Cordis 入口、TTY 守卫
 src/config.ts                schemastery 配置、fullscreen
 src/runtime/                 agent/session、attachments、bundle、html、images、open、providers、settings、tool-log
 src/ui/                      app、autocomplete、dialogs、transcript、diff、theme
-tests/                       22 个测试文件，73 个测试
+tests/                       22 个测试文件，74 个测试
 scripts/fake-tty-*.mjs       fake-TTY 验证脚本
 README.md
 docs/design-task-feature-dsh-native-tui-host-native.md
 .tmp/dsh-native-tui-0.1.0.tgz
 ```
 
-依赖：`@earendil-works/pi-tui@1.3.0`、`@deepseek-ai/schemastery@3.18.5`、`fflate@^0.8.3`。
+依赖：`@earendil-works/pi-tui@1.3.0`、`@deepseek-ai/schemastery@3.18.5`、`fflate@^0.8.3`，以及官方 `computer-use`、`experimental-computer-use-cua-driver-native`、`mcp-client`、`mcp-resources`、`session-stats` 的 `0.2.1-rc.2`。
 
 已初始化本地 git 仓库（main）；首次提交 `50ced8d`，第三方模型引导见后续提交。
 
@@ -122,10 +122,13 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - 官方目录之外的市场搜索未实现；官方 catalog 浏览和任意 spec 安装已实现。
 - PDF/Office 富文档预览未实现；Markdown/文本/图片已支持。
 - 远端连接未实现；当前是本地/SSH 终端使用。
+- MCP 状态只覆盖初始连接；运行中断线/重连状态不实时回推。
+- Computer-use 实际桌面操作等待用户实机验证。
+- 生产与开发依赖已统一为 `0.2.1-rc.2`。
 - 会话级附件管理器未实现；当前 `/attachments` 管理 staged 附件。
 - 真实审批/工具/模型流式回合缺少凭据验收。
 - Deliverables panel 的真实 present 事件路径未验收。
-- `/provider add` 支持 DSH credential store（粘贴一次 key，写入 0600 credential 文件）或 UPPERCASE env 引用；API key 在输入时可见。自动发现依赖 endpoint 的 `/models` 列表，失败时回退手动输入；模型能力显式写入 `input`，已有 profile 需重配或手动补。
+- `/provider add` 支持 DSH credential store（粘贴一次 key，写入 0600 credential 文件）或 UPPERCASE env 引用；API key 在输入时可见。自动发现依赖 endpoint 的 `/models` 列表，失败时回退手动输入；模型能力显式写入 `input`，已有旧 profile 需重配或手动补。
 - 旧版本可能已把误填的 key 写入 `apiKeyEnv`：需 `/provider remove <route>` 并轮换 key。
 - 第三方模型引导已用 dummy key 验证配置、写入和 `/model` 选择，未发起真实推理请求。
 - 使用本地 HTTP `/v1/models` 验证自动发现：列出 auto-model/auto-small，选中后写入 64000/8192 容量并直接选中模型。
@@ -146,8 +149,9 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - 已验证默认 bundle 加载 computer-use、Cua Driver native、mcp-client、mcp-resources、mcp-manager、session-stats；profile 启动无激活错误。
 - 已验证状态栏常驻两行：`● idle ...` + `↳ 0 turns · 0 steps · — tok/s · 0 tok · cache — · ctx 0%`。
 - 参考 pi agent 增加用户消息、reasoning、tool 输出的全宽背景带；dark/light theme 使用不同底色，plain 保持无样式。
-- Choice/TextInput/Approval 弹窗改为全宽边框面板：标题按行 wrap、长 reason 限制、每行补齐背景，避免底层 transcript 透出和串行。
-- 已验证 `/mcp add` 写入 `mcp-manager.servers.demo`，`/mcp list` 显示 `demo  stdio  false`；manager 动态创建 mcp-client Loader row。
+- Choice/TextInput/Approval、Markdown/Text Pager、Image 弹窗统一使用全宽 opaque dialogFrame；标题按行 wrap、长 reason 限制、每行补齐背景，避免底层 transcript 透出和串行。
+- 已验证 `/mcp add` 写入 `mcp-manager.servers.demo`；mcp-manager 等待 mcp-client fiber 激活并通过 `mcpManagerStatus` 暴露状态。
+- 已验证 `/mcp list` 对可用 fake MCP server 显示 `connected`，对失败 server 显示 `error: mcp-client(demo): initial connection or tool synchronization failed`。
 - 已验证把 `sk-proj-...` 填入 env 字段会被拒绝且不写 profile；缺 env 时同样不保存。
 - 默认 Agent Preset 已设为 ptc：全新 profile 启动后 `/status` 显示 `Preset: ptc`；既有 Session 仍按其记录恢复。
 - 已验证空白 Session 的 `/preset minimal` 直接切换当前 Session，`/status` 显示 minimal。
@@ -171,4 +175,4 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 | 14–20 | Plugin remove/market、剪贴板图片、图片预览、alt-screen、`@@session` |
 | 21–25 | 附件预览、ZIP/HTML 导出、Deliverables reveal、工具结果 pager、Markdown |
 | 26–30 | 独立 Diff、附件管理器、Settings 数组、Deliverables panel、收尾验证 |
-| 后续 | 第三方模型 `/provider add|list|edit|models|remove` 引导与自动模型发现，22 个测试文件 / 73 个测试 |
+| 后续 | 第三方模型 `/provider add|list|edit|models|remove` 引导与自动模型发现，22 个测试文件 / 74 个测试 |

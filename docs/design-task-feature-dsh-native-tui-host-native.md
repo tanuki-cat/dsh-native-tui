@@ -1,7 +1,7 @@
 # DSH Native TUI：Host-native 重新实现
 
-> 状态：MVP 已实现并跑通  
-> 日期：2026-10-17  
+> 状态：MVP 已实现并跑通
+> 日期：2026-10-17
 > 取代：[完整 Web 能力方案](design-task-feature-dsh-native-tui-web-parity.md)
 
 ## 1. 结论
@@ -47,7 +47,7 @@
 ### Agent Presets / Workspace / Schedule / Plugins / Settings
 
 - 引入 agent-preset-registry，默认 ptc；复制并加载 standard / ptc / minimal / cordis 四个 preset patch。
-- 默认集成官方 computer-use、experimental computer-use Cua Driver native、mcp-client、mcp-resources、session-stats；版本按 DSH runtime 兼容的 0.2.1-rc.1 固定。
+- 默认集成官方 computer-use、experimental computer-use Cua Driver native、mcp-client、mcp-resources、session-stats；生产与开发依赖统一为 `0.2.1-rc.2`。
 - 新增 mcp-manager：把 `mcp-manager.servers` 中的 stdio/Streamable HTTP 服务映射为官方 mcp-client Loader rows，删除配置时移除 rows；manager 异步加载，避免 `/mcp` 保存阻塞。
 - Base 的进程级 agent-plane 行被禁用，工具/提示词/技能改由 preset 按 Session 组合。
 - /preset 列出当前 preset；首个 turn 前通过 Host `agentPresets.select(agent, id)` 切换当前 Session，已开始的 Session 由 Host 锁定，选择回退为下一次 /new；选择同时更新 settings `agent-preset-registry.selectedDefault` 持久化为默认 preset；/status 展示 current preset。
@@ -97,7 +97,8 @@
 - /model：列出 LLM catalog；目录为空时明确说明；支持直接输入 provider/model；通过 installModelSelection 接入下一 step 路由，并调用 agentDefaultModel.saveSelection 持久化默认选择。
 - /provider add：引导配置 custom OpenAI/Responses/Anthropic gateway 或 built-in pi-ai catalog route；Credential source 支持 Store API key（写 DSH credential store，0600，不写 profile）或 UPPERCASE env 引用；env 未设置或形似 key 时拒绝保存。custom gateway 在保存前调用 Host `discoverModels` 读取 `/models`，**把发现列表中的其他模型也写入 route**，选择本次模型后为它写 Input modalities、Reasoning levels、`input` 与 `reasoningEfforts`；已有 route 重跑时默认 merge，保留其他模型。
 - /provider edit|models：打开已有 provider 或直接按 route 调用 `discoverModels({ provider, baseURL, api })`，使用已存 credential 获取模型并合并：新模型追加、已有模型更新容量、保留既有 input/reasoningEfforts；/provider list|remove 管理 route。
-- /mcp：读取/写入 `mcp-manager.servers`；`add` 引导 serverName、stdio/HTTP、command/args/env 或 url/headers；`remove` 删除；mcp-manager 负责动态 Loader rows 和清理。MCP tools 以 `mcp__<serverName>__<rawName>` 暴露。
+- /mcp：读取/写入 `mcp-manager.servers`；`add` 引导 serverName、stdio/HTTP、command/args/env 或 url/headers；`remove` 删除；mcp-manager 负责动态 Loader rows、fiber 激活等待和清理。`/mcp list` 显示 connected/starting/error；MCP tools 以 `mcp__<serverName>__<rawName>` 暴露。
+- mcp-manager 以 `mcpManagerStatus` service 暴露每个 server 的初始连接状态；错误来自 fiber 激活异常，不再静默吞掉。运行中断线由 mcp-client reconnect，状态不会实时回推。
 - /reasoning：读取 `resolveModelInfo().reasoning.efforts`，列出/切换当前模型的 reasoning effort；写入 `ModelSelectionRef.current.reasoningEffort`，下一 step 生效；`default` 清除显式 effort；变更同时通过 agentDefaultModel.saveSelection 持久化。
 - 已验证 dummy `TEST_ROUTE_API_KEY` 下 `/provider add` → `/model` 选中 `test-route/test-model`；`/provider remove` 写回 `providers: {}`。
 - 已验证本地 HTTP `/v1/models` 自动发现 → 选择 auto-model → 写入 64000/8192 容量并直接选中；已验证裸 `quit` 退出。
@@ -107,7 +108,8 @@
 - 已验证 `/provider models fetch-route` 获取 2 个模型并 merge：`1 added, 1 refreshed`。
 - 已验证默认集成 boot、`/mcp add` 持久化以及 mcp-manager 的 Loader row 创建/清理。
 - 已验证状态栏指标行渲染和 metrics 折叠单测；fake TTY 验证全宽 band 排版。
-- 已验证多行 approval title 的 dialog frame 渲染：每行宽度受限、边框完整、无嵌入换行。
+- 已验证多行 approval title 的 dialog frame 渲染：每行宽度受限、边框完整、无嵌入换行；Markdown/Text Pager 与 Image overlay 复用同一 FramedOverlay/dialogFrame。
+- 已验证 mcp-manager 对 fake MCP server 的 `connected` 和失败连接的 `error` 状态；`/mcp list` 显示初始连接结果。
 - 已验证 `/reasoning high` 后状态栏显示 `effort high`，`/status` 显示 `Reasoning: high`。
 - 已验证 `/provider` 补全显示 add/list/remove，`/provider re` 过滤为 remove。
 - 已验证 `/preset minimal` 写入 `selectedDefault`，重启后仍以 minimal 创建 Session。
@@ -182,7 +184,7 @@ scripts/
 
 ## 5. 验证证据
 
-- pnpm check：typecheck + 8 个单元测试 + build 通过。
+- pnpm check：typecheck + 74 个单元测试 + build 通过（22 个测试文件）。
 - 安装：在全新 DSH_HOME 执行 dsh plugin --profile tui add <repo> 成功，profile bundles = base + dsh-native-tui。
 - 打包：pnpm pack 后以 tgz 安装到全新 DSH_HOME 成功，并成功启动。
 - 启动：安装后的 profile 在 fake TTY 中启动、渲染 header/status/editor、Ctrl+D 退出码 0。
@@ -191,28 +193,17 @@ scripts/
 - 问答：真实 Host 上 question probe 发起 ask，TUI 选择 A，Host 收到答案。
 - 真实 PTY：当前沙箱拒绝 pty.openpty（Operation not permitted），因此 pty-smoke.py 未能在本机执行；需在普通终端环境复验。
 
-## 6. 尚未完成的 Web parity
+## 6. 尚未完成的 Web parity / 已知差距
 
-以下能力仍未实现，按优先级排列：
-
-1. cordis preset 尚未纳入；当前加载 standard / ptc / minimal。
-2. Settings 有顶层/嵌套对象字段选择器、数组项编辑与 JSON merge 写入；动态 record 仍是 JSON 文本，secret 字段建议用 Web。
-3. Plugin Manager 已支持官方市场浏览、检查、安装、移除与启停；目录之外的市场搜索仍走 Web。
-4. Workspace 尚无 pin/archive/排序 UI。
-5. PDF/Office 富文档预览；基础文件树（/files）、@file 补全、@@session 引用、/open 文本与 Markdown 预览已实现。
-6. 附件与图片已完成路径/剪贴板暂存、/preview 渲染、/attach preview 与 /attachments 管理器（staged 范围）。
-7. feedback、open-in-app、官方目录之外的市场搜索、远端连接（TUI 已有 JSONL/ZIP/HTML /export、/changes 变更摘要、/deliverables panel/预览/定位、/tool 结果分页、/diff 查看器）。
-8. 独立 Diff 查看器、结果分页、spill 引用、PTC 子调用树（行内 diff 已实现）。
-9. Alt-screen 布局、鼠标、主题细化、输入历史持久化。
-10. 远端交互（连接已有 dsh web Host）；当前只支持本地 owned Agent。
-
-## 7. 下一步
-
-- 纳入 ptc/cordis preset，并补齐其 Host 行（PTC runtime、tool-cordis 等）。
-- 补 Settings 数组表单与官方目录之外的市场搜索。
-- 补 Workspace pin/archive/排序与文件/@引用。
-- 最后补附件管理器、交付卡片与远端连接。
-- 在普通终端环境跑 pty-smoke.py，并把结果写入兼容性说明。
+1. MCP 已支持配置、初始连接状态和错误展示；运行中断线/重连状态未实时推送到 TUI，完整 server 工具调用由用户侧验证。
+2. Computer-use / Cua Driver native 已默认集成，但实际桌面操作、权限拒绝路径等待用户实机测试。
+3. 远端连接（连接已有 dsh web Host）未实现；当前只支持本地 owned Agent。
+4. Plugin Manager 官方目录之外的市场搜索仍走 Web；PDF/Office 富文档预览未实现。
+5. 真实 PTY 下的 fullscreen 鼠标滚动/选择复制、真实模型流式/审批 waterfall 仍需普通终端和凭据环境复验。
+6. Settings 的动态 record 仍是 JSON 文本编辑；问题面板 multi-select 仍按单选项处理。
+7. 没有多 Agent 并发/后台会话视图；subagent 只读列出。
+8. 状态栏指标中 TPS 基于已完成 step；context 使用最近 prompt token；运行中断线状态不回推。
+9. package 仍为 private，发布名称/scope/CI 策略未确定。
 
 ## 8. 已知限制
 

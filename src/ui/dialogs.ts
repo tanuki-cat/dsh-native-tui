@@ -111,6 +111,20 @@ class TextInputDialog implements Component {
   invalidate(): void { this.input.invalidate() }
 }
 
+/** Frame an arbitrary overlay component with the shared opaque dialog surface. */
+class FramedOverlay implements Component {
+  constructor(
+    private readonly child: Component,
+    private readonly palette: Palette,
+  ) {}
+
+  render(width: number): string[] {
+    return dialogFrame(this.child.render(Math.max(1, width - 4)), width, this.palette)
+  }
+
+  invalidate(): void { this.child.invalidate?.() }
+}
+
 /** Show one keyboard-selected choice. */
 export function showChoice(
   tui: TUI,
@@ -272,7 +286,7 @@ export function showTextPager(
         }
         return undefined
       })
-      handle = tui.showOverlay(container, { width: 100, maxHeight: '85%', anchor: 'center' })
+      handle = tui.showOverlay(new FramedOverlay(container, palette), { width: 100, maxHeight: '85%', anchor: 'center' })
       handle.focus()
       render()
     } catch (error) {
@@ -330,7 +344,7 @@ export function showImagePreview(
         }
         return undefined
       })
-      handle = tui.showOverlay(container, { width: 80, maxHeight: '85%', anchor: 'center' })
+      handle = tui.showOverlay(new FramedOverlay(container, palette), { width: 80, maxHeight: '85%', anchor: 'center' })
       handle.focus()
     } catch (error) {
       off?.()

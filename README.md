@@ -2,9 +2,9 @@
 
 DeepSeek Harness 的 host-native 终端前端，基于 pi-tui。
 
-> 状态：实施完成（30 轮 + 第三方模型引导 + 官方 MCP/computer-use 集成，73 个单元测试通过）；已知差距见进度记录。  
-> 目标：在 TUI 中提供 Web 模式的核心能力，而不是复制浏览器图形界面。  
-> 架构说明与差距清单：[Host-native 方案](docs/design-task-feature-dsh-native-tui-host-native.md)。  
+> 状态：实施完成（30 轮 + 第三方模型引导 + 官方 MCP/computer-use 集成，74 个单元测试通过）；已知差距见进度记录。
+> 目标：在 TUI 中提供 Web 模式的核心能力，而不是复制浏览器图形界面。
+> 架构说明与差距清单：[Host-native 方案](docs/design-task-feature-dsh-native-tui-host-native.md)。
 > 实施进度、验证证据与未验收项：[实施进度](docs/progress-dsh-native-tui.md)。
 
 ## 特性
@@ -12,7 +12,7 @@ DeepSeek Harness 的 host-native 终端前端，基于 pi-tui。
 - 新建/恢复 Session，owned root Agent。
 - 流式文本、Markdown、reasoning、工具卡片（write/edit 结果渲染 ± diff 行）、turn 失败提示。
 - 本地命令与宿主命令执行（compact/feedback/goal/permission/plan）；slash 命令支持子命令补全，例如 `/provider` 显示 add/list/remove。
-- 审批与问答 waterfall；independent dialogs 使用带边框和全宽背景的 opaque 面板，长 reason 自动换行，不再让 transcript 透出。
+- 审批与问答 waterfall；所有独立 overlay（Choice/TextInput/Approval、Markdown/Text Pager、Image）统一使用带边框和全宽背景的 opaque dialog frame，长内容自动换行/补齐。
 - 模型选择器（LLM catalog 为空时明确提示）、reasoning effort 切换、权限预设、后台任务、子代理列表。
 - 模型与 reasoning effort 通过 Host `agentDefaultModel.saveSelection` 持久化；重启或 `/new` 沿用，不再回落默认。
 - 第三方模型：`/provider add` 引导配置 pi-ai gateway/catalog route，`/provider list|edit|models|remove` 管理。
@@ -44,7 +44,7 @@ dsh plugin --profile tui add /absolute/path/to/dsh-native-tui
 dsh --profile tui
 ~~~
 
-DSH Host 包由当前 dsh 安装提供；本插件只把 pi-tui 与 schemastery 作为运行时依赖。  
+DSH Host 包由当前 dsh 安装提供；插件运行时还依赖 pi-tui、schemastery、fflate，以及官方 computer-use / mcp / session-stats rc.2 包。
 安装路径使用 link: 时，修改源码后重新 pnpm build 即可生效。
 
 ## 命令
@@ -177,12 +177,20 @@ dsh --profile tui
 - `stdio`：command、args（空格分隔或 JSON 数组）、env JSON
 - `streamable-http`：URL、headers JSON
 
-配置写入 profile 的 `mcp-manager.servers`；mcp-manager 将每个条目动态映射为官方 `mcp-client` Loader row。配置保存后可重启 TUI 确保连接和工具重新同步。MCP tools 以 `mcp__<serverName>__<toolName>` 暴露。
+配置写入 profile 的 `mcp-manager.servers`；mcp-manager 将每个条目映射为官方 `mcp-client` Loader row，并在 Loader fiber 激活后记录状态。
+
+```text
+/mcp list
+```
+
+每行显示 `connected` / `starting` / `error: ...`。mcp-manager 使用 `failOnStartupError` 并 await fiber，因此初始连接失败会显示错误，而不是静默成功。当前状态反映初始连接；运行中后续断线由 mcp-client 自行重连，状态栏不推送实时状态变化。
+
+新增配置需要重启一次 TUI 让 mcp-manager 重新载入 servers；之后 `/mcp list` 可查看初始连接状态。MCP tools 以 `mcp__<serverName>__<toolName>` 暴露。
 
 ## 开发与验证
 
 ~~~sh
-pnpm check          # typecheck + 73 unit tests + build
+pnpm check          # typecheck + 74 unit tests + build
 pnpm test
 pnpm build
 ~~~
@@ -207,11 +215,11 @@ python3 scripts/pty-smoke.py
 
 ## 已知差距
 
-Plugin Manager 官方目录之外的市场搜索（官方目录浏览已实现）、PDF/Office 富文档预览（Markdown 已支持）、会话级附件管理器（当前覆盖 staged 附件）、远端连接尚未实现。详见架构文档第 6 节。
+Plugin Manager 官方目录之外的市场搜索（官方目录浏览已实现）、PDF/Office 富文档预览（Markdown 已支持）、会话级附件管理器（当前覆盖 staged 附件）、远端连接尚未实现。computer-use 实际桌面操作等待用户实机验证；MCP 运行中断线状态不实时推送。详见架构文档第 6 节。
 
 ## 兼容性
 
-- 已在全局 dsh 0.2.1-rc.1 上安装并启动；源码开发类型基于 0.2.1-rc.2。
+- 已在全局 dsh 0.2.1-rc.2 上安装并启动；生产与开发依赖统一为 0.2.1-rc.2。
 - Preset patch 从 `@deepseek-ai/dsh-web-app` 的 standard/ptc/minimal/cordis 复制而来；standard/ptc/minimal 需要 `subagent-model-selection-settings` Host 行，cordis 需要 cordis host-runner 与 tool-cordis/host。`@file` 补全依赖 `@deepseek-ai/dsh-file-reference-local`。
 - pi-tui 1.3.0；Node 22.23.3。
 

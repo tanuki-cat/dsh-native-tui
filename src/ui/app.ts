@@ -282,6 +282,10 @@ interface WorkspaceChangesService {
   diff(sessionId: SessionId, seq: number, index: number, signal: AbortSignal): Promise<WorkspaceDiffView | undefined>
 }
 
+interface McpManagerStatus {
+  snapshot(): Record<string, { readonly status: 'starting' | 'connected' | 'error'; readonly error?: string }>
+}
+
 interface SessionProjectionsService {
   stateOf(session: Session, key: string): unknown
 }
@@ -2161,6 +2165,8 @@ export async function startTerminalApp(
                 const servers: Record<string, Record<string, unknown>> = rawServers !== null && typeof rawServers === 'object' && !Array.isArray(rawServers)
                     ? rawServers as Record<string, Record<string, unknown>>
                     : {};
+                const mcpStatus = host.get('mcpManagerStatus') as McpManagerStatus | undefined;
+                const runtime = mcpStatus?.snapshot() ?? {};
                 if (args === '' || args === 'list') {
                     const entries = Object.entries(servers);
                     if (entries.length === 0) {
@@ -2172,7 +2178,14 @@ export async function startTerminalApp(
                         const target = transport === 'stdio'
                             ? [typeof raw.command === 'string' ? raw.command : '', ...(Array.isArray(raw.args) ? raw.args.map(String) : [])].filter(Boolean).join(' ')
                             : typeof raw.url === 'string' ? raw.url : '';
-                        return name + '  ' + transport + (target === '' ? '' : '  ' + target);
+                        const state = runtime[name];
+                        const status = state === undefined
+                            ? palette.dim('not loaded (restart TUI)')
+                            : state.status === 'connected' ? palette.success('connected')
+                                : state.status === 'error' ? palette.error('error: ' + (state.error ?? 'unknown').slice(0, 120))
+                                    : palette.warning('starting');
+                        const targetText = target.length > 72 ? target.slice(0, 69) + '...' : target;
+                        return name + '  ' + transport + (targetText === '' ? '' : '  ' + targetText) + '  ' + status;
                     });
                     pushNotice('info', 'MCP servers:' + NL + rows.join(NL) + NL + 'Use /mcp add or /mcp remove <name>.');
                     return;
@@ -2204,6 +2217,10 @@ export async function startTerminalApp(
                         const command = await showTextInput(tui, palette, 'MCP command', 'npx', 'Executable without shell interpolation · Esc cancels', interactionAbort.signal);
                         if (command === undefined)
                             return;
+                        if (command.trim() === '') {
+                            pushNotice('warning', 'MCP command must not be empty.');
+                            return;
+                        }
                         const argsRaw = await showTextInput(tui, palette, 'MCP arguments', '[]', 'Space-separated, or a JSON string array; optional · Esc cancels', interactionAbort.signal, '[]');
                         if (argsRaw === undefined)
                             return;
@@ -2230,6 +2247,8 @@ export async function startTerminalApp(
                                 const parsed: unknown = JSON.parse(envRaw);
                                 if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed))
                                     throw new Error('environment must be a JSON object');
+                                if (Object.values(parsed).some(value => typeof value !== 'string'))
+                                    throw new Error('environment values must be strings');
                                 envValue = parsed as Record<string, unknown>;
                             }
                             catch (error) {
@@ -2259,6 +2278,8 @@ export async function startTerminalApp(
                                 const parsed: unknown = JSON.parse(headersRaw);
                                 if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed))
                                     throw new Error('headers must be a JSON object');
+                                if (Object.values(parsed).some(value => typeof value !== 'string'))
+                                    throw new Error('header values must be strings');
                                 headersValue = parsed as Record<string, unknown>;
                             }
                             catch (error) {
@@ -2275,7 +2296,7 @@ export async function startTerminalApp(
                     }
                     try {
                         await settings.update('mcp-manager', { servers: { [name]: config } }, descriptor.revision);
-                        pushNotice('info', 'MCP server saved: ' + name + ' · ' + transport + '. Restart the session to load its tools if the connection was not live.');
+                        pushNotice('info', 'MCP server saved: ' + name + ' · ' + transport + '. Restart the TUI, then /mcp list shows its connection status.');
                     }
                     catch (error) {
                         pushNotice('error', 'Could not save MCP server: ' + errorMessage(error));
