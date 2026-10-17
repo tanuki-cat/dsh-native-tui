@@ -89,9 +89,10 @@
 - 本地命令：/help、/new、/sessions、/resume、/status、/clear、/cancel、/model、/provider、/permissions、/jobs、/agents、/exit、/quit；裸 `exit` / `quit` 也退出。
 - 宿主命令：通过 ctx.commands.execute 执行；Base 实际注册了 /compact、/feedback、/goal、/permission、/plan。
 - /model：列出 LLM catalog；目录为空时明确说明；支持直接输入 provider/model；通过 installModelSelection 接入下一 step 路由。
-- /provider add：引导配置 custom OpenAI/Responses/Anthropic gateway 或 built-in pi-ai catalog route；只接受 UPPERCASE `apiKeyEnv` 名称，env 未设置或形似 key 时拒绝保存；custom gateway 在保存前调用 Host `discoverModels` 读取 `/models`，选择发现结果或回退手输，保存后直接选中模型；/provider list|remove 管理 route。apiKeyEnv 只保存变量名。
+- /provider add：引导配置 custom OpenAI/Responses/Anthropic gateway 或 built-in pi-ai catalog route；Credential source 支持 Store API key（写 DSH credential store，0600，不写 profile）或 UPPERCASE env 引用；env 未设置或形似 key 时拒绝保存。custom gateway 在保存前调用 Host `discoverModels` 读取 `/models`，选择发现结果或回退手输，保存后直接选中模型；/provider list|remove 管理 route。
 - 已验证 dummy `TEST_ROUTE_API_KEY` 下 `/provider add` → `/model` 选中 `test-route/test-model`；`/provider remove` 写回 `providers: {}`。
 - 已验证本地 HTTP `/v1/models` 自动发现 → 选择 auto-model → 写入 64000/8192 容量并直接选中；已验证裸 `quit` 退出。
+- 已验证 Store API key → credential store → stored-model 自动发现/选中，`/provider list` 显示 `(stored)`。
 - 已验证把 `sk-proj-...` 填入 env 字段被拒绝，profile 未写入；`/provider list` 对非法 env 引用只显示脱敏提示。
 - /permissions：列出权限预设并写回当前 Session；支持 /permissions <preset>。
 - /jobs：列出当前 Session 的后台任务，支持 /jobs kill <id>。
@@ -197,7 +198,7 @@ scripts/
 
 - 默认只拥有一个 root Agent；切换到另一个会话会 dispose 当前 Agent。运行中切换会取消当前 turn。
 - 没有多 Agent 并发/后台会话视图；subagent 只读列出。
-- 模型 catalog 在无凭据时为空；/model 列表会明确提示。`/provider add` 可配置 route 并自动读取 endpoint 的 `/models` 列表，但只保存 `apiKeyEnv` 引用，key 必须提前导出；发现失败时回退手输。
+- 模型 catalog 在无凭据时为空；/model 列表会明确提示。`/provider add` 支持 stored credential 或 env 引用，并自动读取 endpoint 的 `/models` 列表；key 输入时在终端可见，发现失败时回退手输。
 - 问题面板的 multi-select 当前按单选项处理；自由文本可用，但多选组合尚未实现。
 - preset 编辑器尚未实现；选择与创建已可用。
 - /settings 支持顶层/嵌套对象/数组项编辑与 JSON merge，动态 record 仍是 JSON；/plugins 已可浏览官方市场、安装/移除/启停，目录之外的市场仍走 Web。

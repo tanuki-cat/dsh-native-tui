@@ -236,6 +236,11 @@ interface WorkspaceChangesService {
   diff(sessionId: SessionId, seq: number, index: number, signal: AbortSignal): Promise<WorkspaceDiffView | undefined>
 }
 
+interface CredentialsService {
+  set(ref: string, value: string): Promise<void>
+  resolve(ref: string): Promise<{ readonly value?: string } | undefined>
+}
+
 interface SettingsService {
   describe(options?: { redactSecrets?: boolean }): readonly {
     ns: string
@@ -1957,6 +1962,7 @@ export async function startTerminalApp(
                     pushNotice('warning', 'The LLM catalog service is unavailable.');
                     return;
                 }
+                const credentials = host.get('credentials') as CredentialsService | undefined;
                 const descriptor = settings.describe({ redactSecrets: true }).find(row => row.ns === 'llm-pi-ai');
                 if (descriptor === undefined) {
                     pushNotice('warning', 'The llm-pi-ai settings namespace is unavailable; mount the llm-pi-ai Host row first.');
@@ -1996,11 +2002,27 @@ export async function startTerminalApp(
                         const env = raw !== null && typeof raw === 'object' && typeof (raw as { readonly apiKeyEnv?: unknown }).apiKeyEnv === 'string'
                             ? (raw as { readonly apiKeyEnv: string }).apiKeyEnv
                             : undefined;
-                        const envState = env === undefined
-                            ? ''
-                            : !isValidEnvName(env)
-                                ? '  (invalid env name; remove this route and rotate the key)'
-                                : process.env[env] === undefined ? '  ' + env + ' (not set)' : '  ' + env;
+                        let envState = '';
+                        if (env !== undefined) {
+                            if (!isValidEnvName(env)) {
+                                envState = '  (invalid env name; remove this route and rotate the key)';
+                            }
+                            else if (process.env[env] !== undefined) {
+                                envState = '  ' + env;
+                            }
+                            else {
+                                let stored = false;
+                                if (credentials !== undefined) {
+                                    try {
+                                        stored = (await credentials.resolve(env))?.value !== undefined;
+                                    }
+                                    catch {
+                                        // A credential-store read failure is shown as unset, not as a provider error.
+                                    }
+                                }
+                                envState = '  ' + env + (stored ? ' (stored)' : ' (not set)');
+                            }
+                        }
                         rows.push(route + '  ' + String(count) + ' model(s)' + envState);
                     }
                     pushNotice('info', 'Configured third-party providers:' + NL + rows.join(NL)
@@ -2053,24 +2075,60 @@ export async function startTerminalApp(
                         return;
                     }
                     const envDefault = route.toUpperCase().replace(/[^A-Z0-9]+/gu, '_') + '_API_KEY';
+                    const baseURL = kind === 'catalog'
+                        ? undefined
+                        : await showTextInput(tui, palette, 'Base URL', 'https://api.example.com/v1', 'OpenAI-compatible API root · Esc cancels', interactionAbort.signal);
+                    if (kind !== 'catalog' && baseURL === undefined)
+                        return;
+                    const credentialSource = await showChoice(tui, palette, 'Credential source', [
+                        { value: 'store', label: 'Store API key in DSH credentials', description: 'Recommended; key goes to the credential store, not the profile' },
+                        { value: 'env', label: 'Use an environment variable', description: 'Read a key exported before dsh started' },
+                    ], 'Enter selects · Esc cancels', interactionAbort.signal);
+                    if (credentialSource === undefined)
+                        return;
+                    let env: string;
+                    let apiKey: string;
+                    if (credentialSource === 'store') {
+                        const credentials = host.get('credentials') as CredentialsService | undefined;
+                        if (credentials === undefined) {
+                            pushNotice('warning', 'The credential store is unavailable in this profile; choose the environment-variable option instead.');
+                            return;
+                        }
+                        const secret = await showTextInput(tui, palette, 'API key (stored in DSH credentials)', 'paste the key here', 'Visible while typing; stored outside the profile config · Esc cancels', interactionAbort.signal);
+                        if (secret === undefined)
+                            return;
+                        const value = secret.trim();
+                        if (value === '') {
+                            pushNotice('warning', 'API key must not be empty.');
+                            return;
+                        }
+                        env = envDefault;
+                        try {
+                            await credentials.set(env, value);
+                        }
+                        catch (error) {
+                            pushNotice('error', 'Could not store the API key: ' + errorMessage(error));
+                            return;
+                        }
+                        apiKey = value;
+                        pushNotice('info', 'Stored API key under credential reference ' + env + '.');
+                    }
+                    else {
+                        const value = await showTextInput(tui, palette, 'API key env var NAME (not the key)', envDefault, 'UPPERCASE name like MY_GATEWAY_KEY; export the secret before launch · Esc cancels', interactionAbort.signal, envDefault);
+                        if (value === undefined)
+                            return;
+                        if (!requireEnv(value))
+                            return;
+                        env = value;
+                        apiKey = process.env[value]!;
+                    }
                     let provider: Record<string, unknown>;
                     let chosenModel: string | undefined;
                     if (kind === 'catalog') {
-                        const env = await showTextInput(tui, palette, 'API key env var NAME (not the key)', envDefault, 'UPPERCASE name like MY_GATEWAY_KEY; export the secret before launch · Esc cancels', interactionAbort.signal, envDefault);
-                        if (env === undefined)
-                            return;
-                        if (!requireEnv(env))
-                            return;
                         provider = buildCatalogProvider(env);
                     }
                     else {
-                        const baseURL = await showTextInput(tui, palette, 'Base URL', 'https://api.example.com/v1', 'OpenAI-compatible API root · Esc cancels', interactionAbort.signal);
                         if (baseURL === undefined)
-                            return;
-                        const env = await showTextInput(tui, palette, 'API key env var NAME (not the key)', envDefault, 'UPPERCASE name like MY_GATEWAY_KEY; export the secret before launch · Esc cancels', interactionAbort.signal, envDefault);
-                        if (env === undefined)
-                            return;
-                        if (!requireEnv(env))
                             return;
                         const readManualModel = async (): Promise<{ id: string; name?: string; contextWindow: number; maxTokens: number } | undefined> => {
                             const modelId = await showTextInput(tui, palette, 'Model id', 'gpt-4o-mini', 'Exact model id sent on the wire · Esc cancels', interactionAbort.signal);
@@ -2084,9 +2142,6 @@ export async function startTerminalApp(
                                 return undefined;
                             return { id: modelId, contextWindow: Number(contextRaw), maxTokens: Number(maxRaw) };
                         };
-                        const apiKey = process.env[env];
-                        if (apiKey === undefined)
-                            return;
                         pushNotice('info', 'Discovering models from ' + baseURL + '…');
                         let discovered: readonly { readonly id: string; readonly name?: string; readonly contextWindow?: number; readonly maxTokens?: number }[] = [];
                         const discoveryAbort = new AbortController();

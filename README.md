@@ -99,19 +99,24 @@ Enter 发送；运行中 Enter 作为 steer；Ctrl+C 取消/退出；Ctrl+D 退�
 `/provider add` 提供引导流程：
 
 1. 选择 Custom OpenAI-compatible / OpenAI Responses / Anthropic-compatible gateway，或 Built-in pi-ai catalog route。
-2. 输入 route、baseURL、`apiKeyEnv`（**环境变量名，不是 key**）；custom gateway 会调用 Host `discoverModels` 请求 `GET {baseURL}/models` 并列出模型（5 秒超时）。
-3. 从自动发现的模型中选择，或回退到手动输入 model id/context window/max tokens；进程内找不到该环境变量时拒绝保存。
+2. 输入 route、baseURL，然后选择 Credential source：
+   - **Store API key in DSH credentials（推荐）**：直接粘贴 key。key 存入 DSH credential store（`~/.dsh/.credentials.yaml`，权限 0600），不写入 profile；无需 export。输入时 key 在终端可见。
+   - **Use an environment variable**：输入 UPPERCASE 变量名，启动 dsh 前在 shell export。
+3. custom gateway 会调用 Host `discoverModels` 请求 `GET {baseURL}/models` 并列出模型（5 秒超时）。
+4. 从自动发现的模型中选择，或回退到手动输入 model id/context window/max tokens。
 
-`apiKeyEnv` 只保存环境变量名，密钥本身不写入配置或终端历史。启动前导出：
+`apiKeyEnv` 保存的是 credential reference（环境变量名或 DSH credential 名称），不是 key 明文。env 模式下若变量未设置会拒绝保存；store 模式直接写 credential store。
+
+env 模式示例：
 
 ```sh
 export MY_GATEWAY_API_KEY=...
 dsh --profile tui
 ```
 
-`/provider list` 显示已配置 route 与当前可见模型数；`/provider remove <route>` 删除。若 `/model` 仍为空，确认启动 dsh 前已 export 对应变量；llm-pi-ai 在凭据缺失时会故意返回空模型列表。
+`/provider list` 显示已配置 route、可见模型数以及 credential 状态（`(stored)` / `(not set)`）；`/provider remove <route>` 删除 route。若 `/model` 仍为空，确认 credential 可用；llm-pi-ai 在凭据缺失时会故意返回空模型列表。
 
-**不要把 API key 填进 `apiKeyEnv`。** 新流程要求 UPPERCASE 环境变量名，并拒绝看似 key 或未设置的变量。若旧配置已经把 key 写入 `apiKeyEnv`，立即执行 `/provider remove <route>`，检查 `cordis.patch.yml` 中对应配置，并轮换该 key。手工 JSON 配置仍可通过 `/settings set llm-pi-ai ...` 或 Web Models page 完成。
+**不要在 env 模式把 key 填进变量名。** 流程要求 UPPERCASE 环境变量名，并拒绝形似 key 的输入。若旧配置已经把 key 写入 `apiKeyEnv`，立即执行 `/provider remove <route>`，检查 `cordis.patch.yml` 中对应配置，并轮换该 key。手工 JSON 配置仍可通过 `/settings set llm-pi-ai ...` 或 Web Models page 完成。
 
 ## 开发与验证
 

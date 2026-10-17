@@ -14,11 +14,11 @@ const tick = setInterval(() => {
   else if (phase === 1 && text.includes('Provider type')) { phase = 2; try { child.stdin.write('\r') } catch {} }
   else if (phase === 2 && text.includes('Provider route')) { phase = 3; try { child.stdin.write('test-route\r') } catch {} }
   else if (phase === 3 && text.includes('Base URL')) { phase = 4; try { child.stdin.write('https://example.invalid/v1\r') } catch {} }
-  else if (phase === 4 && text.includes('API key env var NAME')) { phase = 5; try { child.stdin.write('\r') } catch {} }
-  else if (phase === 5 && text.includes('Model id')) { phase = 6; try { child.stdin.write('test-model\r') } catch {} }
-  else if (phase === 6 && text.includes('Context window')) { phase = 7; try { child.stdin.write('\r') } catch {} }
-  else if (phase === 7 && text.includes('Max output tokens')) { phase = 8; try { child.stdin.write('\r') } catch {} }
-  else if (phase === 8 && text.includes('Model for test-route')) { phase = 9; try { child.stdin.write('\r') } catch {} }
+  else if (phase === 4 && text.includes('Credential source')) { phase = 5; try { child.stdin.write('\x1b[B\r') } catch {} }
+  else if (phase === 5 && text.includes('API key env var NAME')) { phase = 6; try { child.stdin.write('\r') } catch {} }
+  else if (phase === 6 && text.includes('Model id')) { phase = 7; try { child.stdin.write('test-model\r') } catch {} }
+  else if (phase === 7 && text.includes('Context window')) { phase = 8; try { child.stdin.write('\r') } catch {} }
+  else if (phase === 8 && text.includes('Max output tokens')) { phase = 9; try { child.stdin.write('\r') } catch {} }
   else if (phase === 9 && text.includes('Model selected')) {
     phase = 10
     setTimeout(() => { try { child.stdin.write('/provider list\r') } catch {} }, 500)
