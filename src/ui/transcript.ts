@@ -155,9 +155,12 @@ function compactRunCodePreview(block: { readonly args: string; readonly result?:
     }
   }
   catch { /* Keep the result preview when arguments are not JSON. */ }
-  const text = description ?? block.result ?? block.args
-  const firstLine = text.split('\n').map(line => line.trim()).find(line => line !== '') ?? ''
-  return clip(firstLine.replace(/\s+/gu, ' '), 220)
+  const firstLine = (text: string | undefined): string =>
+    text?.split('\n').map(line => line.trim()).find(line => line !== '')?.replace(/\s+/gu, ' ') ?? ''
+  const result = firstLine(block.result)
+  const action = firstLine(description ?? block.args)
+  const parts = action === '' ? [result] : result === '' || result === action ? [action] : [action, result]
+  return clip(parts.filter(part => part !== '').join(' · '), 220)
 }
 
 function stepKey(turn: number, step: number): string {

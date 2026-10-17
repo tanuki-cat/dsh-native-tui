@@ -17,7 +17,7 @@ import type { Session } from '@deepseek-ai/dsh-session'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { dirname, resolve } from 'node:path'
 import type { DisplayMode, ResolvedConfig } from '../config.js'
-import { createHostSession, resumeHostSession, type AgentPresetService, type HostSession } from '../runtime/agent.js'
+import { createHostSession, resumeHostSession, sessionAgentPreset, sessionModelSelection, type AgentPresetService, type HostSession } from '../runtime/agent.js'
 import { exportSessionLog } from '../runtime/export.js'
 import { exportSessionBundle } from '../runtime/bundle.js'
 import { exportSessionHtml } from '../runtime/html.js'
@@ -52,7 +52,7 @@ import {
   type AttachmentsService,
   type PendingAttachment,
 } from '../runtime/attachments.js'
-import { showApproval, showChoice, showImagePreview, showMarkdownPreview, showQuestionBatch, showTextInput, showTextPager } from './dialogs.js'
+import { showApproval, showChoice, showImagePreview, showMarkdownPreview, showQuestionBatch, showSearchChoice, showTextInput, showTextPager } from './dialogs.js'
 import { TuiAutocompleteProvider, type CommandSuggestion, type SessionReferenceService } from './autocomplete.js'
 import { createPalette, editorTheme, markdownTheme, type Palette } from './theme.js'
 import { TranscriptRenderer, type TranscriptBlock, type TranscriptEntry } from './transcript.js'
@@ -392,7 +392,8 @@ export async function startTerminalApp(
   let exiting = false
   let switching = false
   let clearedAfterSeq: number | undefined
-  let selectedPreset: string | undefined = config.agentPreset
+  let selectedPreset: string | undefined = sessionAgentPreset(active.agent.session)
+    ?? config.agentPreset
     ?? (host.get('agentPresets') as AgentPresetService | undefined)?.defaultId
   let liveSeq = 0
   let entries: TranscriptEntry[] = active.agent.session.snapshotEvents().map(event => ({ type: 'event', event }))
@@ -407,7 +408,7 @@ export async function startTerminalApp(
   const attemptPositions = new Map<string, { turn: number; step: number }>()
   let contextWindow: number | undefined
   let modelSelection: ModelSelectionRef = {
-    current: {
+    current: sessionModelSelection(active.agent.session) ?? {
       provider: active.agent.options.provider ?? 'deepseek-official',
       model: active.agent.options.model ?? 'deepseek-flash',
       ...(active.agent.options.reasoningEffort === undefined ? {} : { reasoningEffort: active.agent.options.reasoningEffort }),
@@ -633,6 +634,7 @@ export async function startTerminalApp(
       clearSubscriptions()
       await active.dispose()
       active = opened
+      selectedPreset = sessionAgentPreset(active.agent.session) ?? selectedPreset
       entries = active.agent.session.snapshotEvents().map(event => ({ type: 'event', event }))
       clearedAfterSeq = undefined
       liveSeq = 0
@@ -640,7 +642,7 @@ export async function startTerminalApp(
       renderer.clear()
       tui.setFocus(editor)
       modelSelection = {
-        current: {
+        current: sessionModelSelection(active.agent.session) ?? {
           provider: active.agent.options.provider ?? 'deepseek-official',
           model: active.agent.options.model ?? 'deepseek-flash',
           ...(active.agent.options.reasoningEffort === undefined ? {} : { reasoningEffort: active.agent.options.reasoningEffort }),
@@ -892,7 +894,7 @@ export async function startTerminalApp(
           pushNotice('warning', 'The LLM catalog advertises no models.')
           return
         }
-        const selectedModel = await showChoice(tui, palette, 'Select model', items, 'Enter selects · Esc cancels', interactionAbort.signal)
+        const selectedModel = await showSearchChoice(tui, palette, 'Select model · ' + String(items.length) + ' available', items, 'Type to filter · ↑/↓ moves · Enter selects · Esc cancels', interactionAbort.signal)
         if (selectedModel !== undefined) await selectModel(llm, selectedModel)
         return
       }

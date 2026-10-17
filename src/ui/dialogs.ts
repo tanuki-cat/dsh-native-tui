@@ -81,6 +81,66 @@ class ChoiceDialog implements Component {
   invalidate(): void { this.list.invalidate() }
 }
 
+/** Searchable select list with an inline filter input. */
+class SearchChoiceDialog implements Component {
+  private list: SelectList
+  private readonly input: Input
+  onSelect?: (item: { value: string; label: string; description?: string }) => void
+  onCancel?: () => void
+  constructor(
+    private readonly title: string,
+    private readonly items: readonly ChoiceItem[],
+    private readonly hint: string,
+    private readonly palette: Palette,
+  ) {
+    this.input = new Input({ prompt: 'search: ', placeholder: 'type to filter' })
+    this.input.focused = true
+    this.list = this.makeList('')
+  }
+
+  private makeList(filter: string): SelectList {
+    const query = filter.trim().toLowerCase()
+    const matches = this.items.filter(item => query === ''
+      || item.value.toLowerCase().includes(query)
+      || item.label.toLowerCase().includes(query)
+      || (item.description ?? '').toLowerCase().includes(query))
+    const list = new SelectList(
+      matches.map(item => ({ value: item.value, label: item.label, ...(item.description === undefined ? {} : { description: item.description }) })),
+      12,
+      selectTheme(this.palette),
+    )
+    list.onSelect = item => { this.onSelect?.(item) }
+    list.onCancel = () => { this.onCancel?.() }
+    return list
+  }
+
+  render(width: number): string[] {
+    const inner = Math.max(20, width - 4)
+    return dialogFrame([
+      ...new Text(this.title, 0, 0).render(inner),
+      ...this.input.render(inner),
+      '',
+      ...this.list.render(inner),
+      '',
+      ...new Text(this.palette.dim(this.hint), 0, 0).render(inner),
+    ], width, this.palette)
+  }
+
+  handleInput(data: string): void {
+    if (data === '\r' || data === '\n' || data === '\x1b' || data.startsWith('\x1b[')) {
+      this.list.handleInput(data)
+      return
+    }
+    this.input.handleInput(data)
+    this.list = this.makeList(this.input.getValue())
+  }
+
+  invalidate(): void {
+    this.input.invalidate()
+    this.list.invalidate()
+  }
+}
+
 /** Single-line input wrapper that owns its title and key hint. */
 class TextInputDialog implements Component {
   readonly input: Input
@@ -155,6 +215,44 @@ export function showChoice(
       dialog.selectList.onSelect = item => { finish(item.value) }
       dialog.selectList.onCancel = () => { finish(undefined) }
     } catch (error) {
+      reject(error)
+      return
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
+/** Show a searchable choice list. The filter is matched by SelectList against labels and descriptions. */
+export function showSearchChoice(
+  tui: TUI,
+  palette: Palette,
+  title: string,
+  items: readonly ChoiceItem[],
+  hint: string,
+  signal?: AbortSignal,
+): Promise<string | undefined> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted === true) {
+      resolve(undefined)
+      return
+    }
+    let handle: ReturnType<TUI['showOverlay']> | undefined
+    let settled = false
+    const finish = (value: string | undefined): void => {
+      if (settled) return
+      settled = true
+      signal?.removeEventListener('abort', onAbort)
+      handle?.hide()
+      resolve(value)
+    }
+    const onAbort = (): void => { finish(undefined) }
+    try {
+      const dialog = new SearchChoiceDialog(title, items, hint, palette)
+      handle = tui.showOverlay(dialog, { width: 84, maxHeight: '85%', anchor: 'center' })
+      dialog.onSelect = item => { finish(item.value) }
+      dialog.onCancel = () => { finish(undefined) }
+    }
+    catch (error) {
       reject(error)
       return
     }

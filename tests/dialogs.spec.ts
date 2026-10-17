@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { visibleWidth } from '@earendil-works/pi-tui'
-import { showChoice } from '../src/ui/dialogs.js'
+import { showChoice, showSearchChoice } from '../src/ui/dialogs.js'
 import { createPalette } from '../src/ui/theme.js'
 
 describe('dialog frame', () => {
@@ -22,5 +22,24 @@ describe('dialog frame', () => {
     expect(rendered.every(line => !line.includes('\n'))).toBe(true)
     controller.abort()
     await expect(promise).resolves.toBeUndefined()
+  })
+
+  it('filters a searchable choice list before selecting', async () => {
+    let component: { render(width: number): string[]; handleInput(data: string): void } | undefined
+    const promise = showSearchChoice({
+      showOverlay(value: { render(width: number): string[]; handleInput(data: string): void }) {
+        component = value
+        return { hide() {} }
+      },
+    } as never, createPalette('plain'), 'Select model', [
+      { value: 'provider/alpha', label: 'Alpha', description: 'fast' },
+      { value: 'provider/beta', label: 'Beta', description: 'reasoning' },
+    ], 'Type to filter · Enter selects', new AbortController().signal)
+    component!.handleInput('bet')
+    const filtered = component!.render(84).join('\n')
+    expect(filtered).toContain('Beta')
+    expect(filtered).not.toContain('Alpha')
+    component!.handleInput('\r')
+    await expect(promise).resolves.toBe('provider/beta')
   })
 })

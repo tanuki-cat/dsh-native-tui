@@ -145,7 +145,7 @@ describe('reduceTranscript', () => {
     expect(compactOutput).toContain('⚙ run_code')
     expect(compactOutput).toContain('Press AC')
     expect(compactOutput).not.toContain('long code body')
-    expect(compactOutput).not.toContain('long result body')
+    expect(compactOutput).toContain('long result body')
 
     const hiddenOptions = { ...options, thinkingDisplay: 'hidden' as const, runCodeDisplay: 'hidden' as const }
     const hidden = reduceTranscript(entries, hiddenOptions)

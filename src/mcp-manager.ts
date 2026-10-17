@@ -75,25 +75,33 @@ export function apply(ctx: Context, config: Config): void {
       }
       const entryId = 'native-tui-mcp-' + serverName
       states.set(serverName, { status: 'starting' })
+      let created = false
       try {
         await loader.create({
           id: entryId,
           name: '@deepseek-ai/dsh-mcp-client',
           config: { ...raw, serverName, failOnStartupError: true },
         })
+        created = true
+        ids.add(entryId)
         const fiber = loader.resolve(entryId).fiber
         if (fiber === undefined) throw new Error('MCP client entry did not activate')
         await fiber.await()
         // Cordis FiberState.ACTIVE is 2; the enum is not exported at runtime.
         if (fiber.state !== 2) throw new Error('MCP client entry is not active')
         if (disposed) {
+          ids.delete(entryId)
           loader.remove(entryId)
           return
         }
-        ids.add(entryId)
         states.set(serverName, { status: 'connected' })
       }
       catch (error) {
+        if (created) {
+          ids.delete(entryId)
+          try { loader.remove(entryId) }
+          catch { /* The failed row may already be gone. */ }
+        }
         states.set(serverName, { status: 'error', error: error instanceof Error ? error.message : String(error) })
       }
     }

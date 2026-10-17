@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import type { AgentHandle } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { createHostSession, resumeHostSession } from '../src/runtime/agent.js'
+import { createHostSession, resumeHostSession, sessionAgentPreset, sessionModelSelection } from '../src/runtime/agent.js'
 import type { ResolvedConfig } from '../src/config.js'
 
 const config: ResolvedConfig = {
@@ -33,6 +33,21 @@ function fakeHandle(sessionId: ReturnType<typeof SessionId>, events: readonly un
 function fakeContext(overrides: Record<string, unknown>): Context {
   return overrides as unknown as Context
 }
+
+describe('session selection restore', () => {
+  it('reads the latest model/effort and preset from Session events', () => {
+    const session = {
+      header: { cwd: '/tmp', createdAt: 0, agentPreset: 'header-preset' },
+      snapshotEvents: () => [
+        { type: 'model/selection', data: { provider: 'p1', model: 'm1', reasoningEffort: 'low' } },
+        { type: 'request/header', data: { header: { config: { provider: 'p2', model: 'm2', reasoningEffort: 'high' } } } },
+        { type: 'agent-preset/selected', data: { agentPreset: 'ptc' } },
+      ],
+    }
+    expect(sessionModelSelection(session as never)).toEqual({ provider: 'p2', model: 'm2', reasoningEffort: 'high' })
+    expect(sessionAgentPreset(session as never)).toBe('ptc')
+  })
+})
 
 describe('host runtime', () => {
   it('creates an agent with the configured cwd and default model', async () => {

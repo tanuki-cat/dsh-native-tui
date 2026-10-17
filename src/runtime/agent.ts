@@ -1,6 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, AgentHandle, ModelSelection } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
+import type { Session } from '@deepseek-ai/dsh-session'
 import { randomUUID } from 'node:crypto'
 import type { ResolvedConfig } from '../config.js'
 
@@ -33,6 +34,45 @@ export interface AgentPresetService {
 
 function presetsOf(ctx: Context): AgentPresetService | undefined {
   return ctx.get('agentPresets') as AgentPresetService | undefined
+}
+
+/** Read the latest durable model selection recorded in a Session. */
+export function sessionModelSelection(session: Session): ModelSelection | undefined {
+  let selection: ModelSelection | undefined
+  for (const event of session.snapshotEvents()) {
+    const type = (event.type as string)
+    const data = event.data as Record<string, unknown>
+    if (type === 'model/selection') {
+      if (typeof data.provider === 'string' && typeof data.model === 'string' && data.provider !== '' && data.model !== '') {
+        selection = {
+          provider: data.provider,
+          model: data.model,
+          ...(typeof data.reasoningEffort === 'string' ? { reasoningEffort: data.reasoningEffort as ModelSelection['reasoningEffort'] } : {}),
+        }
+      }
+    }
+    else if (type === 'request/header') {
+      const header = data.header as { readonly config?: Record<string, unknown> } | undefined
+      const config = header?.config
+      if (config !== undefined && typeof config.provider === 'string' && typeof config.model === 'string' && config.provider !== '' && config.model !== '') {
+        selection = {
+          provider: config.provider,
+          model: config.model,
+          ...(typeof config.reasoningEffort === 'string' ? { reasoningEffort: config.reasoningEffort as ModelSelection['reasoningEffort'] } : {}),
+        }
+      }
+    }
+  }
+  return selection
+}
+
+/** Read the latest persisted Agent preset for a Session. */
+export function sessionAgentPreset(session: Session): string | undefined {
+  const selected = session.snapshotEvents()
+    .filter(event => (event.type as string) === 'agent-preset/selected')
+    .at(-1)
+  const selectedId = (selected?.data as { readonly agentPreset?: unknown } | undefined)?.agentPreset
+  return typeof selectedId === 'string' ? selectedId : session.header.agentPreset
 }
 
 function defaultSelection(ctx: Context): ModelSelection {
@@ -95,14 +135,7 @@ export async function resumeHostSession(ctx: Context, id: SessionId): Promise<Ho
       ? {}
       : {
         setup: async (agentCtx: Context, agent: Agent) => {
-          const selected = agent.session.snapshotEvents()
-            .filter(event => (event.type as string) === 'agent-preset/selected')
-            .at(-1)
-          const selectedId = (selected?.data as { readonly agentPreset?: unknown } | undefined)?.agentPreset
-          const presetId = typeof selectedId === 'string'
-            ? selectedId
-            : agent.session.header.agentPreset ?? presets.defaultId
-          await presets.mount(agentCtx, presetId)
+          await presets.mount(agentCtx, sessionAgentPreset(agent.session) ?? presets.defaultId)
         },
       }),
   })

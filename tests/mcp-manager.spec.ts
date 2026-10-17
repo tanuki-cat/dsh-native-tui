@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { apply, type McpManagerStatus } from '../src/mcp-manager.js'
 
-function harness(servers: Record<string, unknown>, createError?: Error) {
+function harness(servers: Record<string, unknown>, createError?: Error, fiberError?: Error) {
   const created: { id: string; name: string; config: Record<string, unknown> }[] = []
   const removed: string[] = []
   let cleanup: (() => void) | undefined
@@ -29,7 +29,7 @@ function harness(servers: Record<string, unknown>, createError?: Error) {
         created.push(options)
         return options.id
       },
-      resolve: () => ({ fiber: { state: 2, await: async () => {} } }),
+      resolve: () => ({ fiber: { state: 2, await: async () => { if (fiberError !== undefined) throw fiberError } } }),
       remove: (id: string) => { removed.push(id) },
     },
   }
@@ -56,6 +56,15 @@ describe('mcp-manager', () => {
     expect(h.status).toEqual({ demo: { status: 'connected' } })
     h.cleanup()
     expect(h.removed).toEqual(['native-tui-mcp-demo'])
+  })
+
+  it('removes the loader row when fiber activation fails', async () => {
+    const h = harness({}, undefined, new Error('activation failed'))
+    h.run({ servers: { get: () => ({ broken: { transport: 'stdio', command: 'false', args: [] } }) } })
+    await new Promise(resolve => setTimeout(resolve, 350))
+    expect(h.status).toEqual({ broken: { status: 'error', error: 'activation failed' } })
+    expect(h.removed).toEqual(['native-tui-mcp-broken'])
+    h.cleanup()
   })
 
   it('exposes a failed connection instead of silently swallowing it', async () => {
