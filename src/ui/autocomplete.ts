@@ -23,6 +23,14 @@ export interface CommandSuggestion {
   }[]
 }
 
+/** One user-invocable skill offered after `/`. */
+export interface SkillSuggestion {
+  readonly name: string
+  readonly description?: string
+  /** False when only a human may invoke the skill; the editor annotates it. */
+  readonly modelInvocable: boolean
+}
+
 /** One host-exported session mention candidate. */
 export interface SessionReferenceCandidateView {
   readonly sessionId: string
@@ -41,6 +49,8 @@ export interface SessionReferenceService {
 export interface TuiAutocompleteOptions {
   getAgent(): Agent
   getCommands(): readonly CommandSuggestion[]
+  /** User-invocable skills, listed after the commands in the `/` menu. */
+  getSkills(): Promise<readonly SkillSuggestion[]>
   getFileReferences(): FileReferenceService | undefined
   getSessionReferences(): SessionReferenceService | undefined
 }
@@ -85,7 +95,7 @@ export class TuiAutocompleteProvider implements AutocompleteProvider {
           }))
           return items.length === 0 ? null : { items, prefix: beforeCursor }
         }
-        const items: AutocompleteItem[] = commands
+        const commandItems: AutocompleteItem[] = commands
           .filter(command => command.name.toLowerCase().startsWith(query))
           .map(command => ({
             value: '/' + command.name,
@@ -94,6 +104,25 @@ export class TuiAutocompleteProvider implements AutocompleteProvider {
               ? {}
               : { description: command.description ?? command.input?.hint ?? '' }),
           }))
+        let skills: readonly SkillSuggestion[] = []
+        try {
+          skills = await this.options.getSkills()
+        }
+        catch {
+          skills = []
+        }
+        if (request.signal.aborted) return null
+        const commandNames = new Set(commands.map(command => command.name.toLowerCase()))
+        const skillItems: AutocompleteItem[] = skills
+          .filter(skill => skill.name.toLowerCase().startsWith(query) && !commandNames.has(skill.name.toLowerCase()))
+          .map(skill => ({
+            value: '/' + skill.name,
+            label: '/' + skill.name,
+            ...(skill.description === undefined
+              ? {}
+              : { description: (skill.modelInvocable ? '' : 'user-only · ') + skill.description }),
+          }))
+        const items = [...commandItems, ...skillItems]
         return items.length === 0 ? null : { items, prefix: beforeCursor }
       }
       const commandName = body.slice(0, space).toLowerCase()

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { FileReferenceService } from '@deepseek-ai/dsh-file-reference'
-import { TuiAutocompleteProvider, type SessionReferenceCandidateView } from '../src/ui/autocomplete.js'
+import { TuiAutocompleteProvider, type SessionReferenceCandidateView, type SkillSuggestion } from '../src/ui/autocomplete.js'
 
 const agent = { id: 'agent-1' } as unknown as Agent
 const signal = new AbortController().signal
@@ -9,6 +9,7 @@ const signal = new AbortController().signal
 function provider(
   files: readonly { path: string; kind: 'file' | 'directory' }[] = [],
   sessions: readonly SessionReferenceCandidateView[] = [],
+  skills: readonly SkillSuggestion[] = [],
 ) {
   const service = {
     list: async () => files,
@@ -31,6 +32,7 @@ function provider(
         ],
       },
     ],
+    getSkills: async () => skills,
     getFileReferences: () => service,
     getSessionReferences: () => sessionService,
   })
@@ -60,6 +62,27 @@ describe('TuiAutocompleteProvider', () => {
     expect(suggestions?.prefix).toBe('re')
     expect(suggestions?.items).toEqual([
       { value: 'remove', label: 'remove <route>', description: 'delete a route' },
+    ])
+  })
+
+  it('lists user-invocable skills after the commands', async () => {
+    const skills: readonly SkillSuggestion[] = [
+      { name: 'daily-log-writer', description: 'write the daily log', modelInvocable: false },
+      { name: 'find-skills', description: 'discover skills', modelInvocable: true },
+      { name: 'help', description: 'shadowed by the command', modelInvocable: true },
+    ]
+    const userOnly = await provider([], [], skills).getSuggestions(['/da'], 0, 3, { signal })
+    expect(userOnly?.items).toEqual([
+      { value: '/daily-log-writer', label: '/daily-log-writer', description: 'user-only · write the daily log' },
+    ])
+    const skillOnly = await provider([], [], skills).getSuggestions(['/fi'], 0, 3, { signal })
+    expect(skillOnly?.items).toEqual([
+      { value: '/find-skills', label: '/find-skills', description: 'discover skills' },
+    ])
+    // A command with the same name wins and the skill is not duplicated.
+    const shadowed = await provider([], [], skills).getSuggestions(['/he'], 0, 3, { signal })
+    expect(shadowed?.items).toEqual([
+      { value: '/help', label: '/help', description: 'show help' },
     ])
   })
 

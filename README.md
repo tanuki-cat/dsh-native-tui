@@ -29,7 +29,7 @@ DeepSeek Harness 的 host-native 终端前端，基于 pi-tui。
 - `@@<query>` 自动补全其他 Session 的 canonical mention；发送时 Host session-reference 自动注入快照。
 - `/export [path]` 导出 Session JSONL；`/export zip [path]` 导出含 manifest、attachments、deliverables 的 ZIP bundle；`/export html [path]` 导出静态 HTML transcript；`/open` 预览文本文件，Markdown 以 pi-tui Markdown 样式分页渲染；`/preview` 渲染 PNG/JPEG/GIF/WebP 图片；`/files` 浏览目录并预览；`/attach` 暂存文件/图片或剪贴板图片并随下一条 prompt 发送（8 MiB 上限），`/attach preview <i>` 可内联预览暂存项，`/attachments` 打开暂存附件管理器（预览/移除）；`/deliverables` 可列出、打开 panel、预览或用系统文件管理器定位 present 交付文件；`/tools` 列出工具调用，`/tool <index>` 分页查看完整参数/结果，`/diff [index]` 查看 write/edit 的独立 diff。
 - 问答/审批在 preset Agent 上仍可用（question probe 已通过）。
-- `@file` 主机端补全（file-reference-local）与 `/` 本地/宿主命令补全；选中的路径作为普通 prompt 文本，模型需用 read 工具读取。
+- `@file` 主机端补全（file-reference-local）与 `/` 本地/宿主命令+技能补全：`/` 菜单在命令之后列出 Host `ctx.skills` 的用户可调用技能（仅用户可调用的标注 `user-only`），选中插入 `/skill-name`，回车按普通 prompt 发送，由 `dsh-tool-skill` 读取 `/name` 手势并注入技能正文；选中的路径作为普通 prompt 文本，模型需用 read 工具读取。
 - 会话列表/按 id 恢复、状态、清屏、安全退出、终端恢复；恢复 Session 时读取持久化的 model/selection 与 request/header，恢复模型、reasoning effort 和 preset；退出后打印 Session ID 和可直接执行的 `--resume` 命令。
 - 非 TTY 显式失败；Ctrl+C/Ctrl+D/SIGTERM/SIGHUP 安全退出。
 
@@ -237,6 +237,12 @@ DSH_HOME=/tmp/dsh-native-tui-approval-home node scripts/fake-tty-approval.mjs
 
 ~~~sh
 DSH_HOME=/tmp/dsh-native-tui-catalog-home node scripts/fake-tty-provider-catalog.mjs
+~~~
+
+手动调用技能（`/` 菜单列出技能、`/skill-name` 注入技能正文）用真实 Host 冒烟（脚本自建 fixture skill）：
+
+~~~sh
+DSH_HOME=/tmp/dsh-native-tui-skill-home node scripts/fake-tty-skill.mjs
 ~~~
 
 普通终端环境可运行真实 PTY 冒烟：

@@ -61,7 +61,7 @@ import {
   type PendingAttachment,
 } from '../runtime/attachments.js'
 import { showApproval, showChoice, showImagePreview, showMarkdownPreview, showQuestionBatch, showSearchChoice, showTextInput, showTextPager } from './dialogs.js'
-import { TuiAutocompleteProvider, type CommandSuggestion, type SessionReferenceService } from './autocomplete.js'
+import { TuiAutocompleteProvider, type CommandSuggestion, type SessionReferenceService, type SkillSuggestion } from './autocomplete.js'
 import { createPalette, editorTheme, markdownTheme, type Palette } from './theme.js'
 import { globalShortcut } from './keymap.js'
 import { TranscriptRenderer, type TranscriptBlock, type TranscriptEntry } from './transcript.js'
@@ -185,6 +185,15 @@ interface LlmCatalog {
       readonly defaultEffort?: string
     }
   }>
+}
+
+interface SkillsCatalog {
+  list(options?: { readonly cwd?: string; readonly signal?: AbortSignal; readonly scope?: unknown }): Promise<readonly {
+    readonly name: string
+    readonly description: string
+    readonly whenToUse?: string
+    readonly invocation?: { readonly modelInvocable?: boolean; readonly userInvocable?: boolean }
+  }[]>
 }
 
 interface PermissionPresets {
@@ -403,9 +412,37 @@ export async function startTerminalApp(
     throw new Error('native-tui: failed to open a session: ' + errorMessage(error), { cause: error })
   }
 
+  /** Agent-preset-scoped skill registry, falling back to the host composition. */
+  const skillRegistry = (): SkillsCatalog | undefined => {
+    try {
+      return (active.agent.ctx.get('skills') as SkillsCatalog | undefined) ?? (host.get('skills') as SkillsCatalog | undefined)
+    }
+    catch {
+      return host.get('skills') as SkillsCatalog | undefined
+    }
+  }
+  /** User-invocable skills for the `/` menu and the unknown-command fallback. */
+  const loadSkills = async (): Promise<readonly SkillSuggestion[]> => {
+    const registry = skillRegistry()
+    if (registry === undefined) return []
+    try {
+      const list = await registry.list({ cwd: config.cwd, scope: active.agent })
+      return list
+        .filter(skill => skill.invocation === undefined || skill.invocation.userInvocable !== false)
+        .map(skill => ({
+          name: skill.name,
+          description: skill.description,
+          modelInvocable: skill.invocation === undefined || skill.invocation.modelInvocable !== false,
+        }))
+    }
+    catch {
+      return []
+    }
+  }
   const autocomplete = new TuiAutocompleteProvider({
     getAgent: () => active.agent,
     getCommands: () => [...LOCAL_COMMANDS, ...host.commands.list(active.agent)],
+    getSkills: loadSkills,
     getFileReferences: () => host.get('fileReferences') as import('@deepseek-ai/dsh-file-reference').FileReferenceService | undefined,
     getSessionReferences: () => host.get('sessionReferenceResolver') as SessionReferenceService | undefined,
   })
@@ -875,6 +912,7 @@ export async function startTerminalApp(
       case 'help': {
         const hostCommands = host.commands.list(active.agent)
           .map(command => '/' + command.name + (command.input === undefined ? '' : ' ' + command.input.hint))
+        const skills = await loadSkills()
         pushNotice('info', [
           'Local commands:',
           '/help · /new · /init · /sessions · /resume [id] · /status · /clear',
@@ -892,6 +930,7 @@ export async function startTerminalApp(
           '/attach <path>|paste|preview <i>|list|clear · /attachments · /exit',
           '@@<query> references another session · /exit',
           'Host commands: ' + (hostCommands.length === 0 ? '(none)' : hostCommands.join(' · ')),
+          'Skills: ' + (skills.length === 0 ? '(none)' : skills.map(skill => '/' + skill.name).join(' · ')),
           'Enter sends; when the agent runs, Enter steers and Esc cancels.',
         ].join(NL))
         return
@@ -2964,15 +3003,24 @@ export async function startTerminalApp(
             default: {
                 try {
                     const execution = await host.commands.execute(active.agent, line, [], new AbortController().signal);
-                    if (execution === undefined) {
-                        pushNotice('warning', 'Unknown command: /' + name + '. Use /help for local and host commands.');
+                    if (execution !== undefined) {
+                        // Host commands append command/done before execute() resolves, and the
+                        // transcript renders that event. Do not also surface result.text here.
+                        return;
                     }
-                    // Host commands append command/done before execute() resolves, and the
-                    // transcript renders that event. Do not also surface result.text here.
                 }
                 catch (error) {
                     pushNotice('error', 'Command failed: ' + errorMessage(error));
+                    return;
                 }
+                // A user-invocable skill goes through as a prompt: dsh-tool-skill reads the
+                // /name gesture from claimed user messages and injects the skill body.
+                const skills = await loadSkills();
+                if (skills.some(skill => skill.name.toLowerCase() === name)) {
+                    sendPrompt(line);
+                    return;
+                }
+                pushNotice('warning', 'Unknown command: /' + name + '. Use /help for local and host commands.');
             }
         }
     };
