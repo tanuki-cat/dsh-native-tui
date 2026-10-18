@@ -134,6 +134,14 @@ export function buildChatPayload(
     const wire = wireMessage(message, options.model, resolveFileText)
     if (wire !== undefined) messages.push(wire)
   }
+  // Both gateways require the leading message to be a system prompt, and the
+  // international one rejects a conversation outright without it (code 11128).
+  // A caller that supplies no system text — a hand-built one-shot, a probe —
+  // gets an empty system message rather than a transport error; the conversation
+  // itself is unchanged.
+  if (messages.length === 0 || messages[0]?.role !== 'system') {
+    messages.unshift({ role: 'system', content: '' })
+  }
 
   const tools = wireTools(options)
   const effort = options.reasoningEffort === undefined ? undefined : String(options.reasoningEffort)

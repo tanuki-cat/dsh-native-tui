@@ -49,6 +49,8 @@ export interface CodeBuddyCommandDeps {
   readonly authorization: AuthorizationLike | undefined
   /** The credential seam, for sign-in state display and sign-out. */
   readonly credentials: CredentialStoreLike | undefined
+  /** Open an authorization URL in the platform browser; undefined when unsupported. */
+  readonly openUrl?: (url: string) => boolean
   /** Cancellation for the whole command. */
   readonly signal: AbortSignal
   /** Render one notice line. */
@@ -135,6 +137,16 @@ async function status(deps: CodeBuddyCommandDeps): Promise<void> {
   report(deps, lines)
 }
 
+/** Open one URL, treating a throwing opener as "did not open". */
+function openOnce(open: (url: string) => boolean, url: string): boolean {
+  try {
+    return open(url)
+  }
+  catch {
+    return false
+  }
+}
+
 /** login sub-command: drive the authorization seam once per deployment. */
 async function login(deps: CodeBuddyCommandDeps, target: string): Promise<void> {
   const selected = selectProfiles(target)
@@ -147,15 +159,29 @@ async function login(deps: CodeBuddyCommandDeps, target: string): Promise<void> 
     return
   }
   for (const profile of selected) {
+    // Per deployment: the same URL is announced once, and a second deployment
+    // in the same run must still open its own page.
+    let lastUrl: string | undefined
     try {
       const outcome = await deps.authorization.begin({
         key: credentialKeyFor(profile),
         method: 'oauth',
         interaction: {
           notify: notice => {
-            const suffix = notice.url === undefined ? '' : ' ' + notice.url
+            // Hand the authorization page to the browser once per URL, and keep
+            // the URL in the notice so a headless or failed launch is still
+            // actionable. A rejected opener must not abort the flow: the URL
+            // line is the fallback.
+            const url = notice.url
+            const first = url !== undefined && url !== lastUrl
+            const opened = first && url !== undefined && deps.openUrl !== undefined && openOnce(deps.openUrl, url)
+            if (url !== undefined) lastUrl = url
+            const suffix = url === undefined ? '' : ' ' + url
+            // The manual hint belongs to the announcement that could not open a
+            // browser, never to a repeat of a URL that already opened.
+            const hint = first && !opened ? ' (open this URL in a browser)' : ''
             const code = notice.code === undefined ? '' : ' code: ' + notice.code
-            deps.notice('info', notice.message + suffix + code)
+            deps.notice('info', notice.message + hint + suffix + code)
           },
           prompt: question => deps.prompt({
             message: question.message,

@@ -26,7 +26,7 @@ import { isMarkdownPath, listDirectory, readTextPreview, sanitizeTerminalText } 
 import { settingsChildFields, settingsFields, settingsSetAt, settingsValueAt } from '../runtime/settings.js'
 import { readImagePreview } from '../runtime/images.js'
 import { collectSessionMetrics, formatSessionMetrics, type SessionStats } from '../runtime/metrics.js'
-import { revealWithSystemApp, systemRevealCommand } from '../runtime/open.js'
+import { openUrlInBrowser, revealWithSystemApp, systemRevealCommand } from '../runtime/open.js'
 import { collectDeliverables, formatDeliverables, type PresentedFileView } from '../runtime/deliverables.js'
 import { collectToolCalls } from '../runtime/tool-log.js'
 import { ownStoredSessions, selectListedSessions } from '../runtime/session-list.js'
@@ -2541,6 +2541,7 @@ export async function startTerminalApp(
                     service: codebuddyService,
                     authorization: host.get('authorization') as CodeBuddyCommandDeps['authorization'],
                     credentials: host.get('credentials') as CodeBuddyCommandDeps['credentials'],
+                    openUrl: url => openUrlInBrowser(url),
                     signal: interactionAbort.signal,
                     notice: (level, text) => pushNotice(level, text),
                     prompt: question => showTextInput(

@@ -8,6 +8,7 @@ import {
   normalizeEnPayload,
 } from '../src/codebuddy/profiles.js'
 import { classifyFailure, hintForGatewayError, redact } from '../src/codebuddy/errors.js'
+import { buildChatPayload } from '../src/codebuddy/wire.js'
 import {
   contextWindowOf,
   discoverModels,
@@ -37,6 +38,27 @@ describe('codebuddy profiles', () => {
     expect(cnProfile.headers()).not.toHaveProperty('Authorization')
     expect(cnProfile.headers('token-1').Authorization).toBe('Bearer token-1')
     expect(enProfile.chatExtraHeaders?.Accept).toContain('text/event-stream')
+  })
+
+  it('always leads with a system message, the gateways require one', () => {
+    const bare = buildChatPayload({
+      provider: 'codebuddy-en',
+      model: 'deepseek-v4.1-flash',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'Say OK' }] }],
+    }, enProfile)
+    const messages = bare.messages as { role: string; content: unknown }[]
+    expect(messages[0]).toEqual({ role: 'system', content: '' })
+    expect(messages[1]).toMatchObject({ role: 'user' })
+
+    const withSystem = buildChatPayload({
+      provider: 'codebuddy-en',
+      model: 'deepseek-v4.1-flash',
+      system: 'You answer in one line.',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'Say OK' }] }],
+    }, enProfile)
+    const withSystemMessages = withSystem.messages as { role: string; content: unknown }[]
+    expect(withSystemMessages[0]).toEqual({ role: 'system', content: 'You answer in one line.' })
+    expect(withSystemMessages).toHaveLength(2)
   })
 
   it('expresses tool_choice none by dropping the declarations', () => {

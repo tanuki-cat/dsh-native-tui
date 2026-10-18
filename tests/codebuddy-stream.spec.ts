@@ -87,7 +87,10 @@ describe('codebuddy wire serialization', () => {
         { role: 'assistant', content: [], source: { kind: 'model', provider: 'codebuddy', model: 'chat-a' }, id: 'empty' },
       ],
     }), cnProfile)
+    // The gateways require a leading system message even for a tool-only
+    // history, so the empty system prompt is part of the contract here.
     expect(body.messages).toEqual([
+      { role: 'system', content: '' },
       { role: 'assistant', content: 'working', tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'read', arguments: '{"path":"a"}' } }] },
       { role: 'tool', tool_call_id: 'call_1', content: 'contents' },
     ])
