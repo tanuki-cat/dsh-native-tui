@@ -1,0 +1,114 @@
+/**
+ * The Host event subscriptions that keep the transcript live.
+ *
+ * The application owns the mutable transcript arrays; this module owns the
+ * decision of which event becomes which transcript entry, so the wiring in
+ * `app.ts` stays a list of subscriptions.
+ *
+ * @module dsh-native-tui/ui/session-events
+ */
+
+import type { Context } from '@deepseek-ai/cordis'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import type { ChangesSummaryView } from '../runtime/changes.js'
+import { formatChangesSummary } from '../runtime/changes.js'
+import { formatDeliverables, type PresentedFileView } from '../runtime/deliverables.js'
+import type { TranscriptEntry } from './transcript.js'
+
+/** The workspace-changes service slice the live listener reads. */
+interface ChangesService {
+  summary(sessionId: SessionId, seq: number): ChangesSummaryView | undefined
+}
+
+/** What the live listeners write into. */
+export interface SessionEventsHost {
+  /** Host context, for the service lookups and the event bus. */
+  readonly host: Context
+  /** The session currently on screen. */
+  readonly sessionId: () => SessionId
+  /** Append one transcript entry. */
+  readonly appendEntry: (entry: TranscriptEntry) => void
+  /** Replace the entry list, used to drop a live entry superseded by the durable one. */
+  readonly replaceEntries: (update: (entries: readonly TranscriptEntry[]) => TranscriptEntry[]) => void
+  /** Notice for a change summary or a presented deliverable. */
+  readonly notice: (text: string) => void
+  /** Re-render the transcript soon. */
+  readonly scheduleTranscript: () => void
+  /** Re-render the status row now. */
+  readonly renderStatus: () => void
+  /** Record a live attempt's turn/step so its chunks are attributed correctly. */
+  readonly beginAttempt: (attemptId: string, turn: number, step: number) => void
+  /** Forget a finished attempt. */
+  readonly endAttempt: (attemptId: string) => void
+  /** Allocate the next live chunk sequence number. */
+  readonly nextLiveSeq: () => number
+  /** The turn/step recorded for one attempt, when it is known. */
+  readonly attemptPosition: (attemptId: string) => { turn: number; step: number } | undefined
+}
+
+/** Subscribe the transcript to one session's events. */
+export function subscribeSessionEvents(host: SessionEventsHost): () => void {
+  const timers: Array<() => void> = []
+  const own = (dispose: () => void): void => { timers.push(dispose) }
+
+  own(host.host.on('session/event', (session, event) => {
+    if (session.id !== host.sessionId()) return
+    if (event.type === 'assistant/message') {
+      const turn = event.data.turn
+      const step = event.data.step
+      host.replaceEntries(entries => entries.filter(entry => !(
+        entry.type === 'live'
+        && entry.event.data.turn === turn
+        && entry.event.data.step === step
+      )))
+    }
+    host.appendEntry({ type: 'event', event })
+    if ((event.type as string) === 'workspace/changes') {
+      const changes = host.host.get('workspaceChanges') as ChangesService | undefined
+      const summary = changes?.summary(session.id, Number(event.seq))
+      if (summary !== undefined) host.notice(formatChangesSummary(summary))
+    }
+    if ((event.type as string) === 'deliverables/presented') {
+      const data = event.data as { readonly turn: number; readonly files: readonly PresentedFileView[] }
+      host.notice(formatDeliverables([{ turn: data.turn, files: data.files }]))
+    }
+    host.scheduleTranscript()
+    host.renderStatus()
+  }))
+
+  own(host.host.on('agent/assistant-stream', ({ agent, frame }) => {
+    if (agent.id !== host.sessionId()) return
+    if (frame.type === 'start') {
+      host.beginAttempt(String(frame.attemptId), frame.turn, frame.step)
+      return
+    }
+    if (frame.type === 'end') {
+      host.endAttempt(String(frame.attemptId))
+      return
+    }
+    const position = host.attemptPosition(String(frame.attemptId)) ?? { turn: 0, step: 0 }
+    host.appendEntry({
+      type: 'live',
+      event: {
+        type: 'assistant/live-chunk',
+        seq: host.nextLiveSeq(),
+        time: frame.time,
+        data: {
+          attemptId: String(frame.attemptId),
+          turn: position.turn,
+          step: position.step,
+          chunk: frame.chunk,
+        },
+      },
+    })
+    host.scheduleTranscript()
+  }))
+
+  own(host.host.on('agent/status', ({ agent }) => {
+    if (agent.id === host.sessionId()) host.renderStatus()
+  }))
+
+  return () => {
+    for (const dispose of timers) dispose()
+  }
+}

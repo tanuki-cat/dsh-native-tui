@@ -7,7 +7,8 @@
 - `src/index.ts` — Cordis entry, TTY guard, plugin wiring; `src/config.ts` — schemastery config.
 - `src/mcp-manager.ts` — MCP server reconcile plugin (`dsh-native-tui/mcp-manager`).
 - `src/runtime/` — host-facing helpers: `agent.ts`, `providers.ts`, `settings.ts`, `bundle.ts`, `export.ts`, `session-list.ts`.
-- `src/ui/` — terminal UI: `app.ts` (command loop), `dialogs.ts`, `transcript.ts`, `autocomplete.ts`, `theme.ts`.
+- `src/ui/` — terminal UI: `app.ts` (wiring: terminal, session, transcript), `status-line.ts`, `session-events.ts`, `dialogs.ts`, `transcript.ts`, `autocomplete.ts`, `theme.ts`.
+- `src/ui/commands/` — one module per command family (`provider.ts`, `settings.ts`, `mcp.ts`, `plugins.ts`, …), all driven through the injected `CommandContext` in `context.ts`; Host service shapes live in `services.ts`.
 - `tests/` — Vitest specs, one `<module>.spec.ts` per unit.
 - `scripts/` — fake-TTY and E2E probes (`fake-tty-*.mjs`, `*-e2e.mjs`); `presets/` + `cordis.patch.yml` — bundle and preset layers.
 - `docs/` — `design-task-<type>-<topic>.md` designs and `progress-dsh-native-tui.md`.
@@ -24,9 +25,11 @@
 
 TypeScript ESM (NodeNext): relative imports end in `.js`, type-only imports use `type`. Two-space indent, single quotes, no semicolons (legacy exception: `src/ui/app.ts`). `strict` and `noUncheckedIndexedAccess` are enabled. Files are `kebab-case.ts`; types `PascalCase`; functions and variables `camelCase`. No linter or formatter is configured — match the surrounding file and keep diffs minimal.
 
+**A source file must not exceed 1000 lines.** When a file grows past that, split it by responsibility rather than adding another branch to it: the command handlers live in `src/ui/commands/`, the host-facing helpers in `src/runtime/`. A split moves code and injects its collaborators; it does not change behavior.
+
 ## Testing Guidelines
 
-Vitest with `environment: 'node'`, specs at `tests/<module>.spec.ts`. Add focused unit tests for behavior changes and keep `pnpm check` green (currently 29 files / 184 tests). For Host or TUI integration, add or run a `scripts/fake-tty-*.mjs` probe and report its real output.
+Vitest with `environment: 'node'`, specs at `tests/<module>.spec.ts`. Command handlers under `src/ui/commands/` are testable directly against a stub `CommandContext` (see `tests/commands.spec.ts`); the terminal wiring in `app.ts` is covered by the fake-TTY probes instead. Add focused unit tests for behavior changes and keep `pnpm check` green (currently 31 files / 208 tests). For Host or TUI integration, add or run a `scripts/fake-tty-*.mjs` probe and report its real output.
 
 ## Commit & Pull Request Guidelines
 
