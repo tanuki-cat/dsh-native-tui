@@ -253,10 +253,53 @@ export function buildDiscoveredModelEntry(candidate: DiscoveredProviderModel): R
   }
 }
 
-/** Build a catalog-route profile that only names a credential. */
-export function buildCatalogProvider(apiKeyEnv: string): Record<string, unknown> {
+/** Build a catalog-route profile; an omitted reference keeps the provider's native auth. */
+export function buildCatalogProvider(apiKeyEnv?: string): Record<string, unknown> {
+  if (apiKeyEnv === undefined) return {}
   if (!isValidEnvName(apiKeyEnv)) throw new Error('apiKeyEnv must be an uppercase environment variable name, not the API key')
   return { apiKeyEnv }
+}
+
+/** One provider route an adapter declares as configurable, registered or dormant. */
+export interface ConfigurableProviderEntry {
+  /** Route key this entry activates when configured. */
+  readonly provider: string
+  /** Human-readable provider name for configuration surfaces. */
+  readonly displayName?: string
+  /** Settings namespace whose section configures this provider. */
+  readonly settingsNs?: string
+  /** Authentication the route performs when the profile names no credential reference. */
+  readonly nativeAuth?: { readonly env?: readonly string[]; readonly oauth?: boolean }
+  /** Endpoint used when the profile sets no baseURL. */
+  readonly defaultBaseURL?: string
+  /** Environment variables used to construct the endpoint. */
+  readonly baseURLEnv?: readonly string[]
+  /** True when the adapter knows the route only because configuration declared it. */
+  readonly declared?: boolean
+}
+
+/**
+ * Built-in providers one adapter declares for a settings namespace, in
+ * declaration order. Dormant entries are kept: the directory lists what a route
+ * would activate, whether or not the operator configured it yet.
+ */
+export function configurableProvidersIn(
+  entries: readonly ConfigurableProviderEntry[],
+  settingsNs: string,
+): ConfigurableProviderEntry[] {
+  return entries.filter(entry => entry.settingsNs === settingsNs
+    && typeof entry.provider === 'string'
+    && entry.provider !== '')
+}
+
+/** First environment variable a provider's native auth reads, when it reports one. */
+export function nativeAuthEnv(entry: Pick<ConfigurableProviderEntry, 'nativeAuth'>): string | undefined {
+  return entry.nativeAuth?.env?.find(name => isValidEnvName(name))
+}
+
+/** Credential reference a route falls back to when its provider reports no native env. */
+export function defaultApiKeyEnv(route: string): string {
+  return route.toUpperCase().replace(/[^A-Z0-9]+/gu, '_') + '_API_KEY'
 }
 
 /**

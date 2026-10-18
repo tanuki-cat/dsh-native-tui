@@ -123,11 +123,13 @@ Enter 发送；运行中 Enter 作为 steer；Ctrl+C 取消/退出；Ctrl+D 退�
 `/provider add` 提供引导流程：
 
 1. 选择 Custom OpenAI-compatible / OpenAI Responses / Anthropic-compatible gateway，或 Built-in pi-ai catalog route。
-2. 输入 route、baseURL，然后选择 Credential source：
+   - **Built-in pi-ai catalog route**：从 Host `listConfigurableProviders` 提供的内置目录搜索选择（`amazon-bedrock`、`anthropic`、`deepseek`…），与 Web 端 Models 页一致，不再手输路由名；目录不可用时才回退手输 catalog id。
+2. 选择 Credential source：
+   - **Use built-in environment auth**：provider 声明原生认证时出现（默认项）。写入不带 `apiKeyEnv` 的 profile，沿用 provider 自己的环境变量，例如 `amazon-bedrock` → `AWS_BEARER_TOKEN_BEDROCK`。
    - **Store API key in DSH credentials（推荐）**：直接粘贴 key。key 存入 DSH credential store（`~/.dsh/.credentials.yaml`，权限 0600），不写入 profile；无需 export。输入时 key 在终端可见。
-   - **Use an environment variable**：输入 UPPERCASE 变量名，启动 dsh 前在 shell export。
-3. custom gateway 会调用 Host `discoverModels` 请求 `GET {baseURL}/models` 并列出模型（5 秒超时）。
-4. 从自动发现的模型中选择，或回退到手动输入 model id/context window/max tokens。**发现列表中的其他模型也会写入该 route**，之后可在 `/model` 中直接切换；选中模型会带上本次选择的 input/reasoning，其他模型使用 discovery 返回的容量/模态，并写入默认 `reasoningEfforts`（`low/medium/high` 同名映射）。
+   - **Use an environment variable**：输入 UPPERCASE 变量名，启动 dsh 前在 shell export；catalog route 的默认值是 provider 原生 env（无原生认证时回退 `<ROUTE>_API_KEY`）。
+3. custom gateway 会调用 Host `discoverModels` 请求 `GET {baseURL}/models` 并列出模型（5 秒超时）；catalog route 直接使用 provider 内置模型列表。
+4. 从内置/自动发现的模型中选择，或回退到手动输入 model id/context window/max tokens。**发现列表中的其他模型也会写入该 route**，之后可在 `/model` 中直接切换；选中模型会带上本次选择的 input/reasoning，其他模型使用 discovery 返回的容量/模态，并写入默认 `reasoningEfforts`（`low/medium/high` 同名映射）。
 5. 选择 Input modalities：`Text + image`（vision）或 `Text only`。生成的模型配置会显式写入 `input`；未知能力的自定义网关默认先选 `Text + image`。
 6. 输入 Reasoning levels（逗号分隔，默认 `low,medium,high`；留空表示不支持 reasoning）。生成的模型配置会写入 `reasoningEfforts`，之后可用 `/reasoning` 切换。
 
@@ -229,6 +231,12 @@ DSH_HOME=/tmp/dsh-native-tui-install-home node scripts/fake-tty-preset.mjs
 pnpm pack --pack-destination .tmp
 DSH_HOME=/tmp/dsh-native-tui-approval-home dsh plugin --profile tui add .tmp/dsh-native-tui-0.2.1-rc.2.tgz
 DSH_HOME=/tmp/dsh-native-tui-approval-home node scripts/fake-tty-approval.mjs
+~~~
+
+内置 provider 目录（catalog 选择器、原生环境认证、保存后内置模型列表）同样用真实 Host 冒烟：
+
+~~~sh
+DSH_HOME=/tmp/dsh-native-tui-catalog-home node scripts/fake-tty-provider-catalog.mjs
 ~~~
 
 普通终端环境可运行真实 PTY 冒烟：

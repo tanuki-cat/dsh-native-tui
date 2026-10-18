@@ -3,7 +3,10 @@ import {
   buildCatalogProvider,
   buildCustomProvider,
   buildDiscoveredModelEntry,
+  configurableProvidersIn,
   DEFAULT_REASONING_EFFORTS,
+  defaultApiKeyEnv,
+  nativeAuthEnv,
   isValidEnvName,
   isValidProviderRoute,
   mergeDiscoveredProviderModels,
@@ -209,5 +212,26 @@ describe('provider config helpers', () => {
     expect(mergeProviderProfiles({ openai: { apiKeyEnv: 'OPENAI_API_KEY' } }, 'my-gateway', { apiKeyEnv: 'X' }))
       .toEqual({ openai: { apiKeyEnv: 'OPENAI_API_KEY' }, 'my-gateway': { apiKeyEnv: 'X' } })
     expect(buildCatalogProvider('OPENAI_API_KEY')).toEqual({ apiKeyEnv: 'OPENAI_API_KEY' })
+    // No reference keeps the provider's native auth, matching the Web editor's blank field.
+    expect(buildCatalogProvider()).toEqual({})
+    expect(() => buildCatalogProvider('bad-name')).toThrow('uppercase environment variable')
+  })
+
+  it('selects built-in catalog providers and their native credential env', () => {
+    const entries = [
+      { provider: 'amazon-bedrock', settingsNs: 'llm-pi-ai', nativeAuth: { env: ['AWS_BEARER_TOKEN_BEDROCK'], oauth: false } },
+      { provider: 'anthropic', settingsNs: 'llm-pi-ai', displayName: 'Anthropic', nativeAuth: { env: ['ANTHROPIC_API_KEY'], oauth: true } },
+      { provider: 'other-adapter', settingsNs: 'llm-other', nativeAuth: { env: ['OTHER_KEY'] } },
+      { provider: '', settingsNs: 'llm-pi-ai' },
+      { provider: 'no-auth', settingsNs: 'llm-pi-ai' },
+    ]
+    const piAi = configurableProvidersIn(entries, 'llm-pi-ai')
+    expect(piAi.map(entry => entry.provider)).toEqual(['amazon-bedrock', 'anthropic', 'no-auth'])
+    expect(nativeAuthEnv(piAi[0]!)).toBe('AWS_BEARER_TOKEN_BEDROCK')
+    expect(nativeAuthEnv(piAi[2]!)).toBeUndefined()
+    // Invalid env spellings are skipped so the picker default stays a legal reference.
+    expect(nativeAuthEnv({ nativeAuth: { env: ['lower-case', 'GOOD_KEY'] } })).toBe('GOOD_KEY')
+    expect(defaultApiKeyEnv('amazon-bedrock')).toBe('AMAZON_BEDROCK_API_KEY')
+    expect(defaultApiKeyEnv('my-gateway.v2')).toBe('MY_GATEWAY_V2_API_KEY')
   })
 })

@@ -35,11 +35,15 @@ import {
   buildCatalogProvider,
   buildCustomProvider,
   buildDiscoveredModelEntry,
+  configurableProvidersIn,
+  defaultApiKeyEnv,
   isValidEnvName,
   isValidProviderRoute,
   mergeDiscoveredProviderModels,
   mergeProviderModel,
+  nativeAuthEnv,
   parseReasoningLevels,
+  type ConfigurableProviderEntry,
   type ProviderProtocol,
 } from '../runtime/providers.js'
 import {
@@ -152,6 +156,15 @@ function errorMessage(error: unknown): string {
 
 interface LlmCatalog {
   listProviders(): readonly { readonly id: string; readonly name?: string }[]
+  listConfigurableProviders(): readonly {
+    readonly provider: string
+    readonly displayName?: string
+    readonly settingsNs?: string
+    readonly nativeAuth?: { readonly env?: readonly string[]; readonly oauth?: boolean }
+    readonly defaultBaseURL?: string
+    readonly baseURLEnv?: readonly string[]
+    readonly declared?: boolean
+  }[]
   listModels(provider: string): Promise<readonly { readonly id: string; readonly name: string; readonly description?: string }[]>
   discoverModels(settingsNs: string, request: {
     readonly provider?: string
@@ -2681,28 +2694,66 @@ export async function startTerminalApp(
                     ], 'Enter selects · Esc cancels', interactionAbort.signal);
                     if (kind === undefined)
                         return;
-                    const route = await showTextInput(tui, palette, 'Provider route', 'my-gateway', 'lowercase letters, digits, hyphens · Esc cancels', interactionAbort.signal);
+                    let route: string | undefined;
+                    let nativeEnv: string | undefined;
+                    if (kind === 'catalog') {
+                        let directory: readonly ConfigurableProviderEntry[] = [];
+                        try {
+                            directory = configurableProvidersIn(llm.listConfigurableProviders(), 'llm-pi-ai');
+                        }
+                        catch {
+                            directory = [];
+                        }
+                        if (directory.length === 0) {
+                            pushNotice('warning', 'The built-in provider directory is unavailable; enter a shipped pi-ai catalog id manually.');
+                            route = await showTextInput(tui, palette, 'Provider route', 'anthropic', 'Shipped pi-ai catalog id · Esc cancels', interactionAbort.signal);
+                        }
+                        else {
+                            const picked = await showSearchChoice(tui, palette, 'Built-in provider · ' + String(directory.length) + ' available', directory.map((entry) => {
+                                const env = nativeAuthEnv(entry);
+                                return {
+                                    value: entry.provider,
+                                    label: entry.provider,
+                                    description: [
+                                        ...(entry.displayName !== undefined && entry.displayName !== entry.provider ? [entry.displayName] : []),
+                                        ...(env === undefined ? [] : ['native env ' + env]),
+                                    ].join(' · '),
+                                };
+                            }), 'Type to filter · Enter selects · Esc cancels', interactionAbort.signal);
+                            if (picked !== undefined) {
+                                route = picked;
+                                nativeEnv = nativeAuthEnv(directory.find(entry => entry.provider === picked) ?? { provider: picked });
+                            }
+                        }
+                    }
+                    else {
+                        route = await showTextInput(tui, palette, 'Provider route', 'my-gateway', 'lowercase letters, digits, hyphens · Esc cancels', interactionAbort.signal);
+                    }
                     if (route === undefined)
                         return;
                     if (!isValidProviderRoute(route)) {
                         pushNotice('warning', 'Provider route must start with a letter and contain only lowercase letters, digits, and hyphens.');
                         return;
                     }
-                    const envDefault = route.toUpperCase().replace(/[^A-Z0-9]+/gu, '_') + '_API_KEY';
+                    const envDefault = nativeEnv ?? defaultApiKeyEnv(route);
                     const baseURL = kind === 'catalog'
                         ? undefined
                         : await showTextInput(tui, palette, 'Base URL', 'https://api.example.com/v1', 'OpenAI-compatible API root · Esc cancels', interactionAbort.signal);
                     if (kind !== 'catalog' && baseURL === undefined)
                         return;
                     const credentialSource = await showChoice(tui, palette, 'Credential source', [
+                        ...(nativeEnv === undefined ? [] : [{ value: 'native', label: 'Use built-in environment auth', description: 'Leave the profile key unset; the provider reads ' + nativeEnv }]),
                         { value: 'store', label: 'Store API key in DSH credentials', description: 'Recommended; key goes to the credential store, not the profile' },
                         { value: 'env', label: 'Use an environment variable', description: 'Read a key exported before dsh started' },
                     ], 'Enter selects · Esc cancels', interactionAbort.signal);
                     if (credentialSource === undefined)
                         return;
-                    let env: string;
-                    let apiKey: string;
-                    if (credentialSource === 'store') {
+                    let env: string | undefined;
+                    let apiKey: string | undefined;
+                    if (credentialSource === 'native') {
+                        env = undefined;
+                    }
+                    else if (credentialSource === 'store') {
                         const credentials = host.get('credentials') as CredentialsService | undefined;
                         if (credentials === undefined) {
                             pushNotice('warning', 'The credential store is unavailable in this profile; choose the environment-variable option instead.');
@@ -2837,7 +2888,7 @@ export async function startTerminalApp(
                             route,
                             api: kind as ProviderProtocol,
                             baseURL,
-                            apiKeyEnv: env,
+                            apiKeyEnv: env ?? envDefault,
                             modelId: model.id,
                             ...(model.name === undefined ? {} : { modelName: model.name }),
                             contextWindow: model.contextWindow,
@@ -2877,7 +2928,7 @@ export async function startTerminalApp(
                         }
                     }
                     await settings.mutate('llm-pi-ai', [{ op: 'set', path: ['providers', route], value: provider }], descriptor.revision);
-                    pushNotice('info', 'Saved provider route: ' + route + ' · key is read from ' + (provider as { apiKeyEnv?: string }).apiKeyEnv);
+                    pushNotice('info', 'Saved provider route: ' + route + ' · key is read from ' + ((provider as { apiKeyEnv?: string }).apiKeyEnv ?? nativeEnv ?? 'no credential reference'));
                     if (chosenModel !== undefined) {
                         await selectModel(llm, route + '/' + chosenModel);
                         return;
@@ -2892,7 +2943,7 @@ export async function startTerminalApp(
                     }
                     if (models.length === 0) {
                         pushNotice('warning', 'Provider saved, but /model sees no models yet. Export '
-                            + String((provider as { apiKeyEnv?: string }).apiKeyEnv ?? 'the API key env var')
+                            + String((provider as { apiKeyEnv?: string }).apiKeyEnv ?? nativeEnv ?? 'the API key env var')
                             + ' before launching dsh, then restart the TUI or run /model.');
                         return;
                     }
