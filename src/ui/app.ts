@@ -46,7 +46,7 @@ import { diffCommand, toolCommand, toolsCommand } from './commands/tools.js'
 import { exportCommand, openCommand, presetCommand, previewCommand } from './commands/workspace-files.js'
 import { scheduleCommand, workspacesCommand } from './commands/workspace.js'
 import { subscribeSessionEvents } from './session-events.js'
-import { TranscriptRenderer, type TranscriptBlock, type TranscriptEntry } from './transcript.js'
+import { nextStreamInterval, STREAM_MIN_INTERVAL_MS, STREAM_MS_PER_CHAR, TranscriptRenderer, type TranscriptBlock, type TranscriptEntry } from './transcript.js'
 import { Rule } from './rule.js'
 import { diffLines } from './diff.js'
 
@@ -461,7 +461,6 @@ export async function startTerminalApp(
   let reportedSession = false
   let exiting = false
   let switching = false
-  let clearedAfterSeq: number | undefined
   let selectedPreset: string | undefined = sessionAgentPreset(active.agent.session)
     ?? config.agentPreset
     ?? (host.get('agentPresets') as AgentPresetService | undefined)?.defaultId
@@ -470,6 +469,7 @@ export async function startTerminalApp(
   let localNotices: TranscriptBlock[] = []
   let pendingAttachments: PendingAttachment[] = []
   let transcriptTimer: ReturnType<typeof setTimeout> | undefined
+  let transcriptInterval = STREAM_MIN_INTERVAL_MS
   let unsubscribeSession: (() => void) | undefined
   let interactionDisposers: Array<() => void> = []
   const interactionAbort = new AbortController()
@@ -498,10 +498,13 @@ export async function startTerminalApp(
 
   const renderTranscript = (): void => {
     if (disposed) return
-    const visible = clearedAfterSeq === undefined
-      ? entries
-      : entries.filter((entry) => entry.type === 'live' || Number(entry.event.seq) > clearedAfterSeq!)
-    renderer.set(visible, localNotices)
+    const started = performance.now()
+    renderer.set(entries, localNotices)
+    // Bound the next rebuild, then pace it: the rebuild excludes pi-tui's later
+    // container render, whose dominant cost is the growing live Markdown.
+    if (renderer.retainedFrom > 0) entries = entries.slice(renderer.retainedFrom)
+    const frameMs = performance.now() - started + renderer.liveContentLength * STREAM_MS_PER_CHAR
+    transcriptInterval = nextStreamInterval(transcriptInterval, frameMs)
     tui.requestRender()
   }
 
@@ -519,7 +522,7 @@ export async function startTerminalApp(
     transcriptTimer = setTimeout(() => {
       transcriptTimer = undefined
       renderTranscript()
-    }, 33)
+    }, transcriptInterval)
   }
 
   const pushNotice = (tone: 'info' | 'warning' | 'error', text: string): void => {
@@ -630,7 +633,6 @@ export async function startTerminalApp(
       active = opened
       selectedPreset = sessionAgentPreset(active.agent.session) ?? selectedPreset
       entries = active.agent.session.snapshotEvents().map(event => ({ type: 'event', event }))
-      clearedAfterSeq = undefined
       liveSeq = 0
       localNotices = []
       renderer.clear()
@@ -729,7 +731,6 @@ export async function startTerminalApp(
         return
       }
       case 'clear':
-        clearedAfterSeq = lastDurableSeq()
         entries = []
         localNotices = []
         renderer.clear()

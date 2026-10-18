@@ -1,7 +1,8 @@
 /**
  * Reproducible local benchmark for the transcript rebuild path that runs on
  * every streaming frame. Reports median milliseconds per frame for (A) session
- * length and (B) live chunks accumulating behind the streaming block.
+ * length, (B) live chunks accumulating behind the streaming block, and
+ * (C) a saturated window where every new row shifts the block list.
  *
  * Run with: node_modules/.bin/tsx scripts/bench-transcript.ts
  *
@@ -9,6 +10,11 @@
  * a streaming frame with 100 pending chunks cost 24.4 ms - both above the 33 ms
  * render throttle, which is what "laggy streaming" looked like. Reusing
  * unchanged block components moved those to 2.4 ms and 0.4 ms.
+ *
+ * 2026-10-18 baseline, before identity-keyed reuse: once the window was full,
+ * one more row re-parsed every retained Markdown because index alignment lost
+ * every predecessor - 9.6 ms/frame at 200 entries and 64.9 ms at 2000. Keying
+ * the reuse window by block identity moved those to 0.6 ms and 2.0 ms.
  */
 import { createPalette, markdownTheme } from '../src/ui/theme.js'
 import { TranscriptRenderer, type TranscriptEntry } from '../src/ui/transcript.js'
@@ -52,7 +58,7 @@ function measure(label: string, fn: () => void, runs = 5): number {
   }
   times.sort((a, b) => a - b)
   const median = times[Math.floor(runs / 2)]!
-  console.log(label.padEnd(44) + 'median ' + median.toFixed(1) + ' ms   min ' + times[0]!.toFixed(1))
+  console.log(label.padEnd(48) + 'median ' + median.toFixed(1) + ' ms   min ' + times[0]!.toFixed(1))
   return median
 }
 
@@ -85,4 +91,32 @@ console.log('=== B. streaming: cost as live chunks accumulate ===')
   measure('frame after 100 chunks', frame, 3)
   for (let i = 0; i < 200; i += 1) frame()
   measure('frame after 300 chunks', frame, 3)
+}
+
+console.log('')
+console.log('=== C. saturated window: one appended row shifts every block index ===')
+for (const cap of [200, 2000]) {
+  const entries = makeEntries(cap + 100)
+  const renderer = new TranscriptRenderer({ ...(options as object), maxEntries: cap } as never)
+  renderer.set(entries, [])
+  renderer.container.render(120)
+  let seq = 900000
+  const shift = (): void => {
+    seq += 1
+    entries.push({ type: 'event', event: {
+      type: 'assistant/message', seq, time: 0,
+      data: { turn: seq, step: 0, message: { content: [{ type: 'text', text: '## More\n\n' + 'lorem ipsum dolor sit amet '.repeat(20) }] } },
+    } } as never)
+  }
+  // Warm the shift path before measuring steady-state frames.
+  for (let i = 0; i < 4; i += 1) {
+    shift()
+    renderer.set(entries, [])
+    renderer.container.render(120)
+  }
+  measure('cap ' + cap + ' saturated shift frame (set + render)', () => {
+    shift()
+    renderer.set(entries, [])
+    renderer.container.render(120)
+  })
 }

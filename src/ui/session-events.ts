@@ -53,7 +53,9 @@ export function subscribeSessionEvents(host: SessionEventsHost): () => void {
 
   own(host.host.on('session/event', (session, event) => {
     if (session.id !== host.sessionId()) return
-    if (event.type === 'assistant/message') {
+    if (event.type === 'assistant/message' || event.type === 'assistant/attempt') {
+      // Either settlement ends the step's transient rows. An attempt's own live
+      // chunks all precede it, so a retry that follows keeps its own chunks.
       const turn = event.data.turn
       const step = event.data.step
       host.replaceEntries(entries => entries.filter(entry => !(

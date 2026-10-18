@@ -1,6 +1,7 @@
 import { Box, Container, Markdown, Spacer, Text, type Component, type MarkdownTheme } from '@earendil-works/pi-tui'
 import { Rule } from './rule.js'
 import { BarText } from './bar-text.js'
+import { assembleAssistantStream, type AssistantStreamRecord } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-commands'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import type { ContentBlock, StreamChunk } from '@deepseek-ai/dsh-llm/types'
@@ -30,6 +31,30 @@ import { asFileDiffs, diffLines, type FileDiff } from './diff.js'
 const TOOL_PREVIEW = 1200
 /** Maximum characters retained in one reasoning preview. */
 const REASONING_PREVIEW = 3000
+/** Streaming frame interval bounds, in milliseconds. */
+export const STREAM_MIN_INTERVAL_MS = 33
+const STREAM_MAX_INTERVAL_MS = 100
+/** Estimated frame cost above which the stream interval backs off. */
+const STREAM_FRAME_BUDGET_MS = 8
+/**
+ * Estimated milliseconds pi-tui spends re-rendering one character of streaming
+ * Markdown. The reducer cannot measure that render, so the caller estimates it
+ * from the live block's size to decide the next frame interval.
+ */
+export const STREAM_MS_PER_CHAR = 0.00025
+
+/**
+ * Next streaming frame interval for one measured rebuild. A frame that runs
+ * over budget widens the interval so later frames stay complete on a busy
+ * terminal; a cheap frame narrows it back toward the streaming floor.
+ * @param current - the interval the measured frame used.
+ * @param frameMs - estimated cost of that frame, including the live Markdown render.
+ * @returns the interval to use for the next stream frame.
+ */
+export function nextStreamInterval(current: number, frameMs: number): number {
+  const scaled = frameMs > STREAM_FRAME_BUDGET_MS ? current * 1.5 : current * 0.75
+  return Math.max(STREAM_MIN_INTERVAL_MS, Math.min(STREAM_MAX_INTERVAL_MS, Math.round(scaled)))
+}
 /** Tools whose cards follow the code-execution density setting. */
 const CODE_EXECUTION_TOOLS: ReadonlySet<string> = new Set(['run_code', 'bash', 'pwsh'])
 
@@ -99,6 +124,26 @@ export function contentText(content: readonly ContentBlock[] | undefined): strin
 export function contentReasoning(content: readonly ContentBlock[] | undefined): string {
   if (content === undefined) return ''
   return content.filter(block => block.type === 'reasoning').map(block => block.text).join('\n')
+}
+
+/**
+ * Assemble the safely finalizable prefix of one settled attempt stream.
+ * An `assistant/attempt` settles a model attempt that never became an
+ * assistant message, so its compact stream is the only record of what the
+ * model produced. Tool calls are excluded: an interrupted attempt precedes
+ * dispatch, so retaining one would show a call that never ran.
+ * @param stream - compact records from a durable `assistant/attempt`.
+ * @returns the visible content blocks, empty when the stream is unusable.
+ */
+function attemptContent(stream: readonly AssistantStreamRecord[] | undefined): readonly ContentBlock[] {
+  if (stream === undefined || stream.length === 0) return []
+  try {
+    return assembleAssistantStream(stream).interruptedBlocks()
+  }
+  catch {
+    // A malformed settlement must not take the whole transcript down.
+    return []
+  }
 }
 
 /** Clip one line-oriented preview without changing its content. */
@@ -174,6 +219,18 @@ function stepKey(turn: number, step: number): string {
   return `${String(turn)}:${String(step)}`
 }
 
+/** One reduction plus the entry prefix no retained block still needs. */
+export interface TranscriptReduction {
+  /** Rendered transcript blocks, oldest first. */
+  readonly blocks: TranscriptBlock[]
+  /**
+   * Index into the reduced entries of the oldest entry a retained block needs.
+   * Earlier entries produced only blocks that this reduction dropped, so a
+   * caller may discard them and re-reduce a bounded window next time.
+   */
+  readonly retainedFrom: number
+}
+
 /**
  * Fold the Client event window into terminal rows. The reducer is intentionally
  * independent from pi-tui so it can be unit-tested without a terminal.
@@ -185,7 +242,22 @@ export function reduceTranscript(
   entries: readonly TranscriptEntry[],
   options: TranscriptOptions,
 ): TranscriptBlock[] {
+  return reduceTranscriptWindow(entries, options).blocks
+}
+
+/**
+ * Fold {@link reduceTranscript}'s window and report how much of it survives.
+ * @param entries - contiguous durable and transient event window.
+ * @param options - display limits and palette.
+ * @returns the rendered blocks and the oldest entry a retained block needs.
+ */
+export function reduceTranscriptWindow(
+  entries: readonly TranscriptEntry[],
+  options: TranscriptOptions,
+): TranscriptReduction {
   const blocks: TranscriptBlock[] = []
+  /** Entry index that created each block, parallel to `blocks`; every event appends at most one. */
+  const sources: number[] = []
   const liveByStep = new Map<string, { index: number; text: string; reasoning: string }>()
   const finalizedSteps = new Set<string>()
   const toolByCall = new Map<string, number>()
@@ -224,7 +296,10 @@ export function reduceTranscript(
     }
   }
 
-  for (const entry of entries) {
+  for (let position = 0; position < entries.length; position += 1) {
+    // Attribute every block the previous entry appended to that entry.
+    while (sources.length < blocks.length) sources.push(position - 1)
+    const entry = entries[position]!
     if (entry.type === 'live') {
       pushLive(entry.event)
       continue
@@ -326,9 +401,25 @@ export function reduceTranscript(
       }
       case 'assistant/attempt': {
         const key = stepKey(event.data.turn, event.data.step)
-        finalizedSteps.add(key)
         const live = liveByStep.get(key)
-        if (live !== undefined) blocks[live.index] = { kind: 'assistant', text: '', live: true }
+        if (live !== undefined) {
+          // Settle the transient rows and drop the accumulator so a retry of the
+          // same step streams into a fresh block instead of being suppressed.
+          blocks[live.index] = { kind: 'assistant', text: '', live: true }
+          liveByStep.delete(key)
+        }
+        const content = attemptContent(event.data.stream)
+        const text = contentText(content)
+        const reasoning = showReasoning ? contentReasoning(content) : ''
+        if (text.trim() !== '' || reasoning.trim() !== '') {
+          blocks.push({
+            kind: 'assistant',
+            text,
+            ...(reasoning === '' ? {} : { reasoning }),
+            live: false,
+            seq,
+          })
+        }
         break
       }
       case 'tool/call': {
@@ -415,13 +506,27 @@ export function reduceTranscript(
     }
   }
 
-  const visible = blocks.filter(block => !(block.kind === 'assistant' && block.text === '' && (block.reasoning ?? '') === ''))
-  if (visible.length <= options.maxEntries) return visible
+  while (sources.length < blocks.length) sources.push(entries.length - 1)
+  const visible: TranscriptBlock[] = []
+  const visibleSources: number[] = []
+  for (let index = 0; index < blocks.length; index += 1) {
+    const block = blocks[index]!
+    if (block.kind === 'assistant' && block.text === '' && (block.reasoning ?? '') === '') continue
+    visible.push(block)
+    visibleSources.push(sources[index] ?? 0)
+  }
+  if (visible.length <= options.maxEntries) {
+    return { blocks: visible, retainedFrom: visibleSources[0] ?? 0 }
+  }
+  const start = visible.length - options.maxEntries
   const hidden = visible.length - options.maxEntries
-  return [
-    { kind: 'notice', tone: 'info', text: `… ${String(hidden)} earlier transcript entries hidden …` },
-    ...visible.slice(-options.maxEntries),
-  ]
+  return {
+    blocks: [
+      { kind: 'notice', tone: 'info', text: `… ${String(hidden)} earlier transcript entries hidden …` },
+      ...visible.slice(start),
+    ],
+    retainedFrom: visibleSources[start] ?? 0,
+  }
 }
 
 /**
@@ -453,14 +558,48 @@ export function sameTranscriptBlock(left: TranscriptBlock, right: TranscriptBloc
   return true
 }
 
+/**
+ * Stable identity of one reduced block, for carrying its component across a
+ * rebuild. `maxEntries` drops old rows from the front and shifts every later
+ * block's index, so index alignment cannot decide reuse. A live assistant
+ * block has no durable identity and is rebuilt every frame by design.
+ * @param block - one reduced block.
+ * @returns a key stable for the block's lifetime, or undefined when it has none.
+ */
+function blockKey(block: TranscriptBlock): string | undefined {
+  switch (block.kind) {
+    case 'tool': return 'tool:' + block.callId
+    case 'compaction': return 'compaction:' + block.compactionId
+    case 'assistant': return block.live || block.seq === undefined ? undefined : 'assistant:' + String(block.seq)
+    case 'user': return block.seq === undefined ? undefined : 'user:' + String(block.seq)
+    case 'context': return block.seq === undefined ? undefined : 'context:' + String(block.seq)
+    case 'notice': return block.seq === undefined ? undefined : 'notice:' + String(block.seq)
+  }
+}
+
 /** Pi-tui renderer for one reduced transcript. */
 export class TranscriptRenderer {
   readonly container = new Container()
   private entries: readonly TranscriptEntry[] = []
   private extra: readonly TranscriptBlock[] = []
-  /** Block and component of the previous rebuild, index-aligned with the blocks. */
-  private rows: readonly { readonly block: TranscriptBlock; readonly component: Component }[] = []
+  /** Component per stable block identity from the previous rebuild. */
+  private cached = new Map<string, { readonly block: TranscriptBlock; readonly component: Component }>()
+  private retained = 0
+  private liveChars = 0
   private options: TranscriptOptions
+
+  /**
+   * Index into the last reduced event window below which no retained block
+   * needs anything. A caller may drop that prefix before the next rebuild.
+   */
+  get retainedFrom(): number {
+    return this.retained
+  }
+
+  /** Characters in the trailing live assistant block; its re-render dominates a stream frame. */
+  get liveContentLength(): number {
+    return this.liveChars
+  }
 
   /**
    * @param options - reduction and styling options.
@@ -476,7 +615,7 @@ export class TranscriptRenderer {
     // Density is a render option rather than part of TranscriptBlock, so a block
     // can stay equal while its component must switch representation. Drop the
     // reuse window; otherwise the previous density keeps rendering.
-    this.rows = []
+    this.cached.clear()
     this.rebuild()
   }
 
@@ -509,12 +648,14 @@ export class TranscriptRenderer {
   clear(): void {
     this.entries = []
     this.extra = []
-    this.rows = []
+    this.cached.clear()
     this.container.clear()
   }
 
   private rebuild(): void {
-    const durable = reduceTranscript(this.entries, this.options)
+    const reduction = reduceTranscriptWindow(this.entries, this.options)
+    this.retained = reduction.retainedFrom
+    const durable = reduction.blocks
     const anchored = this.extra.filter((notice): notice is TranscriptBlock & { afterSeq: number } => notice.afterSeq !== undefined)
     const trailing = this.extra.filter(notice => notice.afterSeq === undefined)
     const blocks: TranscriptBlock[] = []
@@ -526,24 +667,29 @@ export class TranscriptRenderer {
       blocks.push(block)
     }
     blocks.push(...pending, ...trailing)
-    const rows: { block: TranscriptBlock; component: Component }[] = []
+    const next = new Map<string, { readonly block: TranscriptBlock; readonly component: Component }>()
+    let liveChars = 0
     this.container.clear()
     for (const [index, block] of blocks.entries()) {
+      if (block.kind === 'assistant' && block.live) liveChars += block.text.length + (block.reasoning?.length ?? 0)
       if (index > 0) this.container.addChild(new Spacer(1))
       if (index > 0 && block.kind === 'user') {
         this.container.addChild(new Rule(this.options.palette.dim))
         this.container.addChild(new Spacer(1))
       }
-      const previous = this.rows[index]
-      // Streaming rewrites only the trailing live block; reusing the rest keeps
-      // their parsed Markdown cached instead of re-parsing the whole transcript.
+      const key = blockKey(block)
+      const previous = key === undefined ? undefined : this.cached.get(key)
+      // Streaming rewrites only the trailing live block. Reusing the rest by
+      // identity keeps their parsed Markdown cached even when the window is full
+      // and every block index just shifted by one.
       const component = previous !== undefined && sameTranscriptBlock(previous.block, block)
         ? previous.component
         : this.renderBlock(block)
-      rows.push({ block, component })
+      if (key !== undefined) next.set(key, { block, component })
       this.container.addChild(component)
     }
-    this.rows = rows
+    this.cached = next
+    this.liveChars = liveChars
   }
 
   private renderBlock(block: TranscriptBlock) {
