@@ -14,7 +14,9 @@ import {
   buildCustomProvider,
   buildDiscoveredModelEntry,
   configurableProvidersIn,
+  DEFAULT_MAX_OUTPUT_TOKENS,
   defaultApiKeyEnv,
+  defaultMaxOutputTokens,
   isValidEnvName,
   isValidProviderRoute,
   mergeDiscoveredProviderModels,
@@ -306,7 +308,13 @@ async function readManualModel(ctx: CommandContext): Promise<{ id: string; name?
   const contextRaw = await showTextInput(ctx.tui, ctx.palette, 'Context window', '128000', 'Positive integer; Enter keeps the default · Esc cancels', ctx.signal, '128000')
   if (contextRaw === undefined)
     return undefined
-  const maxRaw = await showTextInput(ctx.tui, ctx.palette, 'Max output tokens', '16384', 'Positive integer; Enter keeps the default · Esc cancels', ctx.signal, '16384')
+  // Suggest a cap bounded by the window just entered, so the default is never
+  // larger than what the model can accept.
+  const declaredWindow = Number(contextRaw)
+  const suggestedMax = Number.isSafeInteger(declaredWindow) && declaredWindow > 0
+    ? defaultMaxOutputTokens(declaredWindow)
+    : DEFAULT_MAX_OUTPUT_TOKENS
+  const maxRaw = await showTextInput(ctx.tui, ctx.palette, 'Max output tokens', String(suggestedMax), 'Positive integer; Enter keeps the default · Esc cancels', ctx.signal, String(suggestedMax))
   if (maxRaw === undefined)
     return undefined
   return { id: modelId, contextWindow: Number(contextRaw), maxTokens: Number(maxRaw) }
@@ -459,11 +467,12 @@ async function addProvider(ctx: CommandContext, state: WizardState): Promise<voi
         else {
           const found = discovered[Number(choice)]
           if (found !== undefined) {
+            const contextWindow = typeof found.contextWindow === 'number' && found.contextWindow > 0 ? found.contextWindow : 128000
             model = {
               id: found.id,
               ...(found.name === undefined ? {} : { name: found.name }),
-              contextWindow: typeof found.contextWindow === 'number' && found.contextWindow > 0 ? found.contextWindow : 128000,
-              maxTokens: typeof found.maxTokens === 'number' && found.maxTokens > 0 ? found.maxTokens : 16384,
+              contextWindow,
+              maxTokens: typeof found.maxTokens === 'number' && found.maxTokens > 0 ? found.maxTokens : defaultMaxOutputTokens(contextWindow),
               ...(found.inputModalities === undefined ? {} : { inputModalities: found.inputModalities }),
             }
           }

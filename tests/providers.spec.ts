@@ -4,8 +4,10 @@ import {
   buildCustomProvider,
   buildDiscoveredModelEntry,
   configurableProvidersIn,
+  DEFAULT_MAX_OUTPUT_TOKENS,
   DEFAULT_REASONING_EFFORTS,
   defaultApiKeyEnv,
+  defaultMaxOutputTokens,
   nativeAuthEnv,
   isValidEnvName,
   isValidProviderRoute,
@@ -181,12 +183,12 @@ describe('provider config helpers', () => {
     expect(first.reasoningEfforts).not.toBe(second.reasoningEfforts)
   })
 
-  it('falls back to conservative defaults for a bare discovery entry', () => {
+  it('falls back to a default output cap bounded by the context window', () => {
     expect(buildDiscoveredModelEntry({ id: 'bare-model' })).toEqual({
       id: 'bare-model',
       name: 'bare-model',
       contextWindow: 128000,
-      maxTokens: 16384,
+      maxTokens: 32768,
       reasoningEfforts: { low: 'low', medium: 'medium', high: 'high' },
     })
     expect(buildDiscoveredModelEntry({ id: 'zero-model', contextWindow: 0, maxTokens: -1, inputModalities: [] }))
@@ -194,7 +196,7 @@ describe('provider config helpers', () => {
         id: 'zero-model',
         name: 'zero-model',
         contextWindow: 128000,
-        maxTokens: 16384,
+        maxTokens: 32768,
         reasoningEfforts: { low: 'low', medium: 'medium', high: 'high' },
       })
     // Modalities pi-ai cannot represent are dropped instead of stored as input.
@@ -203,9 +205,20 @@ describe('provider config helpers', () => {
         id: 'odd-model',
         name: 'odd-model',
         contextWindow: 128000,
-        maxTokens: 16384,
+        maxTokens: 32768,
         reasoningEfforts: { low: 'low', medium: 'medium', high: 'high' },
       })
+  })
+
+  it('configures a 32k output cap without exceeding the context window', () => {
+    expect(DEFAULT_MAX_OUTPUT_TOKENS).toBe(32_768)
+    expect(defaultMaxOutputTokens(1_000_000)).toBe(32_768)
+    expect(defaultMaxOutputTokens(8_000)).toBe(8_000)
+    expect(buildDiscoveredModelEntry({ id: 'wide-model', contextWindow: 1_000_000 }))
+      .toMatchObject({ contextWindow: 1_000_000, maxTokens: 32_768 })
+    // A capacity the endpoint listing reported still wins over the default.
+    expect(buildDiscoveredModelEntry({ id: 'known-model', contextWindow: 1_000_000, maxTokens: 65_536 }))
+      .toMatchObject({ maxTokens: 65_536 })
   })
 
   it('merges routes without dropping existing providers', () => {

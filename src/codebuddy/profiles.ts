@@ -110,8 +110,8 @@ export function credentialExpiresAt(expiresInSeconds: unknown, now = Date.now())
 /** Context window assumed for a discovered model with no usable `maxInputTokens`. */
 export const DEFAULT_CONTEXT_WINDOW = 200_000
 
-/** Output cap used when the catalogue states no usable `maxOutputTokens`. */
-export const DEFAULT_MAX_OUTPUT_TOKENS = 16_384
+/** Output cap used when the catalogue states no usable `maxOutputTokens`; the same parity default the provider wizard configures. */
+export const DEFAULT_MAX_OUTPUT_TOKENS = 32_768
 
 // ---------------------------------------------------------------------------
 // International-gateway payload normalization

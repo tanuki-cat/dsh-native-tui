@@ -23,6 +23,25 @@ export const DEFAULT_REASONING_EFFORTS: Readonly<Record<string, string | null>> 
   high: 'high',
 }
 
+/**
+ * Output cap configured for a model whose endpoint listing states none, and
+ * the value the manual entry form suggests. A model listing that does report a
+ * capacity (`max_output_tokens`, `max_tokens`, `limit.output`, ...) always
+ * wins; this is the parity default the Web models page uses.
+ */
+export const DEFAULT_MAX_OUTPUT_TOKENS = 32_768
+
+/**
+ * Default output cap for one resolved context window. Providers that validate
+ * `max_tokens` reject a cap larger than the model's own window, so the window
+ * bounds the default instead of it being configured independently.
+ * @param contextWindow - the model's resolved context window.
+ * @returns the output cap to configure.
+ */
+export function defaultMaxOutputTokens(contextWindow: number): number {
+  return Math.min(DEFAULT_MAX_OUTPUT_TOKENS, Math.max(1, Math.floor(contextWindow)))
+}
+
 /** One supported hand-declared wire protocol. */
 export type ProviderProtocol = typeof PROVIDER_PROTOCOLS[number]
 
@@ -209,16 +228,17 @@ export function mergeDiscoveredProviderModels(
     if (candidate.id.trim() === '') continue
     const current = byId.get(candidate.id)
     const input = candidate.inputModalities?.filter(modality => modality === 'text' || modality === 'image')
+    const contextWindow = typeof candidate.contextWindow === 'number' && candidate.contextWindow > 0
+      ? candidate.contextWindow
+      : (typeof current?.contextWindow === 'number' ? current.contextWindow : 128000)
     const next: Record<string, unknown> = {
       ...(current ?? {}),
       id: candidate.id,
       name: candidate.name ?? (typeof current?.name === 'string' ? current.name : candidate.id),
-      contextWindow: typeof candidate.contextWindow === 'number' && candidate.contextWindow > 0
-        ? candidate.contextWindow
-        : (typeof current?.contextWindow === 'number' ? current.contextWindow : 128000),
+      contextWindow,
       maxTokens: typeof candidate.maxTokens === 'number' && candidate.maxTokens > 0
         ? candidate.maxTokens
-        : (typeof current?.maxTokens === 'number' ? current.maxTokens : 16384),
+        : (typeof current?.maxTokens === 'number' ? current.maxTokens : defaultMaxOutputTokens(contextWindow)),
       ...(current?.input === undefined && input !== undefined && input.length > 0 ? { input } : {}),
       ...(current === undefined ? { reasoningEfforts: { ...DEFAULT_REASONING_EFFORTS } } : {}),
     }
@@ -232,22 +252,23 @@ export function mergeDiscoveredProviderModels(
 /**
  * Build the route entry for one discovery model the operator did not configure
  * by hand. Used for the extra models /provider add imports next to the selected
- * one. Missing capacities fall back to conservative defaults and the entry
- * always carries {@link DEFAULT_REASONING_EFFORTS}.
+ * one. A missing capacity falls back to a default bounded by the model's
+ * context window, and the entry always carries {@link DEFAULT_REASONING_EFFORTS}.
  * @param candidate - one model returned by endpoint discovery.
  * @returns a model entry ready to append to a route profile.
  */
 export function buildDiscoveredModelEntry(candidate: DiscoveredProviderModel): Record<string, unknown> {
   const input = candidate.inputModalities?.filter(modality => modality === 'text' || modality === 'image')
+  const contextWindow = typeof candidate.contextWindow === 'number' && candidate.contextWindow > 0
+    ? candidate.contextWindow
+    : 128000
   return {
     id: candidate.id,
     name: candidate.name ?? candidate.id,
-    contextWindow: typeof candidate.contextWindow === 'number' && candidate.contextWindow > 0
-      ? candidate.contextWindow
-      : 128000,
+    contextWindow,
     maxTokens: typeof candidate.maxTokens === 'number' && candidate.maxTokens > 0
       ? candidate.maxTokens
-      : 16384,
+      : defaultMaxOutputTokens(contextWindow),
     ...(input === undefined || input.length === 0 ? {} : { input }),
     reasoningEfforts: { ...DEFAULT_REASONING_EFFORTS },
   }
