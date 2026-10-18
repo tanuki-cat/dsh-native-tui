@@ -12,7 +12,7 @@ DeepSeek Harness 的 host-native 终端前端，基于 pi-tui。
 - 新建/恢复 Session，owned root Agent。
 - 流式文本、Markdown、reasoning、工具卡片（write/edit 结果渲染 ± diff 行）、turn 失败提示。
 - 本地命令与宿主命令执行（compact/feedback/goal/permission/plan）；slash 命令支持子命令补全，例如 `/provider` 显示 add/list/remove。
-- 审批与问答 waterfall；所有独立 overlay（Choice/TextInput/Approval、Markdown/Text Pager、Image）统一使用带边框和全宽背景的 opaque dialog frame，长内容自动换行/补齐。
+- 审批与问答 waterfall；所有独立 overlay（Choice/TextInput/Approval、Markdown/Text Pager、Image）统一使用带边框和全宽背景的 opaque dialog frame，长内容自动换行/补齐。问答面板支持单选与多选：多选用 Space 勾选、Enter 提交，Other 提供自由文本（多选时会与已勾选项一并返回）；每题统一提供 `Skip this question` 行（无选项文本题为 `Answer… / Skip this question` 菜单），跳过只返回 `{ id, selected: [] }` 并继续批次；Esc 或请求 signal 中止则以 `UserQuestionError(ASK_ABORTED)` 取消整个批次。
 - 模型选择器（LLM catalog 为空时明确提示）、reasoning effort 切换、权限预设、后台任务、子代理列表。
 - 模型与 reasoning effort 通过 Host `agentDefaultModel.saveSelection` 持久化；重启或 `/new` 沿用，不再回落默认。
 - 第三方模型：`/provider add` 引导配置 pi-ai gateway/catalog route，`/provider list|edit|models|remove` 管理。
@@ -127,7 +127,7 @@ Enter 发送；运行中 Enter 作为 steer；Ctrl+C 取消/退出；Ctrl+D 退�
    - **Store API key in DSH credentials（推荐）**：直接粘贴 key。key 存入 DSH credential store（`~/.dsh/.credentials.yaml`，权限 0600），不写入 profile；无需 export。输入时 key 在终端可见。
    - **Use an environment variable**：输入 UPPERCASE 变量名，启动 dsh 前在 shell export。
 3. custom gateway 会调用 Host `discoverModels` 请求 `GET {baseURL}/models` 并列出模型（5 秒超时）。
-4. 从自动发现的模型中选择，或回退到手动输入 model id/context window/max tokens。**发现列表中的其他模型也会写入该 route**，之后可在 `/model` 中直接切换；选中模型会带上本次选择的 input/reasoning，其他模型使用 discovery 返回的容量/模态。
+4. 从自动发现的模型中选择，或回退到手动输入 model id/context window/max tokens。**发现列表中的其他模型也会写入该 route**，之后可在 `/model` 中直接切换；选中模型会带上本次选择的 input/reasoning，其他模型使用 discovery 返回的容量/模态，并写入默认 `reasoningEfforts`（`low/medium/high` 同名映射）。
 5. 选择 Input modalities：`Text + image`（vision）或 `Text only`。生成的模型配置会显式写入 `input`；未知能力的自定义网关默认先选 `Text + image`。
 6. 输入 Reasoning levels（逗号分隔，默认 `low,medium,high`；留空表示不支持 reasoning）。生成的模型配置会写入 `reasoningEfforts`，之后可用 `/reasoning` 切换。
 
@@ -174,7 +174,7 @@ dsh --profile tui
 /provider models command-code
 ```
 
-`/provider` 打开 provider 选择；`edit` 进入配置菜单（Fetch available models）；`models` 直接获取。查询使用已保存的 baseURL/API 协议/credential，把 endpoint 返回的模型合并进 route：新模型追加，已有模型更新容量，保留已有 input/reasoningEfforts。
+`/provider` 打开 provider 选择；`edit` 进入配置菜单（Fetch available models）；`models` 直接获取。查询使用已保存的 baseURL/API 协议/credential，把 endpoint 返回的模型合并进 route：新模型追加，已有模型更新容量，保留已有 input/reasoningEfforts。新增模型若未声明 reasoningEfforts，会自动写入默认同名映射 `low/medium/high`，使其在 `/reasoning` 中可直接切换；已有模型（包括留空表示不支持 reasoning 的）不会被回填。
 
 **不要在 env 模式把 key 填进变量名。** 流程要求 UPPERCASE 环境变量名，并拒绝形似 key 的输入。若旧配置已经把 key 写入 `apiKeyEnv`，立即执行 `/provider remove <route>`，检查 `cordis.patch.yml` 中对应配置，并轮换该 key。手工 JSON 配置仍可通过 `/settings set llm-pi-ai ...` 或 Web Models page 完成。
 
@@ -206,7 +206,7 @@ dsh --profile tui
 ## 开发与验证
 
 ~~~sh
-pnpm check          # typecheck + 117 unit tests + build
+pnpm check          # typecheck + 138 unit tests + build
 pnpm test
 pnpm build
 ~~~
@@ -221,6 +221,14 @@ DSH_HOME=/tmp/dsh-native-tui-install-home node scripts/fake-tty-smoke.mjs
 DSH_HOME=/tmp/dsh-native-tui-install-home node scripts/fake-tty-interaction.mjs
 DSH_HOME=/tmp/dsh-native-tui-install-home node scripts/fake-tty-question.mjs
 DSH_HOME=/tmp/dsh-native-tui-install-home node scripts/fake-tty-preset.mjs
+~~~
+
+真实审批 waterfall 用 mock 模型 + 真实 Host 跑 allow/reject/cancel（首次需把当前构建装进一个临时 home）：
+
+~~~sh
+pnpm pack --pack-destination .tmp
+DSH_HOME=/tmp/dsh-native-tui-approval-home dsh plugin --profile tui add .tmp/dsh-native-tui-0.1.0.tgz
+DSH_HOME=/tmp/dsh-native-tui-approval-home node scripts/fake-tty-approval.mjs
 ~~~
 
 普通终端环境可运行真实 PTY 冒烟：

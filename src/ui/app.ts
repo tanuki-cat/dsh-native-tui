@@ -34,6 +34,7 @@ import { INIT_AGENTS_PROMPT } from '../runtime/init-prompt.js'
 import {
   buildCatalogProvider,
   buildCustomProvider,
+  buildDiscoveredModelEntry,
   isValidEnvName,
   isValidProviderRoute,
   mergeDiscoveredProviderModels,
@@ -2849,15 +2850,7 @@ export async function startTerminalApp(
                             for (const candidate of discovered) {
                                 if (candidate.id === model.id)
                                     continue;
-                                selectedModels.push({
-                                    id: candidate.id,
-                                    name: candidate.name ?? candidate.id,
-                                    contextWindow: typeof candidate.contextWindow === 'number' && candidate.contextWindow > 0 ? candidate.contextWindow : 128000,
-                                    maxTokens: typeof candidate.maxTokens === 'number' && candidate.maxTokens > 0 ? candidate.maxTokens : 16384,
-                                    ...(candidate.inputModalities === undefined || candidate.inputModalities.length === 0
-                                        ? {}
-                                        : { input: [...candidate.inputModalities] }),
-                                });
+                                selectedModels.push(buildDiscoveredModelEntry(candidate));
                             }
                         }
                     }

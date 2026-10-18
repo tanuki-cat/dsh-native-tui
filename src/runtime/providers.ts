@@ -13,6 +13,16 @@ export const PROVIDER_REASONING_LEVELS = ['off', 'minimal', 'low', 'medium', 'hi
 /** One selectable reasoning level in a hand-declared model. */
 export type ProviderReasoningLevel = typeof PROVIDER_REASONING_LEVELS[number]
 
+/**
+ * Default level-to-wire map written for a newly merged discovery model that
+ * declares none, so a plain endpoint listing still offers /reasoning.
+ */
+export const DEFAULT_REASONING_EFFORTS: Readonly<Record<string, string | null>> = {
+  low: 'low',
+  medium: 'medium',
+  high: 'high',
+}
+
 /** One supported hand-declared wire protocol. */
 export type ProviderProtocol = typeof PROVIDER_PROTOCOLS[number]
 
@@ -173,7 +183,8 @@ export interface MergedDiscoveredModels {
 /**
  * Upsert every endpoint-discovered model into an existing route profile.
  * Existing model settings (reasoning maps, custom input) survive a refresh;
- * discovered capacities and names replace stale metadata.
+ * discovered capacities and names replace stale metadata. A newly added model
+ * that declares no map gets {@link DEFAULT_REASONING_EFFORTS}.
  * @param existing - current route profile.
  * @param discovered - models returned by discovery.
  * @returns the updated provider plus added and updated counts.
@@ -209,12 +220,37 @@ export function mergeDiscoveredProviderModels(
         ? candidate.maxTokens
         : (typeof current?.maxTokens === 'number' ? current.maxTokens : 16384),
       ...(current?.input === undefined && input !== undefined && input.length > 0 ? { input } : {}),
+      ...(current === undefined ? { reasoningEfforts: { ...DEFAULT_REASONING_EFFORTS } } : {}),
     }
     if (current === undefined) added += 1
     else updated += 1
     byId.set(candidate.id, next)
   }
   return { provider: { ...base, models: [...byId.values()] }, added, updated }
+}
+
+/**
+ * Build the route entry for one discovery model the operator did not configure
+ * by hand. Used for the extra models /provider add imports next to the selected
+ * one. Missing capacities fall back to conservative defaults and the entry
+ * always carries {@link DEFAULT_REASONING_EFFORTS}.
+ * @param candidate - one model returned by endpoint discovery.
+ * @returns a model entry ready to append to a route profile.
+ */
+export function buildDiscoveredModelEntry(candidate: DiscoveredProviderModel): Record<string, unknown> {
+  const input = candidate.inputModalities?.filter(modality => modality === 'text' || modality === 'image')
+  return {
+    id: candidate.id,
+    name: candidate.name ?? candidate.id,
+    contextWindow: typeof candidate.contextWindow === 'number' && candidate.contextWindow > 0
+      ? candidate.contextWindow
+      : 128000,
+    maxTokens: typeof candidate.maxTokens === 'number' && candidate.maxTokens > 0
+      ? candidate.maxTokens
+      : 16384,
+    ...(input === undefined || input.length === 0 ? {} : { input }),
+    reasoningEfforts: { ...DEFAULT_REASONING_EFFORTS },
+  }
 }
 
 /** Build a catalog-route profile that only names a credential. */

@@ -5,16 +5,18 @@ import {
   Markdown,
   SelectList,
   Text,
+  matchesKey,
   truncateToWidth,
   visibleWidth,
   type Component,
   type TUI,
 } from '@earendil-works/pi-tui'
 import type { ApprovalOutcome, ApprovalRequest } from '@deepseek-ai/dsh-user-approval'
-import type {
-  AskUserQuestionAnswer,
-  AskUserQuestionItem,
-  AskUserQuestionOption,
+import {
+  UserQuestionError,
+  type AskUserQuestionAnswer,
+  type AskUserQuestionItem,
+  type AskUserQuestionOption,
 } from '@deepseek-ai/dsh-user-questions'
 import type { Palette } from './theme.js'
 import { markdownTheme, selectTheme } from './theme.js'
@@ -474,6 +476,7 @@ export async function showApproval(
     [
       { value: 'allow', label: 'Allow once', description: 'Approve this exact request only' },
       { value: 'reject', label: 'Reject', description: 'Fail the request closed' },
+      { value: 'cancel', label: 'Cancel', description: 'Withdraw the request without a decision' },
     ],
     'Enter selects · Esc cancels',
     signal,
@@ -481,6 +484,26 @@ export async function showApproval(
   if (choice === 'allow') return 'allowed-once'
   if (choice === 'reject') return 'rejected'
   return 'cancelled'
+}
+
+/** Row that opens a free-text answer from inside an option list. */
+const OTHER_ANSWER_VALUE = '__custom__'
+
+/** Row that answers a question with no selection and continues the batch. */
+const SKIP_ANSWER_VALUE = '__skip__'
+
+/** Whether an option-list row is a dialog action rather than an answer label. */
+function isAnswerAction(value: string): boolean {
+  return value === OTHER_ANSWER_VALUE || value === SKIP_ANSWER_VALUE
+}
+
+/** Build the cancellation error the Host classifies as `ASK_ABORTED`. */
+function abortedQuestion(cause?: unknown): UserQuestionError {
+  return new UserQuestionError(
+    'ask_user_question was aborted before the user answered',
+    'ASK_ABORTED',
+    cause === undefined ? undefined : { cause },
+  )
 }
 
 function questionTitle(question: AskUserQuestionItem, index: number, total: number): string {
@@ -491,8 +514,148 @@ function questionTitle(question: AskUserQuestionItem, index: number, total: numb
   if (question.detail !== undefined && question.detail.trim() !== '') {
     parts.push('', clip(question.detail, 1600))
   }
-  if (question.multiSelect === true) parts.push('', 'multi-select: this build accepts one option per question')
   return parts.join('\n')
+}
+
+/**
+ * Toggle list for a multi-select question. Space checks the highlighted option,
+ * Enter submits the checked labels, and the trailing Other row opens a
+ * free-text answer that supplements them.
+ */
+class MultiChoiceDialog implements Component {
+  private list: SelectList
+  private index = 0
+  private error = ''
+  private readonly checked = new Set<string>()
+  onSubmit?: (selected: string[]) => void
+  onCustom?: () => void
+  onSkip?: () => void
+  onCancel?: () => void
+
+  constructor(
+    private readonly title: string,
+    private readonly items: readonly ChoiceItem[],
+    private readonly hint: string,
+    private readonly palette: Palette,
+  ) {
+    this.list = this.makeList()
+  }
+
+  /** Checked option labels, in the order the options were declared. */
+  selection(): string[] {
+    return this.items
+      .filter(item => !isAnswerAction(item.value) && this.checked.has(item.value))
+      .map(item => item.label)
+  }
+
+  private makeList(): SelectList {
+    const list = new SelectList(
+      this.items.map(item => ({
+        value: item.value,
+        label: isAnswerAction(item.value)
+          ? '  ' + item.label
+          : (this.checked.has(item.value) ? '[x] ' : '[ ] ') + item.label,
+        ...(item.description === undefined ? {} : { description: item.description }),
+      })),
+      Math.min(12, Math.max(1, this.items.length)),
+      selectTheme(this.palette),
+    )
+    list.setSelectedIndex(this.index)
+    list.onSelectionChange = (item) => {
+      const found = this.items.findIndex(candidate => candidate.value === item.value)
+      if (found >= 0) this.index = found
+    }
+    list.onSelect = (item) => {
+      if (item.value === OTHER_ANSWER_VALUE) {
+        this.onCustom?.()
+        return
+      }
+      if (item.value === SKIP_ANSWER_VALUE) {
+        this.onSkip?.()
+        return
+      }
+      if (this.checked.size === 0) {
+        this.error = 'Check at least one option, or choose Skip this question.'
+        return
+      }
+      this.onSubmit?.(this.selection())
+    }
+    list.onCancel = () => { this.onCancel?.() }
+    return list
+  }
+
+  handleInput(data: string): void {
+    if (matchesKey(data, 'space')) {
+      const current = this.list.getSelectedItem()
+      if (current !== null && !isAnswerAction(current.value)) {
+        if (this.checked.has(current.value)) this.checked.delete(current.value)
+        else this.checked.add(current.value)
+        this.error = ''
+        this.list = this.makeList()
+        return
+      }
+    }
+    this.list.handleInput(data)
+  }
+
+  render(width: number): string[] {
+    const inner = Math.max(20, width - 4)
+    return dialogFrame([
+      ...new Text(this.title, 0, 0).render(inner),
+      '',
+      ...this.list.render(inner),
+      '',
+      ...(this.error === '' ? [] : new Text(this.palette.error(this.error), 0, 0).render(inner)),
+      ...new Text(this.palette.dim(this.hint), 0, 0).render(inner),
+    ], width, this.palette)
+  }
+
+  invalidate(): void { this.list.invalidate() }
+}
+
+/** One multi-select decision: submit the checked labels, ask for free text, or skip. */
+interface MultiChoiceResult {
+  readonly selected: string[]
+  readonly custom: boolean
+  readonly skip: boolean
+}
+
+function showMultiChoice(
+  tui: TUI,
+  palette: Palette,
+  title: string,
+  items: readonly ChoiceItem[],
+  hint: string,
+  signal?: AbortSignal,
+): Promise<MultiChoiceResult | undefined> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted === true) {
+      resolve(undefined)
+      return
+    }
+    let handle: ReturnType<TUI['showOverlay']> | undefined
+    let settled = false
+    const finish = (value: MultiChoiceResult | undefined): void => {
+      if (settled) return
+      settled = true
+      signal?.removeEventListener('abort', onAbort)
+      handle?.hide()
+      resolve(value)
+    }
+    const onAbort = (): void => { finish(undefined) }
+    try {
+      const dialog = new MultiChoiceDialog(title, items, hint, palette)
+      handle = tui.showOverlay(dialog, { width: 76, maxHeight: '80%', anchor: 'center' })
+      dialog.onSubmit = selected => { finish({ selected, custom: false, skip: false }) }
+      dialog.onCustom = () => { finish({ selected: dialog.selection(), custom: true, skip: false }) }
+      dialog.onSkip = () => { finish({ selected: [], custom: false, skip: true }) }
+      dialog.onCancel = () => { finish(undefined) }
+    } catch (error) {
+      reject(error)
+      return
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
 }
 
 async function answerOne(
@@ -504,50 +667,56 @@ async function answerOne(
   signal?: AbortSignal,
 ): Promise<AskUserQuestionAnswer['answers'][number]> {
   const options: readonly AskUserQuestionOption[] = question.options ?? []
+  // Esc cancels the whole batch with ASK_ABORTED. Skipping one question is an
+  // explicit row, so the rest of the batch still runs.
+  const title = questionTitle(question, index, total)
   if (options.length === 0) {
-    const custom = await showTextInput(
-      tui,
-      palette,
-      questionTitle(question, index, total),
-      'type an answer',
-      'Enter submits · Esc cancels',
-      signal,
-    )
-    if (custom === undefined) throw new Error('ask_user_question was aborted before the user answered')
+    for (;;) {
+      const mode = await showChoice(tui, palette, title, [
+        { value: 'answer', label: 'Answer…', description: 'Type a free-text answer' },
+        { value: SKIP_ANSWER_VALUE, label: 'Skip this question', description: 'Leave this answer empty and continue' },
+      ], 'Enter selects · Esc cancels the batch', signal)
+      if (mode === undefined) throw abortedQuestion()
+      if (mode === SKIP_ANSWER_VALUE) return { id: question.id, selected: [] }
+      const custom = await showTextInput(tui, palette, title, 'type an answer', 'Enter submits · Esc cancels the batch', signal, undefined, true)
+      if (custom === undefined) throw abortedQuestion()
+      // An empty submit is not an answer: return to the answer/skip menu.
+      if (custom === '') continue
+      return { id: question.id, selected: [], custom }
+    }
+  }
+  const items: readonly ChoiceItem[] = [
+    ...options.map((option, optionIndex) => ({
+      value: option.label,
+      label: option.label,
+      description: option.description ?? `option ${String(optionIndex + 1)}`,
+    })),
+    { value: OTHER_ANSWER_VALUE, label: 'Other…', description: 'Type a free-text answer' },
+    { value: SKIP_ANSWER_VALUE, label: 'Skip this question', description: 'Leave this answer empty and continue' },
+  ]
+  if (question.multiSelect === true) {
+    const picked = await showMultiChoice(tui, palette, title, items, 'Space toggles · Enter submits · Other… adds text · Esc cancels the batch', signal)
+    if (picked === undefined) throw abortedQuestion()
+    if (picked.skip) return { id: question.id, selected: [] }
+    if (!picked.custom) return { id: question.id, selected: picked.selected }
+    const custom = await showTextInput(tui, palette, title, 'type an answer', 'Enter keeps the checked options · empty Enter submits without text · Esc cancels the batch', signal, undefined, true)
+    if (custom === undefined) throw abortedQuestion()
+    return { id: question.id, selected: picked.selected, ...(custom === '' ? {} : { custom }) }
+  }
+  for (;;) {
+    const choice = await showChoice(tui, palette, title, items, 'Enter selects · Esc cancels the batch', signal)
+    if (choice === undefined) throw abortedQuestion()
+    if (choice === SKIP_ANSWER_VALUE) return { id: question.id, selected: [] }
+    if (choice !== OTHER_ANSWER_VALUE) return { id: question.id, selected: [choice] }
+    const custom = await showTextInput(tui, palette, title, 'type an answer', 'Enter submits · Esc cancels the batch', signal, undefined, true)
+    if (custom === undefined) throw abortedQuestion()
+    // An empty submit is not an answer: return to the option list.
+    if (custom === '') continue
     return { id: question.id, selected: [], custom }
   }
-  const choice = await showChoice(
-    tui,
-    palette,
-    questionTitle(question, index, total),
-    [
-      ...options.map((option, optionIndex) => ({
-        value: option.label,
-        label: option.label,
-        description: option.description ?? `option ${String(optionIndex + 1)}`,
-      })),
-      { value: '__custom__', label: 'Other…', description: 'Type a free-text answer' },
-    ],
-    'Enter selects · Esc cancels',
-    signal,
-  )
-  if (choice === undefined) throw new Error('ask_user_question was aborted before the user answered')
-  if (choice === '__custom__') {
-    const custom = await showTextInput(
-      tui,
-      palette,
-      questionTitle(question, index, total),
-      'type an answer',
-      'Enter submits · Esc cancels',
-      signal,
-    )
-    if (custom === undefined) throw new Error('ask_user_question was aborted before the user answered')
-    return { id: question.id, selected: [], custom }
-  }
-  return { id: question.id, selected: [choice] }
 }
 
-/** Present every question in one batch, sequentially. */
+/** Present every question in one batch, sequentially; a skipped item keeps the batch. */
 export async function showQuestionBatch(
   tui: TUI,
   palette: Palette,

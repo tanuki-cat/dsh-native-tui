@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   buildCatalogProvider,
   buildCustomProvider,
+  buildDiscoveredModelEntry,
+  DEFAULT_REASONING_EFFORTS,
   isValidEnvName,
   isValidProviderRoute,
   mergeDiscoveredProviderModels,
@@ -111,21 +113,25 @@ describe('provider config helpers', () => {
       api: 'openai-completions',
       baseURL: 'https://api.example.com/v1',
       apiKeyEnv: 'EXISTING_KEY',
-      models: [{
-        id: 'old-model',
-        name: 'Old',
-        contextWindow: 32000,
-        maxTokens: 4096,
-        input: ['text', 'image'],
-        reasoningEfforts: { high: 'high' },
-      }],
+      models: [
+        {
+          id: 'old-model',
+          name: 'Old',
+          contextWindow: 32000,
+          maxTokens: 4096,
+          input: ['text', 'image'],
+          reasoningEfforts: { high: 'high' },
+        },
+        { id: 'legacy-model', name: 'Legacy' },
+      ],
     }
     const merged = mergeDiscoveredProviderModels(existing, [
       { id: 'old-model', name: 'Old updated', contextWindow: 64000, maxTokens: 8192 },
+      { id: 'legacy-model', name: 'Legacy updated', contextWindow: 8000, maxTokens: 1024 },
       { id: 'new-model', name: 'New', contextWindow: 16000, maxTokens: 2048, inputModalities: ['text'] },
     ])
     expect(merged.added).toBe(1)
-    expect(merged.updated).toBe(1)
+    expect(merged.updated).toBe(2)
     expect(merged.provider.models).toEqual([
       {
         id: 'old-model',
@@ -135,8 +141,68 @@ describe('provider config helpers', () => {
         input: ['text', 'image'],
         reasoningEfforts: { high: 'high' },
       },
-      { id: 'new-model', name: 'New', contextWindow: 16000, maxTokens: 2048, input: ['text'] },
+      // An existing model keeps the absence of a map: blank means "no reasoning".
+      { id: 'legacy-model', name: 'Legacy updated', contextWindow: 8000, maxTokens: 1024 },
+      {
+        id: 'new-model',
+        name: 'New',
+        contextWindow: 16000,
+        maxTokens: 2048,
+        input: ['text'],
+        reasoningEfforts: DEFAULT_REASONING_EFFORTS,
+      },
     ])
+    // The default is copied per model so callers cannot share one mutable map.
+    const mergedModels = merged.provider.models as readonly { readonly reasoningEfforts?: unknown }[]
+    expect(mergedModels[2]?.reasoningEfforts).not.toBe(DEFAULT_REASONING_EFFORTS)
+  })
+
+  it('builds an auto-imported discovery model with the default reasoning map', () => {
+    expect(DEFAULT_REASONING_EFFORTS).toEqual({ low: 'low', medium: 'medium', high: 'high' })
+    expect(buildDiscoveredModelEntry({
+      id: 'sibling-model',
+      name: 'Sibling',
+      contextWindow: 64000,
+      maxTokens: 8192,
+      inputModalities: ['text', 'image'],
+    })).toEqual({
+      id: 'sibling-model',
+      name: 'Sibling',
+      contextWindow: 64000,
+      maxTokens: 8192,
+      input: ['text', 'image'],
+      reasoningEfforts: { low: 'low', medium: 'medium', high: 'high' },
+    })
+    const first = buildDiscoveredModelEntry({ id: 'first-model' })
+    const second = buildDiscoveredModelEntry({ id: 'second-model' })
+    expect(first.reasoningEfforts).not.toBe(second.reasoningEfforts)
+  })
+
+  it('falls back to conservative defaults for a bare discovery entry', () => {
+    expect(buildDiscoveredModelEntry({ id: 'bare-model' })).toEqual({
+      id: 'bare-model',
+      name: 'bare-model',
+      contextWindow: 128000,
+      maxTokens: 16384,
+      reasoningEfforts: { low: 'low', medium: 'medium', high: 'high' },
+    })
+    expect(buildDiscoveredModelEntry({ id: 'zero-model', contextWindow: 0, maxTokens: -1, inputModalities: [] }))
+      .toEqual({
+        id: 'zero-model',
+        name: 'zero-model',
+        contextWindow: 128000,
+        maxTokens: 16384,
+        reasoningEfforts: { low: 'low', medium: 'medium', high: 'high' },
+      })
+    // Modalities pi-ai cannot represent are dropped instead of stored as input.
+    expect(buildDiscoveredModelEntry({ id: 'odd-model', inputModalities: ['audio'] }))
+      .toEqual({
+        id: 'odd-model',
+        name: 'odd-model',
+        contextWindow: 128000,
+        maxTokens: 16384,
+        reasoningEfforts: { low: 'low', medium: 'medium', high: 'high' },
+      })
   })
 
   it('merges routes without dropping existing providers', () => {

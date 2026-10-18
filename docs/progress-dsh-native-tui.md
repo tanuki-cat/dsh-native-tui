@@ -37,7 +37,7 @@ dsh --profile tui
 | Session | 新建、恢复、列表、状态、清屏、导出、安全退出 |
 | 对话 | 流式 assistant/reasoning、Markdown、steer、cancel、失败 turn 展示 |
 | 工具 | 工具卡片、write/edit diff 行、`/tools`、`/tool <index>` 分页、`/diff [index]` |
-| 审批/问答 | approval waterfall、question 面板、Other 自由文本 |
+| 审批/问答 | approval waterfall、question 面板、单选/多选、Other 自由文本、单题跳过 |
 | 模型/命令 | 模型选择、第三方 provider 引导、权限预设、Host commands、jobs、subagents（仅 `/agents` 只读列举直接子级） |
 | Preset | 首个 turn 前切换当前 Session；开始后锁定，改用 /new |
 | Presets | standard / ptc / minimal / cordis |
@@ -91,7 +91,7 @@ EXIT 0
 
 ### 未完成真实验证
 
-- **没有模型凭据**，真实模型流式回合、真实工具调用、真实审批/问答 waterfall 未端到端跑通；只验证了事件管线、失败 turn、UI 路径和 Host 服务。
+- **没有模型凭据**，真实模型流式回合、真实工具调用、真实审批/问答 waterfall 仍未在真实凭据下跑通；只验证了事件管线、失败 turn、UI 路径和 Host 服务。2026-10-18 更新：审批与问答已分别用 mock 模型 + 真实 Host 的 E2E 覆盖（`scripts/fake-tty-approval.mjs`、`scripts/fake-tty-question.mjs`），真实凭据回合仍待验收。
 - 沙箱无法创建真实 PTY，使用 fake-TTY 包装验证。
 - 真实 `present` 工具事件未触发，deliverables panel/reveal 只有格式化和空缺路径验证。
 - 真实终端鼠标拖拽/选择复制未验证。
@@ -127,7 +127,7 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - 自动上下文压缩已接入 preset 并有事件渲染；真实长上下文自动触发仍缺 E2E 验收。
 - 生产与开发依赖已统一为 `0.2.1-rc.2`。
 - 会话级附件管理器未实现；当前 `/attachments` 管理 staged 附件。
-- 真实审批/工具/模型流式回合缺少凭据验收。
+- 真实凭据的模型流式回合仍未验收；审批 waterfall 已用 mock 模型 E2E 覆盖 allow/reject/cancel（`scripts/fake-tty-approval.mjs`）。
 - Deliverables panel 的真实 present 事件路径未验收。
 - `/provider add` 支持 DSH credential store（粘贴一次 key，写入 0600 credential 文件）或 UPPERCASE env 引用；API key 在输入时可见。自动发现依赖 endpoint 的 `/models` 列表，失败时回退手动输入；模型能力显式写入 `input`，已有旧 profile 需重配或手动补。
 - 旧版本可能已把误填的 key 写入 `apiKeyEnv`：需 `/provider remove <route>` 并轮换 key。
@@ -194,7 +194,7 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 
 ## 9. 剩余事项（2026-10-17 审查记录）
 
-当前代码与 117 个测试通过（25 个测试文件）；以下按优先级保留，不再混入已完成项。
+当前代码与 138 个测试通过（26 个测试文件）；以下按优先级保留，不再混入已完成项。
 
 ### P1
 
@@ -206,9 +206,6 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - [ ] **Compaction 中断恢复**：已能在新 start/assistant/turn end 时把未结束 compaction 标 error；若 Session 恢复时最后一个事件就是未结束的 start，仍会显示 running。需要 resume 时处理 orphan start 或加 stale 标记。
 - [ ] **Context 百分比精确性**：compaction 后只按 `shadowedTokenCount` 做近似扣减，未计 summary 本身 token；需要结合 token meter/下一次 usage 修正。
 - [ ] **真实 PTY**：fullscreen 鼠标滚动、选择复制、Ctrl+D 恢复尚未在普通终端验收。
-- [ ] **真实审批/模型/tool waterfall**：approval 已有 allow/reject/cancel 弹窗测试，但真实模型流式、工具调用和审批链路仍缺凭据环境验收。
-- [ ] **ask_user_question 多选与取消语义**：`multiSelect` 未实现，当前只接受单选（仅在标题提示 multi-select: this build accepts one option per question），模型要求多选时答案不完整；取消时抛普通 `Error` 而非 `UserQuestionError(code: 'ASK_ABORTED')`，`dsh-user-questions` 的 `restoreUserQuestionError` 无法还原错误分类，上层区分不出用户取消与工具故障；契约允许的跳过单题（返回 `{ id, selected: [] }`）也未实现，Esc 会让整个批次失败。
-- [ ] **ask_user_question 单测覆盖**：`tests/dialogs.spec.ts` 目前只覆盖 dialog frame、approval、searchable choice；需补 `answerOne` 的四个分支（无选项自由文本、选中选项、Other 自由文本、Esc 取消）以及 `showQuestionBatch` 的顺序与中止行为。
 - [ ] **Settings wizard 自动化测试**：覆盖打开弹窗、修改 mode/entries、settings 持久化、theme/fullscreen restart 提示。
 
 ### P3
@@ -230,7 +227,7 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - [x] Session resume 恢复 model/reasoning effort/preset。
 - [x] `/model` 内联搜索。
 - [x] computer-use 用户侧实机可用。
-- [x] approval dialog allow/reject/cancel 与 reason 渲染测试。
+- [x] approval dialog allow/reject 与显式 Cancel 行、reason 渲染测试（Esc 与 Cancel 行同样 settlement 为 cancelled）。
 - [x] MCP fiber 激活失败 Loader row 清理。
 - [x] MCP settings 实时 reconcile：`settings/document-updated` 驱动 manager 对新增/修改/删除 server 就地装载或卸载，不再需要重启 TUI；`tools/change` 加工具集合驱动 connect/disconnect 回推（mcp-manager 共 13 个单测）。
 - [x] MCP 真实 tools/call E2E：`scripts/mcp-tools-call-e2e.mjs` 用真实 cordis 加官方 mcp-client 连接 `scripts/fake-mcp-stdio.mjs`，断言 `mcp__demo__echo` 的 stdio 往返结果。
@@ -241,3 +238,6 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - [x] 流式渲染组件复用：`TranscriptRenderer.rebuild` 原先每帧重建全部 block 组件，于是每个 Markdown 每帧重新解析。改为按 block 内容判定并复用未变化的组件（`sameTranscriptBlock`），流式时每帧只重建尾部一个 block，分隔用 Spacer/Rule 仍按帧新建（成本可忽略）。基准 `scripts/bench-transcript.ts`：600 轮会话每帧 76.5 ms → 2.4 ms；流式在途 100 chunks 每帧 24.4 ms → 0.4 ms，均降到 33 ms 节流窗口以下。
 - [x] compaction 事件卡片、`/compact` 输出去重、context 近似扣减。
 - [x] Subagent 只读列举：`inject: ['subagents']` + `/agents` 调 `SubagentRuntime.listChildren(active.id)` 输出 `id mode label createdAt`；`/sessions` 按 header `origin === 'subagent'` 排除子会话（`src/runtime/session-list.ts`，有单测）。实测（2026-10-18）：全新 DSH_HOME 装当前 tgz 后空路径输出 `No subagents for this session.`；拷入含真实 `subagent/catalog` 事件的父会话后输出 `dcb2ef18-… continuable "Smoke test subagent" 2026-10-17T10:46:46.600Z`，同期 `/sessions` 不含该子会话。查看/继续/进度见 P3。
+- [x] ask_user_question 多选与跳过语义（2026-10-18）：新增多选 toggle 列表（Space 勾选、Enter 提交、Other 自由文本与已勾选标签一并返回）；每题统一提供 `Skip this question` 行（无选项文本题先给 `Answer… / Skip this question` 菜单，空提交返回菜单），跳过只返回 `{ id, selected: [] }` 并继续批次；Esc 或请求 signal 中止则以 `UserQuestionError('ask_user_question was aborted before the user answered', 'ASK_ABORTED')` 取消整个批次，Host 的 `restoreUserQuestionError` 可还原为 `ASK_ABORTED`，不再以普通 `Error` 混淆用户取消与工具故障。
+- [x] ask_user_question 单测覆盖（2026-10-18）：`tests/dialogs.spec.ts` 新增 13 个用例——无选项 Answer 行自由文本、无选项 Skip 行、空提交回到 Answer 菜单、Other 空提交回到选项列表、单选项选择、Other 自由文本、Skip 行跳过且保留批次、多选 toggle、多选 Other 补充、多选 Skip 行、空多选提交拦截、Esc 整批 `ASK_ABORTED`、signal 中止 `ASK_ABORTED`；总计 26 个测试文件 / 138 个测试。
+- [x] 真实审批 waterfall E2E（2026-10-18）：新增 `scripts/approval-gate-probe`（把 `tools/pre-execute` 对 `bash` 的 `ask` 决策交给真实 ApprovalService）与 `scripts/fake-tty-approval.mjs`（mock OpenAI SSE 模型 + 真实 Host + TUI overlay，逐模式复跑）。四模式通过：`allow` → bash 执行并回传 `approval-probe-ok`；`reject` → `Error: the user rejected tool "bash"`；`cancel-row`（显式 Cancel 行）与 `cancel-esc`（Esc）→ `Error: approval for tool "bash" was cancelled`。覆盖真实审批服务、`approval/request` waterfall、审计配对和 TUI 决定链路；仍为 mock 模型而非真实凭据。
