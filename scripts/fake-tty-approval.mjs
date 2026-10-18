@@ -14,7 +14,7 @@
  *
  * One-time setup (installs this repo's current build into a scratch home):
  *   pnpm pack --pack-destination .tmp
- *   DSH_HOME=/tmp/dsh-native-tui-approval-home dsh plugin --profile tui add .tmp/dsh-native-tui-0.1.0.tgz
+ *   DSH_HOME=/tmp/dsh-native-tui-approval-home dsh plugin --profile tui add .tmp/dsh-native-tui-0.2.1-rc.2.tgz
  *
  * Run with:
  *   DSH_HOME=/tmp/dsh-native-tui-approval-home node scripts/fake-tty-approval.mjs
@@ -32,7 +32,7 @@ const profile = join(home, 'profiles', 'tui')
 if (!existsSync(join(profile, 'node_modules', 'dsh-native-tui'))) {
   console.error('Install this build into ' + home + ' first:')
   console.error('  pnpm pack --pack-destination .tmp')
-  console.error('  DSH_HOME=' + home + ' dsh plugin --profile tui add .tmp/dsh-native-tui-0.1.0.tgz')
+  console.error('  DSH_HOME=' + home + ' dsh plugin --profile tui add .tmp/dsh-native-tui-0.2.1-rc.2.tgz')
   process.exit(2)
 }
 

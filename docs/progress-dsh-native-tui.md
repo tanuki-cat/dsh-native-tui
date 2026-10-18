@@ -3,7 +3,7 @@
 > 记录时间：2026-10-17 17:48 CST
 > 工作区：`/Users/wangzy/WorkSpace/WebStormProjects/dsh-native-tui`
 > 状态：**Goal complete**（30/30 轮），插件可构建、可测试、可安装
-> 包版本：`dsh-native-tui@0.1.0`
+> 包版本：`dsh-native-tui@0.2.1-rc.2`
 > 关联文档：[README](../README.md)、[Host-native 方案](design-task-feature-dsh-native-tui-host-native.md)
 
 ## 1. 结论
@@ -15,7 +15,7 @@
 ```sh
 pnpm check
 pnpm pack --pack-destination .tmp
-dsh plugin --profile tui add .tmp/dsh-native-tui-0.1.0.tgz
+dsh plugin --profile tui add .tmp/dsh-native-tui-0.2.1-rc.2.tgz
 dsh --profile tui
 ```
 
@@ -71,7 +71,7 @@ Tests       86 passed (86)
 
 ```text
 DSH_HOME=/tmp/dsh-native-tui-pack30-home
-dsh plugin --profile tui add .tmp/dsh-native-tui-0.1.0.tgz
+dsh plugin --profile tui add .tmp/dsh-native-tui-0.2.1-rc.2.tgz
 node scripts/fake-tty-smoke.mjs
 EXIT 0
 ```
@@ -99,7 +99,7 @@ EXIT 0
 ## 5. 主要产物
 
 ```text
-package.json                 dsh-native-tui@0.1.0
+package.json                 dsh-native-tui@0.2.1-rc.2
 cordis.patch.yml             Host 行、preset registry、native-tui 行
 presets/standard|ptc|minimal|cordis.patch.yml
 src/index.ts                 Cordis 入口、TTY 守卫
@@ -110,7 +110,7 @@ tests/                       23 个测试文件，86 个测试
 scripts/fake-tty-*.mjs       fake-TTY 验证脚本
 README.md
 docs/design-task-feature-dsh-native-tui-host-native.md
-.tmp/dsh-native-tui-0.1.0.tgz
+.tmp/dsh-native-tui-0.2.1-rc.2.tgz
 ```
 
 依赖：`@earendil-works/pi-tui@1.3.0`、`@deepseek-ai/schemastery@3.18.5`、`fflate@^0.8.3`，以及官方 `computer-use`、`experimental-computer-use-cua-driver-native`、`mcp-client`、`mcp-resources`、`session-stats` 的 `0.2.1-rc.2`。
