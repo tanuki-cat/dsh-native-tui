@@ -26,7 +26,7 @@ TypeScript ESM (NodeNext): relative imports end in `.js`, type-only imports use 
 
 ## Testing Guidelines
 
-Vitest with `environment: 'node'`, specs at `tests/<module>.spec.ts`. Add focused unit tests for behavior changes and keep `pnpm check` green (currently 26 files / 140 tests). For Host or TUI integration, add or run a `scripts/fake-tty-*.mjs` probe and report its real output.
+Vitest with `environment: 'node'`, specs at `tests/<module>.spec.ts`. Add focused unit tests for behavior changes and keep `pnpm check` green (currently 29 files / 184 tests). For Host or TUI integration, add or run a `scripts/fake-tty-*.mjs` probe and report its real output.
 
 ## Commit & Pull Request Guidelines
 

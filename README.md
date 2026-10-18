@@ -180,6 +180,43 @@ dsh --profile tui
 
 **不要在 env 模式把 key 填进变量名。** 流程要求 UPPERCASE 环境变量名，并拒绝形似 key 的输入。若旧配置已经把 key 写入 `apiKeyEnv`，立即执行 `/provider remove <route>`，检查 `cordis.patch.yml` 中对应配置，并轮换该 key。手工 JSON 配置仍可通过 `/settings set llm-pi-ai ...` 或 Web Models page 完成。
 
+## CodeBuddy / WorkBuddy（内置插件）
+
+`dsh-native-tui` 内置 `codebuddy` 插件（bundle 行 `dsh-native-tui/codebuddy`），把两个部署注册为 DSH LLM 路由：
+
+- `codebuddy` — CodeBuddy 国内版（copilot.tencent.com）
+- `codebuddy-en` — WorkBuddy 国际版（www.workbuddy.ai）
+
+两者不依赖 Web 端的 router 插件，也不需要任何本地代理：浏览器 OAuth 登录，凭据走 DSH authorization / credential seam，续期在 credential record 的互斥写内完成。
+
+```text
+/codebuddy status            # 登录态、token 轮换时间、模型目录与最近错误
+/codebuddy login [cn|en|all] # 打开浏览器授权并轮询（最多 5 分钟）
+/codebuddy logout [cn|en|all]
+/codebuddy models refresh    # 拉取 GET /v3/config 目录
+/codebuddy quota [cn|en]     # 剩余额度（只读，显式执行）
+/codebuddy checkin [cn|en]   # 显式签到（调用厂商自有端点，请自行确认条款）
+/codebuddy doctor            # 端点、请求形态与目录连通性探测，不含凭据
+```
+
+登录前 `/model` 已能看到两条路由与 seed 模型（CN 8 个 / EN 6 个，未经真实账号验证）；登录后 `models refresh` 会用账号目录替换。模型声明为 text-only，携带图片的消息会被拒绝并提示换模型。
+
+已知限制：
+
+- 未使用真实账号做端到端验收：OAuth、模型授权、真实思考档位与额度字段均为协议转写（来源 `CARVIN94/dsh-router-codebuddy`，MIT）。
+- 上游请求不带 `stream_options`，不返回 `usage`；此时不显示 token 用量，也不伪造 0。
+- 路由名 `codebuddy` / `codebuddy-en` 由本插件独占。若此前在 `llm-pi-ai` 设置里手工配置过同名 route，请先 `/provider remove codebuddy`（及 `codebuddy-en`），否则 llm-pi-ai 注册同名路由会失败并输出诊断。
+- 登录入口只在终端内（`/codebuddy login`），Web Models 页不提供这两个 provider 的 OAuth。
+
+真实 Host 冒烟（离线即可，不需要账号）：
+
+~~~sh
+pnpm build
+pnpm pack --pack-destination .tmp
+DSH_HOME=/tmp/dsh-native-tui-codebuddy-home dsh plugin --profile tui add .tmp/dsh-native-tui-0.2.1-rc.2.tgz
+DSH_HOME=/tmp/dsh-native-tui-codebuddy-home node scripts/fake-tty-codebuddy.mjs
+~~~
+
 ## MCP 服务
 
 默认 bundle 集成官方 `mcp-client` 与 `mcp-resources`。TUI 通过 `mcp-manager` 管理服务配置：
@@ -237,6 +274,12 @@ DSH_HOME=/tmp/dsh-native-tui-approval-home node scripts/fake-tty-approval.mjs
 
 ~~~sh
 DSH_HOME=/tmp/dsh-native-tui-catalog-home node scripts/fake-tty-provider-catalog.mjs
+~~~
+
+内置 CodeBuddy 插件（两条路由挂载、`/codebuddy status|doctor`、`/model` seed 模型）用真实 Host 冒烟，离线可跑：
+
+~~~sh
+DSH_HOME=/tmp/dsh-native-tui-codebuddy-home node scripts/fake-tty-codebuddy.mjs
 ~~~
 
 手动调用技能（`/` 菜单列出技能、`/skill-name` 注入技能正文）用真实 Host 冒烟（脚本自建 fixture skill）：

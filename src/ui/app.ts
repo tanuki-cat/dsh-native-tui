@@ -31,6 +31,8 @@ import { collectDeliverables, formatDeliverables, type PresentedFileView } from 
 import { collectToolCalls } from '../runtime/tool-log.js'
 import { ownStoredSessions, selectListedSessions } from '../runtime/session-list.js'
 import { INIT_AGENTS_PROMPT } from '../runtime/init-prompt.js'
+import { runCodebuddyCommand, type CodeBuddyCommandDeps } from '../runtime/codebuddy-command.js'
+import type { CodeBuddyService } from '../codebuddy.js'
 import {
   buildCatalogProvider,
   buildCustomProvider,
@@ -127,6 +129,15 @@ const LOCAL_COMMANDS: readonly CommandSuggestion[] = [
     { name: 'add', description: 'add a stdio or HTTP MCP server' },
     { name: 'list', description: 'list configured MCP servers' },
     { name: 'remove', description: 'remove an MCP server', hint: '<name>' },
+  ] },
+  { name: 'codebuddy', description: 'CodeBuddy / WorkBuddy sign-in, models and credits', input: { hint: '[status|login|logout|models refresh|quota|checkin|doctor]' }, subcommands: [
+    { name: 'status', description: 'sign-in state, token rotation, catalogue' },
+    { name: 'login', description: 'open the browser sign-in', hint: '[cn|en|all]' },
+    { name: 'logout', description: 'remove the stored credential', hint: '[cn|en|all]' },
+    { name: 'models', description: 'force a catalogue refresh', hint: 'refresh [cn|en]' },
+    { name: 'quota', description: 'remaining credits', hint: '[cn|en]' },
+    { name: 'checkin', description: 'claim today credits', hint: '[cn|en]' },
+    { name: 'doctor', description: 'endpoint and catalogue probe' },
   ] },
   { name: 'provider', description: 'guided third-party model provider setup', input: { hint: '[add|list|edit|models|remove <route>]' }, subcommands: [
     { name: 'add', description: 'guide a new provider route' },
@@ -928,6 +939,7 @@ export async function startTerminalApp(
           '/files [path] · /changes [diff <index>] · /deliverables [panel|open|reveal <index>]',
           '/tools · /tool <index> · /diff [index] · /exit',
           '/attach <path>|paste|preview <i>|list|clear · /attachments · /exit',
+          '/codebuddy [status|login|logout|models refresh|quota|checkin|doctor]',
           '@@<query> references another session · /exit',
           'Host commands: ' + (hostCommands.length === 0 ? '(none)' : hostCommands.join(' · ')),
           'Skills: ' + (skills.length === 0 ? '(none)' : skills.map(skill => '/' + skill.name).join(' · ')),
@@ -2521,6 +2533,25 @@ export async function startTerminalApp(
                     return;
                 }
                 pushNotice('warning', 'Usage: /mcp [add | list | remove <name>]');
+                return;
+            }
+            case 'codebuddy': {
+                const codebuddyService = host.get('codebuddy') as CodeBuddyService | undefined;
+                await runCodebuddyCommand(args, {
+                    service: codebuddyService,
+                    authorization: host.get('authorization') as CodeBuddyCommandDeps['authorization'],
+                    credentials: host.get('credentials') as CodeBuddyCommandDeps['credentials'],
+                    signal: interactionAbort.signal,
+                    notice: (level, text) => pushNotice(level, text),
+                    prompt: question => showTextInput(
+                        tui,
+                        palette,
+                        question.message,
+                        question.placeholder ?? '',
+                        question.secret === true ? 'Input is hidden from the transcript · Esc cancels' : 'Enter submits · Esc cancels',
+                        interactionAbort.signal,
+                    ),
+                });
                 return;
             }
             case 'provider': {

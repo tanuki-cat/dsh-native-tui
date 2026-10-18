@@ -30,6 +30,10 @@
     "./mcp-manager": {
       "types": "./dist/mcp-manager.d.ts",
       "default": "./dist/mcp-manager.js"
+    },
+    "./codebuddy": {
+      "types": "./dist/codebuddy.d.ts",
+      "default": "./dist/codebuddy.js"
     }
   },
   "files": [

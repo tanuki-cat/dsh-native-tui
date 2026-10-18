@@ -57,6 +57,9 @@
       config:
         servers: {}
 
+    - id: codebuddy
+      name: dsh-native-tui/codebuddy
+
     - id: native-tui
       name: dsh-native-tui
 
