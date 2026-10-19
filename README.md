@@ -10,12 +10,12 @@ DeepSeek Harness 的 host-native 终端前端，基于 pi-tui。
 ## 特性
 
 - 新建/恢复 Session，owned root Agent。
-- 流式文本、Markdown、reasoning（含网关只在完成时回传整块时的本地逐帧展开）、工具卡片（write/edit 结果渲染 ± diff 行）、turn 失败提示。
+- 流式文本、Markdown、reasoning（含网关只在完成时回传整块时的本地逐帧展开）、工具卡片（write/edit 结果渲染 ± diff 行，含 `run_code` 内嵌子调用）、turn 失败提示。
 - 本地命令与宿主命令执行（compact/feedback/goal/permission/plan）；slash 命令支持子命令补全，例如 `/provider` 显示 add/list/remove，`/reasoning` 后输入空格显示 map；子命令已完整输入时回车直接执行；从补全中选中时，如果当前过滤结果只包含无参数子命令则直接执行；混有带参数子命令时保持插入，继续输入参数。
 - 审批与问答 waterfall；所有独立 overlay（Choice/TextInput/Approval、Markdown/Text Pager、Image）统一使用带边框和全宽背景的 opaque dialog frame，长内容自动换行/补齐。问答面板支持单选与多选：多选用 Space 勾选、Enter 提交，Other 提供自由文本（多选时会与已勾选项一并返回）；每题统一提供 `Skip this question` 行（无选项文本题为 `Answer… / Skip this question` 菜单），跳过只返回 `{ id, selected: [] }` 并继续批次；Esc 或请求 signal 中止则以 `UserQuestionError(ASK_ABORTED)` 取消整个批次。
 - 模型选择器（LLM catalog 为空时明确提示）、reasoning effort 切换与映射编辑、权限预设、后台任务、子代理列表。
 - 模型与 reasoning effort 通过 Host `agentDefaultModel.saveSelection` 持久化；重启或 `/new` 沿用，不再回落默认。
-- 第三方模型：`/provider add` 引导配置 pi-ai gateway/catalog route，`/provider list|edit|models|remove` 管理。
+- 第三方模型：`/provider add` 引导配置 pi-ai gateway/catalog route，`/provider list|edit|models|input|remove` 管理；`/provider input` 可手动编辑当前或指定模型的输入类型（text / text + image）。
 - 默认集成官方 `@deepseek-ai/dsh-computer-use`、`@deepseek-ai/dsh-experimental-computer-use-cua-driver-native`、`@deepseek-ai/dsh-mcp-client`（以及 mcp-resources）。
 - `/mcp add|list|remove` 配置 stdio / Streamable HTTP MCP 服务；配置持久化到 `mcp-manager.servers`。
 - Agent Presets：standard / ptc / minimal / cordis；/preset 可在首个 turn 前切换当前 Session，已开始的 Session 锁定并用于下一次 /new；选择同时写入 `agent-preset-registry.selectedDefault`，重启后继续使用。
@@ -72,7 +72,7 @@ dsh --profile tui --resume <session-id>
 | /cancel | 取消当前 turn |
 | /model [provider/model] | 打开可搜索的模型列表或直接切换；选择同时保存为默认模型 |
 | /reasoning [effort|default|map] | 列出或切换当前模型的思考强度并保存；default 清除显式 effort；map 引导编辑当前模型的 level → wire 映射 |
-| /provider [add|list|edit [route]|models <route>|remove <route>] | 配置/查看 provider；打开配置获取可用模型；刷新或删除 route |
+| /provider [add|list|edit [route]|models <route>|input [provider/model]|remove <route>] | 配置/查看 provider；打开配置获取可用模型；编辑模型输入类型；刷新或删除 route |
 | /mcp [add|list|remove <name>] | 配置、查看或删除 MCP 服务 |
 | /permissions [preset] | 列出或切换权限预设 |
 | /jobs [kill <id>] | 列出或终止后台任务 |
@@ -135,9 +135,11 @@ Enter 发送；运行中 Enter 作为 steer；Ctrl+C 取消/退出；Ctrl+D 退�
    - **Store API key in DSH credentials（推荐）**：直接粘贴 key。key 存入 DSH credential store（`~/.dsh/.credentials.yaml`，权限 0600），不写入 profile；无需 export。输入时 key 在终端可见。
    - **Use an environment variable**：输入 UPPERCASE 变量名，启动 dsh 前在 shell export；catalog route 的默认值是 provider 原生 env（无原生认证时回退 `<ROUTE>_API_KEY`）。
 3. custom gateway 会调用 Host `discoverModels` 请求 `GET {baseURL}/models` 并列出模型（5 秒超时）；catalog route 直接使用 provider 内置模型列表。
-4. 从内置/自动发现的模型中选择，或回退到手动输入 model id/context window/max tokens。**发现列表中的其他模型也会写入该 route**，之后可在 `/model` 中直接切换；选中模型会带上本次选择的 input/reasoning，其他模型使用 discovery 返回的容量/模态，并写入默认 `reasoningEfforts`（`low/medium/high` 同名映射）。
-5. 选择 Input modalities：`Text + image`（vision）或 `Text only`。生成的模型配置会显式写入 `input`；未知能力的自定义网关默认先选 `Text + image`。
-6. 输入 Reasoning levels（逗号分隔，默认 `low,medium,high`；留空表示不支持 reasoning）。生成的模型配置会写入 `reasoningEfforts`，之后可用 `/reasoning` 切换，或运行 `/reasoning map` 引导修改 level → wire 映射。
+4. 从内置/自动发现的模型中选择，或回退到手动输入 model id/context window/max tokens。**发现列表中的其他模型也会写入该 route**，之后可在 `/model` 中直接切换。
+   - 自动导入的其他模型：`input` 随 discovery 一起保存，catalog 或 endpoint 声明了输入类型就写声明值；未声明（自定义网关的 `/models` 通常只返回容量）则显式保存为 `[text]`，不再留空继承 route 的 `defaultInput`。
+   - 选中的模型会再询问 **Input modalities**：discovery 声明 image 时默认 `Text + image`；未声明或只声明 text 时默认 `Text only`，可手动改成 `Text + image`。这一步是必要的，因为已有网关（如 command-code）的 listing 完全不提供模态信息，但模型实际能读图。
+   - 其他模型使用 discovery 返回的容量/模态，并写入默认 `reasoningEfforts`（`low/medium/high` 同名映射）。
+5. 输入 Reasoning levels（逗号分隔，默认 `low,medium,high`；留空表示不支持 reasoning）。生成的模型配置会写入 `reasoningEfforts`，之后可用 `/reasoning` 切换，或运行 `/reasoning map` 引导修改 level → wire 映射。
 
 `apiKeyEnv` 保存的是 credential reference（环境变量名或 DSH credential 名称），不是 key 明文。env 模式下若变量未设置会拒绝保存；store 模式直接写 credential store。
 
@@ -153,7 +155,7 @@ reasoningEfforts:
   high: high
 ```
 
-也可以在 route 级使用 `defaultInput: [text, image]`，让该 route 下未声明 `input` 的模型继承。`reasoningEfforts` 的 key 是 Harness 选择项，value 是该网关实际接收的 wire spelling；引导默认同名映射，网关拼写不同（例如 `minimal`）时请按实际值修改。
+也可以在 route 级使用 `defaultInput: [text, image]`，让该 route 下未声明 `input` 的模型继承；已显式保存 `input` 的模型优先用自己的声明。endpoint 未声明输入类型、但实际支持图片的网关，可在对应模型上手动补 `input`（或为 route 设置 `defaultInput`）。`reasoningEfforts` 的 key 是 Harness 选择项，value 是该网关实际接收的 wire spelling；引导默认同名映射，网关拼写不同（例如 `minimal`）时请按实际值修改。
 
 切换思考强度：
 
@@ -197,7 +199,17 @@ dsh --profile tui
 /provider models command-code
 ```
 
-`/provider` 打开 provider 选择；`edit` 进入配置菜单（Fetch available models）；`models` 直接获取。查询使用已保存的 baseURL/API 协议/credential，把 endpoint 返回的模型合并进 route：新模型追加，已有模型更新容量，保留已有 input/reasoningEfforts。新增模型若未声明 reasoningEfforts，会自动写入默认同名映射 `low/medium/high`，使其在 `/reasoning` 中可直接切换；已有模型（包括留空表示不支持 reasoning 的）不会被回填。
+`/provider` 打开 provider 选择；`edit` 进入配置菜单（Fetch available models / Edit model input types）；`models` 直接获取。查询使用已保存的 baseURL/API 协议/credential，把 endpoint 返回的模型合并进 route：新模型追加，已有模型更新容量。`input` 与模型列表一起保存：discovery 声明了输入类型就写入新模型；已有模型显式声明的 `input` 保留，`input` 缺失或为空（schema 对缺省数组的物化结果）时用 discovery 声明回填，discovery 也未声明则保存为 `[text]`。`reasoningEfforts` 保持原样；新增模型若未声明，会自动写入默认同名映射 `low/medium/high`，使其在 `/reasoning` 中可直接切换；已有模型（包括留空表示不支持 reasoning 的）不会被回填。
+
+编辑单个模型的输入类型：
+
+```text
+/provider input                                             # 当前模型
+/provider input command-code/deepseek/deepseek-v4.1-flash   # 指定模型
+/provider edit command-code                                 # 菜单里选 Edit model input types
+```
+
+向导会显示当前声明，并可选择 `Text only`、`Text + image`，或 `Inherit route default` 删除显式 `input` 让 route 的 `defaultInput` / catalog 生效。这是**手动能力声明**，不会探测模型：只有当模型或网关确实接受图片时才选 `Text + image`，否则请求会失败。写入位置与 `/reasoning map` 一致：显式 `models` 条目写 `models[].input`；catalog route 写 `modelOverrides.<model>.input`；`models` 来自其他配置层时会先确认再整体重写该数组。
 
 **不要在 env 模式把 key 填进变量名。** 流程要求 UPPERCASE 环境变量名，并拒绝形似 key 的输入。若旧配置已经把 key 写入 `apiKeyEnv`，立即执行 `/provider remove <route>`，检查 `cordis.patch.yml` 中对应配置，并轮换该 key。手工 JSON 配置仍可通过 `/settings set llm-pi-ai ...` 或 Web Models page 完成。
 
@@ -326,6 +338,12 @@ DSH_HOME=/tmp/dsh-native-tui-approval-home node scripts/fake-tty-approval.mjs
 
 ~~~sh
 DSH_HOME=/tmp/dsh-native-tui-catalog-home node scripts/fake-tty-provider-catalog.mjs
+~~~
+
+手动编辑模型输入类型（`/provider input` 与 `/provider edit` 菜单、Text only / Text + image / Inherit 三种写入）用真实 Host 探针：
+
+~~~sh
+DSH_HOME=/tmp/dsh-native-tui-input-home node scripts/fake-tty-provider-input.mjs
 ~~~
 
 内置 CodeBuddy 插件（两条路由挂载、`/codebuddy status|doctor`、`/model` seed 模型）用真实 Host 冒烟，离线可跑：
