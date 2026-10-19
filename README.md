@@ -346,6 +346,12 @@ DSH_HOME=/tmp/dsh-native-tui-catalog-home node scripts/fake-tty-provider-catalog
 DSH_HOME=/tmp/dsh-native-tui-input-home node scripts/fake-tty-provider-input.mjs
 ~~~
 
+其他预设（standard）的原生 write/edit 卡片（直接 `tool/call`，不经过 `run_code`）同样用真实 Host 探针：
+
+~~~sh
+DSH_HOME=/tmp/dsh-native-tui-native-diff-home node scripts/fake-tty-native-diff.mjs
+~~~
+
 内置 CodeBuddy 插件（两条路由挂载、`/codebuddy status|doctor`、`/model` seed 模型）用真实 Host 冒烟，离线可跑：
 
 ~~~sh
