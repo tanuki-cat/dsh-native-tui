@@ -30,7 +30,8 @@ import type { AgentDefaultModelService, LLM, SessionProjectionsService, SkillsCa
 import { openTuiSettings, showHostSettings } from './commands/settings.js'
 import { errorMessage } from './commands/shared.js'
 import { subscribeSessionEvents } from './session-events.js'
-import { liveChunkHasOutput, nextStreamInterval, STREAM_MIN_INTERVAL_MS, STREAM_MS_PER_CHAR, TranscriptRenderer, type TranscriptBlock, type TranscriptEntry } from './transcript.js'
+import { liveChunkHasOutput, nextStreamInterval, STREAM_MIN_INTERVAL_MS, STREAM_MS_PER_CHAR, type TranscriptBlock, type TranscriptEntry } from './transcript.js'
+import { TranscriptRenderer } from './transcript-renderer.js'
 import { WAIT_ROW_DELAY_MS, waitingText, waitingVisible, type WaitRetry } from './waiting.js'
 import { Rule } from './rule.js'
 

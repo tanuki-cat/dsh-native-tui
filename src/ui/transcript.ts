@@ -1,6 +1,4 @@
-import { Box, Container, Markdown, Spacer, Text, type Component, type MarkdownTheme } from '@earendil-works/pi-tui'
-import { Rule } from './rule.js'
-import { BarText } from './bar-text.js'
+import type { MarkdownTheme } from '@earendil-works/pi-tui'
 import { assembleAssistantStream, type AssistantStreamRecord } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-commands'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
@@ -25,15 +23,24 @@ export type TranscriptEntry =
   | { readonly type: 'live'; readonly event: LiveChunkEntry }
 import type { Palette } from './theme.js'
 import type { DisplayMode } from '../config.js'
-import { asFileDiffs, diffLines, type FileDiff } from './diff.js'
-import { clip, compactCodeExecutionPreview, formatToolArguments } from './tool-preview.js'
-import { clipGraphemes, REASONING_PREVIEW, REASONING_REVEAL_RECENT_MS, reasoningRevealFrom, revealCompletedReasoning, revealDurableReasoning, type RevealProgress } from './reasoning-reveal.js'
+import { asFileDiffs, type FileDiff } from './diff.js'
+import { clip } from './tool-preview.js'
+import { REASONING_REVEAL_RECENT_MS, reasoningRevealFrom, rememberRevealProgress, revealCompletedReasoning, revealDurableReasoning, type RevealProgress } from './reasoning-reveal.js'
+import { isCodeExecutionTool } from './transcript-render.js'
 
 /** Streaming frame interval bounds, in milliseconds. */
 export const STREAM_MIN_INTERVAL_MS = 33
 const STREAM_MAX_INTERVAL_MS = 100
 /** Estimated frame cost above which the stream interval backs off. */
 const STREAM_FRAME_BUDGET_MS = 8
+/**
+ * Grace after an assistant block's last content before the rows that follow it
+ * are shown. One paint interval is at most {@link STREAM_MAX_INTERVAL_MS}, so a
+ * shorter grace would let the final thinking text and the tool card that
+ * follows it land on the same frame, which reads as the thinking ending and
+ * the card appearing at once.
+ */
+const ASSISTANT_SETTLE_MS = STREAM_MAX_INTERVAL_MS + 50
 /**
  * Estimated milliseconds pi-tui spends re-rendering one character of streaming
  * Markdown. The reducer cannot measure that render, so the caller estimates it
@@ -53,13 +60,6 @@ export function nextStreamInterval(current: number, frameMs: number): number {
   const scaled = frameMs > STREAM_FRAME_BUDGET_MS ? current * 1.5 : current * 0.75
   return Math.max(STREAM_MIN_INTERVAL_MS, Math.min(STREAM_MAX_INTERVAL_MS, Math.round(scaled)))
 }
-/** Tools whose cards follow the code-execution density setting. */
-const CODE_EXECUTION_TOOLS: ReadonlySet<string> = new Set(['run_code', 'bash', 'pwsh'])
-
-function isCodeExecutionTool(name: string): boolean {
-  return CODE_EXECUTION_TOOLS.has(name)
-}
-
 /** One rendered transcript row. */
 export type TranscriptBlock = ({
   readonly kind: 'user'; readonly text: string
@@ -192,6 +192,16 @@ function stepKey(turn: number, step: number): string {
   return `${String(turn)}:${String(step)}`
 }
 
+/**
+ * Whether a row ends the reveal hold because showing it late would hide
+ * information: fresh user input and a failed or truncated turn.
+ * @param block - one reduced block after a still-revealing reasoning block.
+ * @returns true when the hold must give way.
+ */
+function isRevealBoundary(block: TranscriptBlock): boolean {
+  return block.kind === 'user' || (block.kind === 'notice' && block.tone !== 'info')
+}
+
 function reasoningKey(turn: number, step: number): string {
   return 'reasoning:' + stepKey(turn, step)
 }
@@ -265,9 +275,17 @@ export function reduceTranscriptWindow(
   const blocks: TranscriptBlock[] = []
   /** Entry index that created each block, parallel to `blocks`; every event appends at most one. */
   const sources: number[] = []
+  /**
+   * Wall clock of the last content an assistant block received, parallel to
+   * `blocks`. Rows that follow a block are held until this is one paint old, so
+   * the final thinking text never shares a frame with the tool card after it.
+   */
+  const contentAt: number[] = []
   const liveByStep = new Map<string, { index: number; text: string; reasoning: string; revealing: boolean; starting: boolean }>()
   let durableRevealPending = false
   const finalizedSteps = new Set<string>()
+  /** Steps that already opened a live block, so a retry is recognisable. */
+  const startedSteps = new Set<string>()
   const toolByCall = new Map<string, number>()
   const hiddenCodeExecutionCalls = new Set<string>()
   /** Event sequence -> call identity, for both tool calls and tool results. */
@@ -291,9 +309,11 @@ export function reduceTranscriptWindow(
     if (options.revealProgress !== undefined && progress === undefined && from !== undefined
       && now - from <= REASONING_REVEAL_RECENT_MS) {
       progress = { start: now, visible: 0 }
-      options.revealProgress.set(progressKey, progress)
+      rememberRevealProgress(options.revealProgress, progressKey, progress)
     }
-    return revealDurableReasoning(text, from, now, showReasoning, progress, options.revealProgress !== undefined)
+    // Only the detailed display shows the whole block, so only it pays for the
+    // local reveal; compact shows one line and must not hold later rows.
+    return revealDurableReasoning(text, from, now, showReasoning && thinkingDisplay === 'detailed', progress, options.revealProgress !== undefined)
   }
   const finishOpenCompactions = (seq: number): void => {
     for (const index of compactionByCall.values()) {
@@ -313,6 +333,11 @@ export function reduceTranscriptWindow(
       blocks.push({ kind: 'assistant', text: '', reasoning: '', live: true })
       live = { index, text: '', reasoning: '', revealing: false, starting: false }
       liveByStep.set(key, live)
+      // A step only starts a second live block when a retry took over from the
+      // previous attempt. Its reasoning must reveal from the start instead of
+      // inheriting the settled attempt's completed count.
+      if (startedSteps.has(key)) options.revealProgress?.delete(reasoningKey(event.data.turn, event.data.step))
+      startedSteps.add(key)
     }
     const chunk: StreamChunk = event.data.chunk
     if (chunk.type === 'block-start') {
@@ -343,9 +368,11 @@ export function reduceTranscriptWindow(
           let progress = options.revealProgress?.get(progressKey)
           if (options.revealProgress !== undefined && progress === undefined) {
             progress = { start: now, visible: 0 }
-            options.revealProgress.set(progressKey, progress)
+            rememberRevealProgress(options.revealProgress, progressKey, progress)
           }
-          const reveal = revealCompletedReasoning(completed, now, progress, event.time)
+          const reveal = thinkingDisplay === 'detailed'
+            ? revealCompletedReasoning(completed, now, progress, event.time)
+            : { text: completed, pending: false }
           live.reasoning = reveal.text
           live.revealing = reveal.pending
         }
@@ -355,6 +382,7 @@ export function reduceTranscriptWindow(
         }
       }
     }
+    contentAt[live.index] = event.time
     blocks[live.index] = {
       kind: 'assistant',
       text: live.text,
@@ -494,6 +522,7 @@ export function reduceTranscriptWindow(
         const reveal = revealDurable(fullReasoning, event.data.stream, key)
         if (reveal.pending) durableRevealPending = true
         if (text.trim() !== '' || fullReasoning.trim() !== '') {
+          contentAt[blocks.length] = event.time
           blocks.push({
             kind: 'assistant',
             text,
@@ -507,6 +536,9 @@ export function reduceTranscriptWindow(
       }
       case 'assistant/attempt': {
         const key = stepKey(event.data.turn, event.data.step)
+        // A retry restarts the same step with a different attempt; keeping this
+        // clock would let the retried block reveal from the old attempt's count.
+        options.revealProgress?.delete(reasoningKey(event.data.turn, event.data.step))
         const live = liveByStep.get(key)
         if (live !== undefined) {
           // Settle the transient rows and drop the accumulator so a retry of the
@@ -521,6 +553,7 @@ export function reduceTranscriptWindow(
         const reveal = revealDurable(fullReasoning, event.data.stream, key)
         if (reveal.pending) durableRevealPending = true
         if (text.trim() !== '' || fullReasoning.trim() !== '') {
+          contentAt[blocks.length] = event.time
           blocks.push({
             kind: 'assistant',
             text,
@@ -651,19 +684,33 @@ export function reduceTranscriptWindow(
   const visible: TranscriptBlock[] = []
   const visibleSources: number[] = []
   let holdAfterReveal = false
-  // A new user turn or a warning/error notice outranks the local reveal:
-  // showing it immediately preserves event order and avoids hiding fresh input
-  // or a failure. Informational notices stay behind the reveal like tool rows.
-  const revealIndex = blocks.findIndex(block => block.kind === 'assistant' && block.revealing === true)
-  const boundaryAfterReveal = revealIndex !== -1
-    && blocks.slice(revealIndex + 1).some(block =>
-      block.kind === 'user' || (block.kind === 'notice' && block.tone !== 'info'))
+  /** Latest assistant content already emitted above the current row. */
+  let lastAssistantAt: number | undefined
+  let settleHeld = false
   for (let index = 0; index < blocks.length; index += 1) {
-    // Do not let the next tool card or step overtake a thinking block that is
-    // still revealing locally. The held entries stay in the window and appear
-    // on the frame that completes the reveal.
-    if (holdAfterReveal && !boundaryAfterReveal) continue
     const block = blocks[index]!
+    // A reasoning block that is still revealing keeps the rows after it back,
+    // so a tool card or the next step does not overtake the thinking text. The
+    // hold ends at the first row that must not be hidden -- a new user message
+    // or a warning/error notice -- and everything from that row on is shown in
+    // event order. Rows that arrived before the boundary stay held, so a tool
+    // card that preceded the failure cannot leak out ahead of the thinking.
+    const boundary = isRevealBoundary(block)
+    if (holdAfterReveal && !boundary) continue
+    if (holdAfterReveal) holdAfterReveal = false
+    // Content produced after an assistant block must not share its last frame.
+    // A delta path has no local reveal, yet its final thinking text and the
+    // tool call that follows it arrive within milliseconds, so without this
+    // grace the two land on the same paint and the card looks like it appeared
+    // the instant the thinking finished.
+    const previousAssistantAt = lastAssistantAt
+    if (previousAssistantAt !== undefined
+      && (block.kind === 'tool' || block.kind === 'compaction'
+        || (block.kind === 'notice' && block.tone === 'info'))
+      && now - previousAssistantAt < ASSISTANT_SETTLE_MS) {
+      settleHeld = true
+      continue
+    }
     // A pruned tool row only repeats the prune notice; hiding the whole card
     // keeps the transcript focused on content that is still model-visible.
     if (block.kind === 'tool' && block.pruned === true) continue
@@ -671,10 +718,18 @@ export function reduceTranscriptWindow(
       && block.starting !== true) continue
     visible.push(block)
     visibleSources.push(sources[index] ?? 0)
-    if (block.kind === 'assistant' && block.revealing === true) holdAfterReveal = true
+    if (block.kind === 'assistant') {
+      if (block.revealing === true) holdAfterReveal = true
+      const at = contentAt[index]
+      if (at !== undefined) lastAssistantAt = at
+    }
+    // The grace only covers rows that directly follow the assistant block; a
+    // new user turn, a failure and any other row end that adjacency.
+    else lastAssistantAt = undefined
   }
+  const pending = revealPending || settleHeld
   if (visible.length <= options.maxEntries) {
-    return { blocks: visible, retainedFrom: visibleSources[0] ?? 0, revealPending }
+    return { blocks: visible, retainedFrom: visibleSources[0] ?? 0, revealPending: pending }
   }
   const start = visible.length - options.maxEntries
   const hidden = visible.length - options.maxEntries
@@ -684,315 +739,6 @@ export function reduceTranscriptWindow(
       ...visible.slice(start),
     ],
     retainedFrom: visibleSources[start] ?? 0,
-    revealPending,
-  }
-}
-
-/**
- * Whether a rebuilt block renders exactly what its predecessor rendered.
- * Blocks are pure data, so a field-wise comparison decides it without
- * touching the component tree. Arrays compare by length and element identity,
- * which fails safe: a false negative only rebuilds one component.
- * @param left - block from the previous rebuild.
- * @param right - block from the current rebuild.
- * @returns true when the previous component can be reused.
- */
-export function sameTranscriptBlock(left: TranscriptBlock, right: TranscriptBlock): boolean {
-  if (left === right) return true
-  if (left.kind !== right.kind) return false
-  const previous = right as unknown as Record<string, unknown>
-  const keys = Object.keys(left)
-  if (keys.length !== Object.keys(previous).length) return false
-  for (const key of keys) {
-    const before = (left as unknown as Record<string, unknown>)[key]
-    const after = previous[key]
-    if (before === after) continue
-    if (Array.isArray(before) && Array.isArray(after)) {
-      if (before.length !== after.length) return false
-      for (let index = 0; index < before.length; index += 1) if (before[index] !== after[index]) return false
-      continue
-    }
-    return false
-  }
-  return true
-}
-
-/**
- * Stable identity of one reduced block, for carrying its component across a
- * rebuild. `maxEntries` drops old rows from the front and shifts every later
- * block's index, so index alignment cannot decide reuse. A live assistant
- * block has no durable identity and is rebuilt every frame by design.
- * @param block - one reduced block.
- * @returns a key stable for the block's lifetime, or undefined when it has none.
- */
-function blockKey(block: TranscriptBlock): string | undefined {
-  switch (block.kind) {
-    case 'tool': return 'tool:' + block.callId
-    case 'compaction': return 'compaction:' + block.compactionId
-    case 'assistant': return block.live || block.seq === undefined ? undefined : 'assistant:' + String(block.seq)
-    case 'user': return block.seq === undefined ? undefined : 'user:' + String(block.seq)
-    case 'context': return block.seq === undefined ? undefined : 'context:' + String(block.seq)
-    case 'notice': return block.seq === undefined ? undefined : 'notice:' + String(block.seq)
-    case 'waiting': return undefined
-  }
-}
-
-/** Pi-tui renderer for one reduced transcript. */
-export class TranscriptRenderer {
-  readonly container = new Container()
-  private entries: readonly TranscriptEntry[] = []
-  private extra: readonly TranscriptBlock[] = []
-  /** Component per stable block identity from the previous rebuild. */
-  private cached = new Map<string, { readonly block: TranscriptBlock; readonly component: Component }>()
-  private retained = 0
-  private liveChars = 0
-  private revealPending = false
-  private options: TranscriptOptions
-
-  /**
-   * Index into the last reduced event window below which no retained block
-   * needs anything. A caller may drop that prefix before the next rebuild.
-   */
-  get retainedFrom(): number {
-    return this.retained
-  }
-
-  /** Characters in the trailing live assistant block; its re-render dominates a stream frame. */
-  get liveContentLength(): number {
-    return this.liveChars
-  }
-
-  /** True while a completed reasoning block is still being revealed across frames. */
-  get liveRevealPending(): boolean {
-    return this.revealPending
-  }
-
-  /**
-   * @param options - reduction and styling options.
-   */
-  constructor(options: TranscriptOptions) {
-    this.options = {
-      ...options,
-      revealProgress: options.revealProgress ?? new Map(),
-      toolMemory: options.toolMemory ?? {
-        settled: new Set(),
-        pruned: new Set(),
-        prunedSeqs: new Set(),
-        callBySeq: new Map(),
-      },
-    }
-  }
-
-  /** Switch reasoning/code-execution density and rebuild the existing event window. */
-  setDisplayModes(thinkingDisplay: DisplayMode, runCodeDisplay: DisplayMode): void {
-    if (this.options.thinkingDisplay === thinkingDisplay && this.options.runCodeDisplay === runCodeDisplay) return
-    this.options = { ...this.options, thinkingDisplay, runCodeDisplay }
-    // Density is a render option rather than part of TranscriptBlock, so a block
-    // can stay equal while its component must switch representation. Drop the
-    // reuse window; otherwise the previous density keeps rendering.
-    this.cached.clear()
-    this.rebuild()
-  }
-
-  /** Change the retained transcript row budget and rebuild. */
-  setMaxEntries(maxEntries: number): void {
-    this.options = { ...this.options, maxEntries }
-    this.rebuild()
-  }
-
-  /** Replace both the event window and local notices in one rebuild. */
-  set(entries: readonly TranscriptEntry[], notices: readonly TranscriptBlock[]): void {
-    this.entries = entries
-    this.extra = notices
-    this.rebuild()
-  }
-
-  /** Replace the event window and rebuilt rows. */
-  setEntries(entries: readonly TranscriptEntry[]): void {
-    this.entries = entries
-    this.rebuild()
-  }
-
-  /** Add local-only notices after the durable transcript. */
-  setNotices(notices: readonly TranscriptBlock[]): void {
-    this.extra = notices
-    this.rebuild()
-  }
-
-  /** Remove every rendered row, including local notices. */
-  clear(): void {
-    this.entries = []
-    this.extra = []
-    this.revealPending = false
-    this.options.revealProgress?.clear()
-    this.options.toolMemory?.settled.clear()
-    this.options.toolMemory?.pruned.clear()
-    this.options.toolMemory?.prunedSeqs.clear()
-    this.options.toolMemory?.callBySeq.clear()
-    this.cached.clear()
-    this.container.clear()
-  }
-
-  private rebuild(): void {
-    const reduction = reduceTranscriptWindow(this.entries, this.options)
-    this.retained = reduction.retainedFrom
-    this.revealPending = reduction.revealPending
-    const durable = reduction.blocks
-    const anchored = this.extra.filter((notice): notice is TranscriptBlock & { afterSeq: number } => notice.afterSeq !== undefined)
-    const trailing = this.extra.filter(notice => notice.afterSeq === undefined)
-    const blocks: TranscriptBlock[] = []
-    const pending = [...anchored]
-    for (const block of durable) {
-      while (pending.length > 0 && pending[0]!.afterSeq < (block.seq ?? Number.POSITIVE_INFINITY)) {
-        blocks.push(pending.shift()!)
-      }
-      blocks.push(block)
-    }
-    blocks.push(...pending, ...trailing)
-    const next = new Map<string, { readonly block: TranscriptBlock; readonly component: Component }>()
-    let liveChars = 0
-    this.container.clear()
-    for (const [index, block] of blocks.entries()) {
-      if (block.kind === 'assistant' && block.live) liveChars += block.text.length + (block.reasoning?.length ?? 0)
-      if (index > 0) this.container.addChild(new Spacer(1))
-      if (index > 0 && block.kind === 'user') {
-        this.container.addChild(new Rule(this.options.palette.dim))
-        this.container.addChild(new Spacer(1))
-      }
-      const key = blockKey(block)
-      const previous = key === undefined ? undefined : this.cached.get(key)
-      // Streaming rewrites only the trailing live block. Reusing the rest by
-      // identity keeps their parsed Markdown cached even when the window is full
-      // and every block index just shifted by one.
-      const component = previous !== undefined && sameTranscriptBlock(previous.block, block)
-        ? previous.component
-        : this.renderBlock(block)
-      if (key !== undefined) next.set(key, { block, component })
-      this.container.addChild(component)
-    }
-    this.cached = next
-    this.liveChars = liveChars
-  }
-
-  private renderBlock(block: TranscriptBlock) {
-    const palette = this.options.palette
-    const band = (component: Component, background: (text: string) => string): Component => {
-      const box = new Box(1, 0, background)
-      box.addChild(component)
-      return box
-    }
-    switch (block.kind) {
-      case 'user': {
-        const container = new Container()
-        container.addChild(new Text(palette.bold(palette.accent('▌ You')), 0, 0))
-        container.addChild(new Text(block.text, 0, 0))
-        return band(container, palette.userBand)
-      }
-      case 'assistant': {
-        const container = new Container()
-        const label = palette.bold(palette.accent('◆ assistant'))
-          + (block.live === true ? '  ' + palette.warning('streaming') : '')
-        container.addChild(new Text(label, 0, 0))
-        const mode = this.options.thinkingDisplay ?? 'detailed'
-        if (block.starting === true) {
-          if (mode === 'compact') {
-            container.addChild(new Spacer(1))
-            container.addChild(new Text(palette.dim('thinking · …'), 0, 0))
-          }
-          else if (mode !== 'hidden') {
-            const reasoning = new Container()
-            reasoning.addChild(new Text(palette.dim('thinking …'), 0, 0))
-            container.addChild(new Spacer(1))
-            container.addChild(band(reasoning, palette.thinkingBand))
-          }
-        }
-        else if (block.reasoning !== undefined && block.reasoning.trim() !== '') {
-          if (mode === 'compact') {
-            const firstLine = block.reasoning.split('\n').map(line => line.trim()).find(line => line !== '') ?? ''
-            container.addChild(new Spacer(1))
-            container.addChild(new Text(palette.dim('thinking · ' + clipGraphemes(firstLine, 240)), 0, 0))
-          }
-          else if (mode !== 'hidden') {
-            const reasoning = new Container()
-            reasoning.addChild(new Text(palette.dim('thinking'), 0, 0))
-            reasoning.addChild(new Text(palette.dim(clipGraphemes(block.reasoning, REASONING_PREVIEW)), 0, 0))
-            container.addChild(new Spacer(1))
-            container.addChild(band(reasoning, palette.thinkingBand))
-          }
-        }
-        if (block.text.trim() !== '' && block.revealing !== true) {
-          container.addChild(new Spacer(1))
-          container.addChild(new Markdown(block.text, 0, 0, this.options.markdown))
-        }
-        return container
-      }
-      case 'context': {
-        const container = new Container()
-        container.addChild(new Text(palette.dim('◇ context · ' + block.label), 0, 0))
-        container.addChild(new BarText(clip(block.text), '│ ', palette.dim, palette.dim))
-        return container
-      }
-      case 'tool': {
-        const status = block.pending ? palette.warning('running') : block.isError === true ? palette.error('error') : palette.success('done')
-        if (isCodeExecutionTool(block.name) && (this.options.runCodeDisplay ?? 'detailed') === 'compact') {
-          const preview = compactCodeExecutionPreview(block)
-          return new Text(palette.bold(palette.accent('⚙ ' + block.name)) + '  ' + status
-            + (preview === '' ? '' : '  ·  ' + palette.dim(preview)), 0, 0)
-        }
-        const container = new Container()
-        container.addChild(new Text(palette.bold(palette.accent('⚙ ' + block.name)) + '  ' + status, 0, 0))
-        if (block.args.trim() !== '') {
-          container.addChild(new Text(palette.dim('├ args'), 0, 0))
-          container.addChild(new BarText(formatToolArguments(block.args), '│ ', palette.dim, palette.dim))
-        }
-        if (block.result !== undefined && block.result.trim() !== '') {
-          container.addChild(new Text(palette.dim('├ result'), 0, 0))
-          container.addChild(new BarText(
-            clip(block.result),
-            '│ ',
-            block.isError === true ? palette.error : line => line,
-            block.isError === true ? palette.error : palette.dim,
-          ))
-        }
-        if (block.diffs !== undefined) {
-          const lines = [palette.dim('├ diff')]
-          for (const diff of block.diffs) {
-            lines.push(palette.bold(palette.accent('│ diff ' + diff.path)))
-            for (const row of diffLines(diff.oldText, diff.newText, 60)) {
-              lines.push(row.kind === 'add'
-                ? palette.success('│ + ' + row.text)
-                : row.kind === 'remove' ? palette.error('│ - ' + row.text) : palette.dim('│   ' + row.text))
-            }
-          }
-          container.addChild(new Text(lines.join('\n'), 0, 0))
-        }
-        return band(container, palette.toolBand)
-      }
-      case 'compaction': {
-        const container = new Container()
-        const meta = [
-          block.shadowedItems === undefined ? undefined : String(block.shadowedItems) + ' item(s)',
-          block.shadowedTokens === undefined ? undefined : '~' + String(block.shadowedTokens) + ' tokens',
-        ].filter((value): value is string => value !== undefined)
-        const title = block.state === 'error'
-          ? '✕ Compaction failed'
-          : block.state === 'running' ? '⟳ Compacting context…' : '✓ Context compacted'
-        container.addChild(new Text(palette.bold(palette.accent(title)) + (meta.length === 0 ? '' : '  ' + palette.dim(meta.join(' · '))), 0, 0))
-        if (block.summary !== undefined && block.summary.trim() !== '') {
-          container.addChild(new BarText(clip(block.summary, 800), '│ ', palette.dim, palette.dim))
-        }
-        if (block.error !== undefined) container.addChild(new Text(palette.error(clip(block.error, 600)), 0, 0))
-        return container
-      }
-      case 'waiting': {
-        return new Text(palette.accent('⟳ ') + palette.dim(block.text), 0, 0)
-      }
-      case 'notice': {
-        const text = block.text.replaceAll('\n', '\n  ')
-        if (block.tone === 'error') return new Text(palette.error('✕ ' + text), 0, 0)
-        if (block.tone === 'warning') return new Text(palette.warning('! ' + text), 0, 0)
-        return new Text(palette.dim('i ') + text, 0, 0)
-      }
-    }
+    revealPending: pending,
   }
 }

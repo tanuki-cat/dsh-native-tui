@@ -6,6 +6,10 @@
  * thinking area does not pop in as one block while the rest of the step is
  * still streaming.
  *
+ * The reveal is paced by wall clock, not by frame count: a slow frame skips
+ * ahead instead of stretching the animation, so one block never holds later
+ * rows for longer than {@link REASONING_REVEAL_MAX_MS}.
+ *
  * @module dsh-native-tui/ui/reasoning-reveal
  */
 
@@ -16,12 +20,19 @@ export const REASONING_PREVIEW = 3000
 
 /** Reveal rate for a completed reasoning block, in graphemes per millisecond. */
 const REASONING_REVEAL_GRAPHEMES_PER_MS = 4
-/** Upper bound on one local reasoning reveal, so later rows are not held too long. */
-const REASONING_REVEAL_MAX_MS = 600
-/** Maximum graphemes one render may add, so a delayed frame does not jump. */
-const REASONING_REVEAL_MAX_STEP = 160
+/**
+ * Wall-clock budget for one local reasoning reveal. The reveal rate is raised
+ * when needed so the whole preview finishes inside this budget, and it keeps
+ * finishing on time when frames are slow.
+ */
+export const REASONING_REVEAL_MAX_MS = 600
 /** A durable settlement this recent may still be a live reveal without its live entry. */
 export const REASONING_REVEAL_RECENT_MS = 1_000
+/** Tracked reveal entries retained before the oldest is dropped. */
+const REVEAL_PROGRESS_LIMIT = 64
+/** Completed reasoning texts whose grapheme boundaries stay cached. */
+const GRAPHEME_CACHE_LIMIT = 8
+
 /** Shared grapheme segmenter for reveal cuts and preview clipping. */
 const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
 
@@ -33,36 +44,88 @@ export interface RevealProgress {
   visible: number
 }
 
-function graphemeCount(text: string): number {
+/** Process-local grapheme cache for one reasoning text. */
+interface GraphemeEntry {
+  /** Total graphemes, counted on first use. */
+  count?: number
+  /** Grapheme strings built so far, in order. */
+  readonly segments: string[]
+}
+
+/**
+ * Reasoning texts keyed by value. A single block is reduced and rendered every
+ * stream frame, so segmenting its text once turns that cost into a constant.
+ */
+const graphemeCache = new Map<string, GraphemeEntry>()
+
+function entryFor(text: string): GraphemeEntry {
+  const cached = graphemeCache.get(text)
+  if (cached !== undefined) {
+    // Refresh insertion order so the cache drops the coldest text first.
+    graphemeCache.delete(text)
+    graphemeCache.set(text, cached)
+    return cached
+  }
+  const entry: GraphemeEntry = { segments: [] }
+  graphemeCache.set(text, entry)
+  if (graphemeCache.size > GRAPHEME_CACHE_LIMIT) {
+    const oldest = graphemeCache.keys().next().value
+    if (oldest !== undefined) graphemeCache.delete(oldest)
+  }
+  return entry
+}
+
+function graphemeCount(text: string, entry: GraphemeEntry): number {
+  if (entry.count !== undefined) return entry.count
   let count = 0
   for (const _segment of graphemeSegmenter.segment(text)) count += 1
+  entry.count = count
   return count
 }
 
-function graphemePrefix(text: string, limit: number): string {
+function graphemePrefix(text: string, limit: number, entry: GraphemeEntry): string {
   if (limit <= 0) return ''
-  let prefix = ''
-  let count = 0
-  for (const segment of graphemeSegmenter.segment(text)) {
-    if (count >= limit) break
-    prefix += segment.segment
-    count += 1
+  const segments = entry.segments
+  if (segments.length < limit) {
+    for (const segment of graphemeSegmenter.segment(text)) {
+      if (segments.length >= limit) break
+      segments.push(segment.segment)
+    }
   }
-  return prefix
+  return segments.length <= limit ? segments.join('') : segments.slice(0, limit).join('')
 }
 
 /** Clip a reasoning preview at a grapheme boundary. */
 export function clipGraphemes(text: string, limit: number): string {
-  const total = graphemeCount(text)
+  const entry = entryFor(text)
+  const total = graphemeCount(text, entry)
   if (total <= limit) return text
-  return graphemePrefix(text, limit) + `\n… [${String(total - limit)} chars omitted]`
+  return graphemePrefix(text, limit, entry) + `\n… [${String(total - limit)} chars omitted]`
 }
 
 /**
- * Reveal one completed reasoning block over frames. A tracked progress starts
- * at the first render and advances by at most {@link REASONING_REVEAL_MAX_STEP}
- * per call; an untracked direct reducer keeps the older elapsed-since-block-end
- * behavior.
+ * Record one tracked reveal, dropping the oldest step once the map is full.
+ * @param map - per-step reveal progress.
+ * @param key - reveal identity, normally `reasoning:<turn>:<step>`.
+ * @param progress - progress to record.
+ */
+export function rememberRevealProgress(
+  map: Map<string, RevealProgress>,
+  key: string,
+  progress: RevealProgress,
+): void {
+  map.set(key, progress)
+  while (map.size > REVEAL_PROGRESS_LIMIT) {
+    const oldest = map.keys().next().value
+    if (oldest === undefined) return
+    map.delete(oldest)
+  }
+}
+
+/**
+ * Reveal one completed reasoning block over frames. The visible length follows
+ * elapsed wall clock, so a slow frame catches up instead of stretching the
+ * reveal; a tracked progress never moves backwards.
  * @param text - completed reasoning text.
  * @param now - current wall clock.
  * @param progress - tracked reveal state, or undefined for a direct reducer.
@@ -76,7 +139,8 @@ export function revealCompletedReasoning(
   fallbackStart?: number,
 ): { readonly text: string; readonly pending: boolean } {
   if (text === '') return { text: '', pending: false }
-  const total = graphemeCount(text)
+  const entry = entryFor(text)
+  const total = graphemeCount(text, entry)
   const displayTotal = Math.min(total, REASONING_PREVIEW)
   const rate = Math.max(REASONING_REVEAL_GRAPHEMES_PER_MS, displayTotal / REASONING_REVEAL_MAX_MS)
   const start = progress?.start ?? fallbackStart ?? now
@@ -84,10 +148,10 @@ export function revealCompletedReasoning(
   const target = Math.min(displayTotal, Math.max(1, Math.floor(elapsed * rate)))
   const visible = progress === undefined
     ? target
-    : Math.min(displayTotal, Math.max(progress.visible, Math.min(target, progress.visible + REASONING_REVEAL_MAX_STEP)))
+    : Math.min(displayTotal, Math.max(progress.visible, target))
   if (progress !== undefined) progress.visible = visible
   if (visible >= displayTotal) return { text, pending: false }
-  return { text: graphemePrefix(text, visible), pending: true }
+  return { text: graphemePrefix(text, visible, entry), pending: true }
 }
 
 /**
@@ -118,7 +182,7 @@ export function reasoningRevealFrom(stream: readonly AssistantStreamRecord[] | u
  * @param text - full reasoning text from the message content.
  * @param from - block-end timestamp, or undefined when deltas already streamed.
  * @param now - current wall clock.
- * @param showReasoning - false when the thinking display is hidden.
+ * @param reveal - false when the thinking display does not show the full block.
  * @param progress - tracked live reveal, when one exists.
  * @param tracked - true when the caller supplies a reveal-progress map.
  * @returns the visible prefix and whether more remains.
@@ -127,11 +191,11 @@ export function revealDurableReasoning(
   text: string,
   from: number | undefined,
   now: number,
-  showReasoning: boolean,
+  reveal: boolean,
   progress: RevealProgress | undefined,
   tracked: boolean,
 ): { readonly text: string; readonly pending: boolean } {
-  if (!showReasoning || text.trim() === '') return { text, pending: false }
+  if (!reveal || text.trim() === '') return { text, pending: false }
   if (from === undefined) return { text, pending: false }
   if (tracked) {
     if (progress === undefined) return { text, pending: false }

@@ -2,7 +2,9 @@
  * Real-Host check for a long API wait followed by one large reasoning block.
  *
  * Verifies the thinking placeholder, no whole-block pop-in, the wait row, and
- * that the answer appears only after the local reveal completes.
+ * that the thinking text is revealed progressively. The answer may appear
+ * while the reveal is still running: it is real streamed content and the
+ * transcript no longer hides it behind the animation.
  *
  * Setup:
  *   pnpm build
@@ -154,15 +156,16 @@ const tick = setInterval(() => {
     phase = 'prompt'
     try { child.stdin.write('slow start probe\r') } catch {}
   }
-  else if (phase !== 'done') {
+  else {
     if (startAt === undefined && text.includes(startMark)) {
       startAt = Date.now() - started
+      // The frame that first shows the start marker must not already show the
+      // marker 200 characters in, or the block was painted in one piece.
       firstChunkHadMiddle = text.includes(middleMark)
-      phase = 'streaming'
     }
     if (middleAt === undefined && text.includes(middleMark)) middleAt = Date.now() - started
-    if (answerAt === undefined && text.includes('SLOW ANSWER DONE')) {
-      answerAt = Date.now() - started
+    if (answerAt === undefined && text.includes('SLOW ANSWER DONE')) answerAt = Date.now() - started
+    if (phase !== 'done' && middleAt !== undefined && answerAt !== undefined) {
       phase = 'done'
       setTimeout(() => { try { child.stdin.write('\x04') } catch {} }, 500)
     }
@@ -173,14 +176,17 @@ child.on('exit', (code, signal) => {
   clearInterval(tick)
   clearTimeout(hard)
   const text = strip(out)
-  const streamed = startAt !== undefined && middleAt !== undefined
-  const ordered = middleAt !== undefined && answerAt !== undefined && answerAt >= middleAt
+  // Progressive reveal: the start marker appears before the marker 200
+  // characters further in, and the first frame that shows the start marker is
+  // not already a whole block.
+  const streamed = startAt !== undefined && middleAt !== undefined && middleAt >= startAt
+  const answered = answerAt !== undefined
   const placeholderOrdered = placeholderAt !== undefined
     && (startAt === undefined || placeholderAt <= startAt)
   const waitingOrdered = waitingAt !== undefined
     && (startAt === undefined || waitingAt <= startAt)
   const pass = placeholderOrdered && waitingOrdered
-    && startAt !== undefined && !firstChunkHadMiddle && streamed && ordered
+    && startAt !== undefined && !firstChunkHadMiddle && streamed && answered
   console.log('EXIT', code, signal, 'phase', phase)
   console.log('placeholderAt', placeholderAt, 'waitingAt', waitingAt)
   console.log('startAt', startAt, 'middleAt', middleAt, 'answerAt', answerAt, 'firstChunkHadMiddle', firstChunkHadMiddle)

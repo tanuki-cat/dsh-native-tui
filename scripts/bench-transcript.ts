@@ -17,7 +17,8 @@
  * the reuse window by block identity moved those to 0.6 ms and 2.0 ms.
  */
 import { createPalette, markdownTheme } from '../src/ui/theme.js'
-import { reduceTranscriptWindow, TranscriptRenderer, type TranscriptEntry } from '../src/ui/transcript.js'
+import { reduceTranscriptWindow, type TranscriptEntry } from '../src/ui/transcript.js'
+import { TranscriptRenderer } from '../src/ui/transcript-renderer.js'
 
 const palette = createPalette('dark')
 const options = { showReasoning: true, maxEntries: 2000, palette, markdown: markdownTheme(palette) } as never

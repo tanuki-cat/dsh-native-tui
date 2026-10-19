@@ -4,7 +4,9 @@ import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import { Rule } from '../src/ui/rule.js'
 import { createPalette, markdownTheme } from '../src/ui/theme.js'
-import { contentText, liveChunkHasOutput, nextStreamInterval, reduceTranscript, reduceTranscriptWindow, sameTranscriptBlock, STREAM_MIN_INTERVAL_MS, TranscriptRenderer, type TranscriptBlock, type TranscriptEntry } from '../src/ui/transcript.js'
+import { contentText, liveChunkHasOutput, nextStreamInterval, reduceTranscript, reduceTranscriptWindow, STREAM_MIN_INTERVAL_MS, type TranscriptBlock, type TranscriptEntry } from '../src/ui/transcript.js'
+import { REASONING_REVEAL_MAX_MS } from '../src/ui/reasoning-reveal.js'
+import { sameTranscriptBlock, TranscriptRenderer } from '../src/ui/transcript-renderer.js'
 import { formatToolArguments } from '../src/ui/tool-preview.js'
 import { WAIT_ROW_DELAY_MS, waitingText, waitingVisible } from '../src/ui/waiting.js'
 
@@ -200,12 +202,92 @@ describe('reduceTranscript', () => {
     expect(nextBlock?.kind).toBe('assistant')
     if (nextBlock?.kind !== 'assistant') throw new Error('expected an assistant block')
     expect(nextBlock.reasoning).toHaveLength(132)
+  })
 
-    const stalled = reduceTranscriptWindow(entries, tracked, 1_400)
-    const stalledBlock = stalled.blocks[0]
-    expect(stalledBlock?.kind).toBe('assistant')
-    if (stalledBlock?.kind !== 'assistant') throw new Error('expected an assistant block')
-    expect(stalledBlock.reasoning).toHaveLength(292)
+  it('catches up instead of stretching a reveal when a frame is late', () => {
+    const reasoning = 'x'.repeat(400)
+    const entries: TranscriptEntry[] = [
+      liveChunk(1, 1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: reasoning } }, 1_000),
+    ]
+    const revealProgress = new Map()
+    const tracked = { ...options, revealProgress }
+
+    reduceTranscriptWindow(entries, tracked, 1_000)
+    // The next frame arrives 100ms later: the reveal advances 100ms worth of
+    // text rather than one capped step, so a dropped frame costs no animation time.
+    const late = reduceTranscriptWindow(entries, tracked, 1_100)
+    const lateBlock = late.blocks[0]
+    expect(lateBlock?.kind).toBe('assistant')
+    if (lateBlock?.kind !== 'assistant') throw new Error('expected an assistant block')
+    expect((lateBlock.reasoning ?? '').length).toBeGreaterThan(160)
+    expect(revealProgress.size).toBe(1)
+  })
+
+  it('finishes every reveal inside the wall-clock budget even on slow frames', () => {
+    const reasoning = 'x'.repeat(3_000)
+    const entries: TranscriptEntry[] = [
+      liveChunk(1, 1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: reasoning } }, 1_000),
+    ]
+    const revealProgress = new Map()
+    const tracked = { ...options, revealProgress }
+    // A terminal repainting at 10fps must not turn the 600ms budget into 1.9s.
+    let now = 1_000
+    let pending = true
+    while (pending && now - 1_000 <= REASONING_REVEAL_MAX_MS + 100) {
+      pending = reduceTranscriptWindow(entries, tracked, now).revealPending
+      now += 100
+    }
+    expect(pending).toBe(false)
+    expect(now - 1_000).toBeLessThanOrEqual(REASONING_REVEAL_MAX_MS + 100)
+  })
+
+  it('drops a settled step reveal clock so a retry starts from one grapheme', () => {
+    const first = 'a'.repeat(400)
+    const retry = 'b'.repeat(400)
+    const entries: TranscriptEntry[] = [
+      liveChunk(1, 1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: first } }, 1_000),
+    ]
+    const revealProgress = new Map()
+    const tracked = { ...options, revealProgress }
+    for (let now = 1_000; now <= 1_700; now += 33) reduceTranscriptWindow(entries, tracked, now)
+    expect(revealProgress.size).toBe(1)
+
+    const settled: TranscriptEntry[] = [
+      ...entries,
+      durable('assistant/attempt', { turn: 1, step: 1, stream: [] }, 2),
+      liveChunk(3, 1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: retry } }, 1_700),
+    ]
+    const retried = reduceTranscriptWindow(settled, tracked, 1_700)
+    const retriedBlock = retried.blocks.at(-1)
+    expect(retriedBlock?.kind).toBe('assistant')
+    if (retriedBlock?.kind !== 'assistant') throw new Error('expected an assistant block')
+    // The retried attempt reveals from the start instead of inheriting the
+    // first attempt's completed count.
+    expect(retriedBlock.reasoning).toHaveLength(1)
+    expect(retried.revealPending).toBe(true)
+  })
+
+  it('does not reveal or hold in the compact thinking display', () => {
+    const reasoning = 'x'.repeat(400)
+    const entries: TranscriptEntry[] = [
+      liveChunk(1, 1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: reasoning } }, 1_000),
+      durable('tool/call', { turn: 1, step: 1, callId: 'call-1', name: 'run_code', arguments: '{}' }, 2),
+    ]
+    const compact = { ...options, thinkingDisplay: 'compact' as const }
+    // Compact renders one line, so there is no reveal to finish. The tool card
+    // still waits out the settle grace so it does not share a frame with the
+    // freshly settled assistant row.
+    const settled = reduceTranscriptWindow(entries, compact, 1_010)
+    expect(settled.blocks.map(block => block.kind)).toEqual(['assistant'])
+    expect(settled.revealPending).toBe(true)
+
+    const reduction = reduceTranscriptWindow(entries, compact, 1_200)
+    expect(reduction.revealPending).toBe(false)
+    expect(reduction.blocks.map(block => block.kind)).toEqual(['assistant', 'tool'])
+    const block = reduction.blocks[0]
+    expect(block?.kind).toBe('assistant')
+    if (block?.kind !== 'assistant') throw new Error('expected an assistant block')
+    expect(block.reasoning).toBe(reasoning)
   })
 
   it('reveals whole grapheme clusters', () => {
@@ -275,6 +357,42 @@ describe('reduceTranscript', () => {
     const partial = reduceTranscriptWindow(entries, options, 1_050)
     expect(partial.blocks.map(block => block.kind)).toEqual(['assistant', 'user', 'tool'])
     expect(partial.revealPending).toBe(true)
+  })
+
+  it('keeps a tool row off the frame that settles streamed reasoning', () => {
+    // The delta path has no local reveal, so without a settle grace the last
+    // thinking delta and the tool call that follows it within a few ms land on
+    // one paint: the card looks like it appeared the instant thinking ended.
+    const entries: TranscriptEntry[] = [
+      liveChunk(1, 1, 1, { type: 'reasoning-delta', index: 0, text: 'thought' }, 1_000),
+      liveChunk(2, 1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: 'thought' } }, 1_002),
+      durable('tool/call', { turn: 1, step: 1, callId: 'call-1', name: 'run_code', arguments: '{}' }, 3),
+    ]
+    const settled = reduceTranscriptWindow(entries, options, 1_005)
+    expect(settled.blocks.map(block => block.kind)).toEqual(['assistant'])
+    expect(settled.revealPending).toBe(true)
+
+    const nextPaint = reduceTranscriptWindow(entries, options, 1_250)
+    expect(nextPaint.blocks.map(block => block.kind)).toEqual(['assistant', 'tool'])
+    expect(nextPaint.revealPending).toBe(false)
+  })
+
+  it('holds a tool row behind the reveal but still shows a following failure', () => {
+    const reasoning = 'x'.repeat(400)
+    const entries: TranscriptEntry[] = [
+      liveChunk(1, 1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: reasoning } }, 1_000),
+      durable('tool/call', { turn: 1, step: 1, callId: 'call-1', name: 'run_code', arguments: '{}' }, 2),
+      durable('turn/end', { reason: { kind: 'max-tokens' } }, 3),
+    ]
+    const partial = reduceTranscriptWindow(entries, options, 1_050)
+    // The tool card preceded the failure, so it stays hidden until the reveal
+    // ends; the warning itself is shown rather than hidden behind the animation.
+    expect(partial.blocks.map(block => block.kind)).toEqual(['assistant', 'notice'])
+    expect(partial.blocks[1]).toMatchObject({ tone: 'warning' })
+    expect(partial.revealPending).toBe(true)
+
+    const full = reduceTranscriptWindow(entries, options, 1_200)
+    expect(full.blocks.map(block => block.kind)).toEqual(['assistant', 'tool', 'notice'])
   })
 
   it('keeps informational notices behind the reveal', () => {
@@ -725,9 +843,9 @@ describe('TranscriptRenderer', () => {
     expect(compactThinking).toContain('long code body')
   })
 
-  it('keeps the answer hidden while reasoning is revealing', () => {
+  it('streams the answer while its reasoning is still revealing', () => {
     const renderer = new TranscriptRenderer({ ...options, thinkingDisplay: 'detailed' })
-    const reasoning = 'x'.repeat(100)
+    const reasoning = 'x'.repeat(400)
     const entries: TranscriptEntry[] = [
       liveChunk(1, 1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: reasoning } }, 1_000),
       liveChunk(2, 1, 1, { type: 'text-delta', index: 1, text: 'final answer' }, 1_001),
@@ -737,7 +855,9 @@ describe('TranscriptRenderer', () => {
     renderer.set(entries, [])
     const partial = renderer.container.render(80).join('\n')
     expect(partial).toContain('thinking')
-    expect(partial).not.toContain('final answer')
+    // The answer is real streamed content, so it appears on its own schedule;
+    // only the tool rows behind the reveal wait for it.
+    expect(partial).toContain('final answer')
 
     vi.setSystemTime(1_200)
     renderer.set(entries, [])
