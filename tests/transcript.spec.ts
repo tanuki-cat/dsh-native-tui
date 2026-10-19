@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { Spacer } from '@earendil-works/pi-tui'
+import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import { Rule } from '../src/ui/rule.js'
 import { createPalette, markdownTheme } from '../src/ui/theme.js'
-import { contentText, formatToolArguments, nextStreamInterval, reduceTranscript, reduceTranscriptWindow, sameTranscriptBlock, STREAM_MIN_INTERVAL_MS, TranscriptRenderer, WAIT_ROW_DELAY_MS, waitingText, waitingVisible, type TranscriptBlock, type TranscriptEntry } from '../src/ui/transcript.js'
+import { contentText, formatToolArguments, liveChunkHasOutput, nextStreamInterval, reduceTranscript, reduceTranscriptWindow, sameTranscriptBlock, STREAM_MIN_INTERVAL_MS, TranscriptRenderer, WAIT_ROW_DELAY_MS, waitingText, waitingVisible, type TranscriptBlock, type TranscriptEntry } from '../src/ui/transcript.js'
 
 const palette = createPalette('plain')
 const options = {
@@ -17,10 +18,10 @@ function durable(type: string, data: unknown, seq = 0): TranscriptEntry {
   return { type: 'event', event: { type, seq, time: 0, data } as unknown as SessionEvent }
 }
 
-function liveChunk(seq: number, turn: number, step: number, chunk: unknown): TranscriptEntry {
+function liveChunk(seq: number, turn: number, step: number, chunk: unknown, time = 0): TranscriptEntry {
   return {
     type: 'live',
-    event: { type: 'assistant/live-chunk', seq, time: 0, data: { attemptId: 'a', turn, step, chunk } } as never,
+    event: { type: 'assistant/live-chunk', seq, time, data: { attemptId: 'a', turn, step, chunk } } as never,
   }
 }
 
@@ -58,6 +59,140 @@ describe('reduceTranscript', () => {
     const blocks = reduceTranscript(entries, options)
     expect(blocks).toHaveLength(1)
     expect(blocks[0]).toMatchObject({ kind: 'assistant', text: 'Hello', live: true })
+  })
+
+  it('reveals a completed reasoning block that arrived without deltas', () => {
+    const reasoning = 'x'.repeat(400)
+    const entries: TranscriptEntry[] = [
+      liveChunk(1, 1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: reasoning } }, 1_000),
+    ]
+    const partial = reduceTranscriptWindow(entries, options, 1_050)
+    const partialBlock = partial.blocks[0]
+    expect(partialBlock?.kind).toBe('assistant')
+    if (partialBlock?.kind !== 'assistant') throw new Error('expected an assistant block')
+    expect(partialBlock.reasoning).toHaveLength(200)
+    expect(partial.revealPending).toBe(true)
+
+    const full = reduceTranscriptWindow(entries, options, 1_200)
+    const fullBlock = full.blocks[0]
+    expect(fullBlock?.kind).toBe('assistant')
+    if (fullBlock?.kind !== 'assistant') throw new Error('expected an assistant block')
+    expect(fullBlock.reasoning).toBe(reasoning)
+    expect(full.revealPending).toBe(false)
+  })
+
+  it('keeps streamed reasoning complete when the terminal block arrives', () => {
+    const entries: TranscriptEntry[] = [
+      liveChunk(1, 1, 1, { type: 'reasoning-delta', index: 0, text: 'reasoned ' }, 1_000),
+      liveChunk(2, 1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: 'reasoned fully' } }, 1_001),
+    ]
+    const reduction = reduceTranscriptWindow(entries, options, 1_001)
+    const block = reduction.blocks[0]
+    expect(block?.kind).toBe('assistant')
+    if (block?.kind !== 'assistant') throw new Error('expected an assistant block')
+    expect(block.reasoning).toBe('reasoned fully')
+    expect(reduction.revealPending).toBe(false)
+  })
+
+  it('adopts a completed text block when no text delta arrived', () => {
+    const entries: TranscriptEntry[] = [
+      liveChunk(1, 1, 1, { type: 'block-end', index: 0, block: { type: 'text', text: 'complete answer' } }, 1_000),
+    ]
+    const blocks = reduceTranscript(entries, options, 1_001)
+    expect(blocks[0]).toMatchObject({ kind: 'assistant', text: 'complete answer', live: true })
+  })
+
+  it('continues revealing a durable reasoning block that has no deltas', () => {
+    const reasoning = 'x'.repeat(400)
+    const entries: TranscriptEntry[] = [
+      durable('assistant/message', {
+        turn: 1,
+        step: 1,
+        message: { content: [{ type: 'reasoning', text: reasoning }, { type: 'text', text: 'answer' }] },
+        stream: [
+          { type: 'chunk', time: 1_000, chunk: { type: 'block-end', index: 0, block: { type: 'reasoning', text: reasoning } } },
+          { type: 'chunk', time: 1_100, chunk: { type: 'usage', usage: { outputTokens: 10 } } },
+        ],
+      }, 2),
+    ]
+    const partial = reduceTranscriptWindow(entries, options, 1_050)
+    const partialBlock = partial.blocks.at(-1)
+    expect(partialBlock?.kind).toBe('assistant')
+    if (partialBlock?.kind !== 'assistant') throw new Error('expected an assistant block')
+    expect(partialBlock.reasoning).toHaveLength(200)
+    expect(partial.revealPending).toBe(true)
+
+    const full = reduceTranscriptWindow(entries, options, 1_200)
+    const fullBlock = full.blocks.at(-1)
+    expect(fullBlock?.kind).toBe('assistant')
+    if (fullBlock?.kind !== 'assistant') throw new Error('expected an assistant block')
+    expect(fullBlock.reasoning).toBe(reasoning)
+    expect(full.revealPending).toBe(false)
+  })
+
+  it('does not re-reveal a durable block that streamed reasoning deltas', () => {
+    const reasoning = 'x'.repeat(400)
+    const entries: TranscriptEntry[] = [
+      durable('assistant/message', {
+        turn: 1,
+        step: 1,
+        message: { content: [{ type: 'reasoning', text: reasoning }] },
+        stream: [
+          { type: 'reasoning-chunks', time0: 1_000, index: 0, dt: [], texts: [reasoning] },
+          { type: 'chunk', time: 1_001, chunk: { type: 'block-end', index: 0, block: { type: 'reasoning', text: reasoning } } },
+        ],
+      }, 2),
+    ]
+    const reduction = reduceTranscriptWindow(entries, options, 1_001)
+    const block = reduction.blocks.at(-1)
+    expect(block?.kind).toBe('assistant')
+    if (block?.kind !== 'assistant') throw new Error('expected an assistant block')
+    expect(block.reasoning).toBe(reasoning)
+    expect(reduction.revealPending).toBe(false)
+  })
+
+  it('holds the next row until a revealing reasoning block completes', () => {
+    const reasoning = 'x'.repeat(400)
+    const entries: TranscriptEntry[] = [
+      liveChunk(1, 1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: reasoning } }, 1_000),
+      durable('tool/call', { turn: 1, step: 1, callId: 'call-1', name: 'run_code', arguments: '{}' }, 2),
+    ]
+    const partial = reduceTranscriptWindow(entries, options, 1_050)
+    expect(partial.revealPending).toBe(true)
+    expect(partial.blocks).toHaveLength(1)
+    expect(partial.blocks[0]).toMatchObject({ kind: 'assistant', live: true, revealing: true })
+
+    const full = reduceTranscriptWindow(entries, options, 1_200)
+    expect(full.revealPending).toBe(false)
+    expect(full.blocks.map(block => block.kind)).toEqual(['assistant', 'tool'])
+    expect(full.blocks[1]).toMatchObject({ kind: 'tool', name: 'run_code' })
+  })
+
+  it('shows a new user message instead of holding it behind the reveal', () => {
+    const reasoning = 'x'.repeat(400)
+    const entries: TranscriptEntry[] = [
+      liveChunk(1, 1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: reasoning } }, 1_000),
+      durable('user/message', { content: [{ type: 'text', text: 'next' }], source: { kind: 'user' } }, 2),
+      durable('tool/call', { turn: 1, step: 1, callId: 'call-1', name: 'run_code', arguments: '{}' }, 3),
+    ]
+    const partial = reduceTranscriptWindow(entries, options, 1_050)
+    expect(partial.blocks.map(block => block.kind)).toEqual(['assistant', 'user', 'tool'])
+    expect(partial.revealPending).toBe(true)
+  })
+
+  it('stops revealing once the durable assistant message settles the step', () => {
+    const reasoning = 'x'.repeat(400)
+    const entries: TranscriptEntry[] = [
+      liveChunk(1, 1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: reasoning } }, 1_000),
+      durable('assistant/message', {
+        turn: 1,
+        step: 1,
+        message: { content: [{ type: 'reasoning', text: reasoning }, { type: 'text', text: 'answer' }] },
+      }, 2),
+    ]
+    const reduction = reduceTranscriptWindow(entries, options, 1_050)
+    expect(reduction.revealPending).toBe(false)
+    expect(reduction.blocks.at(-1)).toMatchObject({ kind: 'assistant', live: false, text: 'answer', reasoning })
   })
 
   it('hides live rows once the durable assistant message settles the step', () => {
@@ -435,6 +570,32 @@ describe('waitingVisible', () => {
   it('shows a scheduled retry immediately', () => {
     // The reader already sat through the failed attempt, so the replay is news.
     expect(waitingVisible(0, { retry: 1, maxRetries: 5, code: 'TRANSPORT' }, 1)).toBe(true)
+  })
+})
+
+describe('liveChunkHasOutput', () => {
+  it('keeps the wait row for marker-only chunks', () => {
+    expect(liveChunkHasOutput({ type: 'block-start', index: 0, blockType: 'reasoning' })).toBe(false)
+    expect(liveChunkHasOutput({ type: 'text-delta', index: 0, text: '   ' })).toBe(false)
+    expect(liveChunkHasOutput({ type: 'tool-call-delta', index: 0, id: ToolCallId('c1'), argumentsDelta: '' })).toBe(false)
+    expect(liveChunkHasOutput({ type: 'tool-call-delta', index: 0, id: ToolCallId('c1'), name: 'run', argumentsDelta: '{}' })).toBe(false)
+    expect(liveChunkHasOutput({
+      type: 'block-end',
+      index: 0,
+      block: { type: 'tool-call', id: ToolCallId('c1'), name: 'run', arguments: '{}' },
+    })).toBe(false)
+  })
+
+  it('clears the wait row once visible output exists', () => {
+    expect(liveChunkHasOutput({ type: 'reasoning-delta', index: 0, text: 'thinking' })).toBe(true)
+    expect(liveChunkHasOutput({ type: 'text-delta', index: 0, text: 'answer' })).toBe(true)
+    expect(liveChunkHasOutput({ type: 'block-end', index: 0, block: { type: 'reasoning', text: 'thought' } })).toBe(true)
+  })
+
+  it('ignores reasoning while the thinking display is hidden', () => {
+    expect(liveChunkHasOutput({ type: 'reasoning-delta', index: 0, text: 'thinking' }, false)).toBe(false)
+    expect(liveChunkHasOutput({ type: 'block-end', index: 0, block: { type: 'reasoning', text: 'thought' } }, false)).toBe(false)
+    expect(liveChunkHasOutput({ type: 'text-delta', index: 0, text: 'answer' }, false)).toBe(true)
   })
 })
 

@@ -31,6 +31,15 @@ import { asFileDiffs, diffLines, type FileDiff } from './diff.js'
 const TOOL_PREVIEW = 1200
 /** Maximum characters retained in one reasoning preview. */
 const REASONING_PREVIEW = 3000
+/**
+ * Reveal rate for a completed reasoning block that arrived without deltas.
+ * Responses-compatible gateways can send the whole reasoning item in the
+ * terminal `block-end`; revealing it over frames keeps the thinking area from
+ * popping in as one block while the rest of the step is still streaming.
+ */
+const REASONING_REVEAL_CHARS_PER_MS = 4
+/** Upper bound on one local reasoning reveal, so later rows are not held too long. */
+const REASONING_REVEAL_MAX_MS = 600
 /** Streaming frame interval bounds, in milliseconds. */
 export const STREAM_MIN_INTERVAL_MS = 33
 const STREAM_MAX_INTERVAL_MS = 100
@@ -66,7 +75,12 @@ function isCodeExecutionTool(name: string): boolean {
 export type TranscriptBlock = ({
   readonly kind: 'user'; readonly text: string
 } | {
-  readonly kind: 'assistant'; readonly text: string; readonly reasoning?: string; readonly live: boolean
+  readonly kind: 'assistant'
+  readonly text: string
+  readonly reasoning?: string
+  readonly live: boolean
+  /** True while this block's completed reasoning is still being revealed. */
+  readonly revealing?: boolean
 } | {
   readonly kind: 'context'; readonly label: string; readonly text: string
 } | {
@@ -151,6 +165,58 @@ function attemptContent(stream: readonly AssistantStreamRecord[] | undefined): r
     // A malformed settlement must not take the whole transcript down.
     return []
   }
+}
+
+/**
+ * Start time of a completed reasoning block in one durable compact stream.
+ * A stream with reasoning-chunks was already rendered as deltas, so it keeps
+ * the plain full-text path. This is the same Responses-gateway case the live
+ * reveal handles, continued after the durable settlement replaces the live row.
+ * @param stream - compact records from an assistant settlement.
+ * @returns the block-end timestamp to reveal from, or undefined.
+ */
+/** Visible character count for a completed block, capped at a bounded duration. */
+function revealedCharacters(total: number, elapsed: number): number {
+  if (total <= 0) return 0
+  const rate = Math.max(REASONING_REVEAL_CHARS_PER_MS, total / REASONING_REVEAL_MAX_MS)
+  return Math.min(total, Math.max(1, Math.floor(Math.max(0, elapsed) * rate)))
+}
+
+function reasoningRevealFrom(stream: readonly AssistantStreamRecord[] | undefined): number | undefined {
+  if (!Array.isArray(stream)) return undefined
+  let sawDeltas = false
+  let completedAt: number | undefined
+  for (const record of stream) {
+    if (record.type === 'reasoning-chunks') sawDeltas = true
+    else if (record.type === 'chunk'
+      && record.chunk.type === 'block-end'
+      && record.chunk.block.type === 'reasoning'
+      && completedAt === undefined) {
+      completedAt = record.time
+    }
+  }
+  return sawDeltas ? undefined : completedAt
+}
+
+/**
+ * Reveal a completed reasoning block carried by a durable settlement.
+ * @param text - full reasoning text from the message content.
+ * @param stream - compact settlement stream carrying the block-end timestamp.
+ * @param now - current wall clock.
+ * @param showReasoning - false when the thinking display is hidden.
+ * @returns the visible prefix and whether more remains.
+ */
+function revealDurableReasoning(
+  text: string,
+  stream: readonly AssistantStreamRecord[] | undefined,
+  now: number,
+  showReasoning: boolean,
+): { readonly text: string; readonly pending: boolean } {
+  if (!showReasoning || text.trim() === '') return { text, pending: false }
+  const from = reasoningRevealFrom(stream)
+  if (from === undefined) return { text, pending: false }
+  const visible = revealedCharacters(text.length, now - from)
+  return { text: text.slice(0, visible), pending: visible < text.length }
 }
 
 /** Clip one line-oriented preview without changing its content. */
@@ -274,6 +340,30 @@ export function waitingText(since: number, retry: WaitRetry | undefined, now: nu
   return 'waiting for API response · ' + String(seconds) + 's' + suffix
 }
 
+/**
+ * Whether one transient chunk proves the model started producing content the
+ * live transcript can show. A bare block-start must not hide the wait row
+ * before any content exists; tool calls and images are shown by their durable
+ * events, which clear the row themselves.
+ * @param chunk - one live assistant stream chunk.
+ * @param showReasoning - false when the thinking display is hidden.
+ * @returns true for a non-empty text/reasoning delta or block.
+ */
+export function liveChunkHasOutput(chunk: StreamChunk, showReasoning = true): boolean {
+  switch (chunk.type) {
+    case 'text-delta':
+      return chunk.text.trim() !== ''
+    case 'reasoning-delta':
+      return showReasoning && chunk.text.trim() !== ''
+    case 'block-end':
+      if (chunk.block.type === 'text') return chunk.block.text.trim() !== ''
+      if (chunk.block.type === 'reasoning') return showReasoning && chunk.block.text.trim() !== ''
+      return false
+    default:
+      return false
+  }
+}
+
 /** One reduction plus the entry prefix no retained block still needs. */
 export interface TranscriptReduction {
   /** Rendered transcript blocks, oldest first. */
@@ -284,6 +374,8 @@ export interface TranscriptReduction {
    * caller may discard them and re-reduce a bounded window next time.
    */
   readonly retainedFrom: number
+  /** True while a completed reasoning block is still being revealed. */
+  readonly revealPending: boolean
 }
 
 /**
@@ -291,29 +383,34 @@ export interface TranscriptReduction {
  * independent from pi-tui so it can be unit-tested without a terminal.
  * @param entries - contiguous durable and transient event window.
  * @param options - display limits and palette.
+ * @param now - wall clock for revealing a completed reasoning block; defaults to now.
  * @returns rendered transcript blocks, oldest first.
  */
 export function reduceTranscript(
   entries: readonly TranscriptEntry[],
   options: TranscriptOptions,
+  now = Date.now(),
 ): TranscriptBlock[] {
-  return reduceTranscriptWindow(entries, options).blocks
+  return reduceTranscriptWindow(entries, options, now).blocks
 }
 
 /**
  * Fold {@link reduceTranscript}'s window and report how much of it survives.
  * @param entries - contiguous durable and transient event window.
  * @param options - display limits and palette.
+ * @param now - wall clock for revealing a completed reasoning block; defaults to now.
  * @returns the rendered blocks and the oldest entry a retained block needs.
  */
 export function reduceTranscriptWindow(
   entries: readonly TranscriptEntry[],
   options: TranscriptOptions,
+  now = Date.now(),
 ): TranscriptReduction {
   const blocks: TranscriptBlock[] = []
   /** Entry index that created each block, parallel to `blocks`; every event appends at most one. */
   const sources: number[] = []
-  const liveByStep = new Map<string, { index: number; text: string; reasoning: string }>()
+  const liveByStep = new Map<string, { index: number; text: string; reasoning: string; revealing: boolean }>()
+  let durableRevealPending = false
   const finalizedSteps = new Set<string>()
   const toolByCall = new Map<string, number>()
   const hiddenCodeExecutionCalls = new Set<string>()
@@ -337,17 +434,39 @@ export function reduceTranscriptWindow(
     if (live === undefined) {
       const index = blocks.length
       blocks.push({ kind: 'assistant', text: '', reasoning: '', live: true })
-      live = { index, text: '', reasoning: '' }
+      live = { index, text: '', reasoning: '', revealing: false }
       liveByStep.set(key, live)
     }
     const chunk: StreamChunk = event.data.chunk
     if (chunk.type === 'text-delta') live.text += chunk.text
-    else if (chunk.type === 'reasoning-delta' && showReasoning) live.reasoning += chunk.text
+    else if (chunk.type === 'reasoning-delta' && showReasoning) {
+      live.reasoning += chunk.text
+    }
+    else if (chunk.type === 'block-end') {
+      if (chunk.block.type === 'text' && chunk.block.text.length >= live.text.length) {
+        live.text = chunk.block.text
+      }
+      else if (chunk.block.type === 'reasoning' && showReasoning && chunk.block.text.trim() !== '') {
+        const completed = chunk.block.text
+        if (live.reasoning === '') {
+          // Some Responses-compatible gateways send no reasoning deltas, only the
+          // terminal block. Reveal that block over frames instead of popping it in.
+          const visible = revealedCharacters(completed.length, now - event.time)
+          live.reasoning = completed.slice(0, visible)
+          live.revealing = visible < completed.length
+        }
+        else {
+          if (completed.length >= live.reasoning.length) live.reasoning = completed
+          live.revealing = false
+        }
+      }
+    }
     blocks[live.index] = {
       kind: 'assistant',
       text: live.text,
       ...(live.reasoning === '' ? {} : { reasoning: live.reasoning }),
       live: true,
+      ...(live.revealing ? { revealing: true } : {}),
     }
   }
 
@@ -439,16 +558,20 @@ export function reduceTranscriptWindow(
         finalizedSteps.add(key)
         const live = liveByStep.get(key)
         if (live !== undefined) {
+          live.revealing = false
           blocks[live.index] = { kind: 'assistant', text: '', live: true }
         }
         const text = contentText(event.data.message.content)
-        const reasoning = showReasoning ? contentReasoning(event.data.message.content) : ''
-        if (text.trim() !== '' || reasoning.trim() !== '') {
+        const fullReasoning = showReasoning ? contentReasoning(event.data.message.content) : ''
+        const reveal = revealDurableReasoning(fullReasoning, event.data.stream, now, showReasoning)
+        if (reveal.pending) durableRevealPending = true
+        if (text.trim() !== '' || fullReasoning.trim() !== '') {
           blocks.push({
             kind: 'assistant',
             text,
-            ...(reasoning === '' ? {} : { reasoning }),
+            ...(reveal.text === '' ? {} : { reasoning: reveal.text }),
             live: false,
+            ...(reveal.pending ? { revealing: true } : {}),
             seq,
           })
         }
@@ -460,18 +583,22 @@ export function reduceTranscriptWindow(
         if (live !== undefined) {
           // Settle the transient rows and drop the accumulator so a retry of the
           // same step streams into a fresh block instead of being suppressed.
+          live.revealing = false
           blocks[live.index] = { kind: 'assistant', text: '', live: true }
           liveByStep.delete(key)
         }
         const content = attemptContent(event.data.stream)
         const text = contentText(content)
-        const reasoning = showReasoning ? contentReasoning(content) : ''
-        if (text.trim() !== '' || reasoning.trim() !== '') {
+        const fullReasoning = showReasoning ? contentReasoning(content) : ''
+        const reveal = revealDurableReasoning(fullReasoning, event.data.stream, now, showReasoning)
+        if (reveal.pending) durableRevealPending = true
+        if (text.trim() !== '' || fullReasoning.trim() !== '') {
           blocks.push({
             kind: 'assistant',
             text,
-            ...(reasoning === '' ? {} : { reasoning }),
+            ...(reveal.text === '' ? {} : { reasoning: reveal.text }),
             live: false,
+            ...(reveal.pending ? { revealing: true } : {}),
             seq,
           })
         }
@@ -562,16 +689,28 @@ export function reduceTranscriptWindow(
   }
 
   while (sources.length < blocks.length) sources.push(entries.length - 1)
+  const revealPending = durableRevealPending || [...liveByStep.values()].some(live => live.revealing)
   const visible: TranscriptBlock[] = []
   const visibleSources: number[] = []
+  let holdAfterReveal = false
+  // A new user turn or an urgent notice outranks the local reveal: showing it
+  // immediately preserves event order and avoids hiding fresh input.
+  const revealIndex = blocks.findIndex(block => block.kind === 'assistant' && block.revealing === true)
+  const boundaryAfterReveal = revealIndex !== -1
+    && blocks.slice(revealIndex + 1).some(block => block.kind === 'user' || block.kind === 'notice')
   for (let index = 0; index < blocks.length; index += 1) {
+    // Do not let the next tool card or step overtake a thinking block that is
+    // still revealing locally. The held entries stay in the window and appear
+    // on the frame that completes the reveal.
+    if (holdAfterReveal && !boundaryAfterReveal) continue
     const block = blocks[index]!
     if (block.kind === 'assistant' && block.text === '' && (block.reasoning ?? '') === '') continue
     visible.push(block)
     visibleSources.push(sources[index] ?? 0)
+    if (block.kind === 'assistant' && block.revealing === true) holdAfterReveal = true
   }
   if (visible.length <= options.maxEntries) {
-    return { blocks: visible, retainedFrom: visibleSources[0] ?? 0 }
+    return { blocks: visible, retainedFrom: visibleSources[0] ?? 0, revealPending }
   }
   const start = visible.length - options.maxEntries
   const hidden = visible.length - options.maxEntries
@@ -581,6 +720,7 @@ export function reduceTranscriptWindow(
       ...visible.slice(start),
     ],
     retainedFrom: visibleSources[start] ?? 0,
+    revealPending,
   }
 }
 
@@ -642,6 +782,7 @@ export class TranscriptRenderer {
   private cached = new Map<string, { readonly block: TranscriptBlock; readonly component: Component }>()
   private retained = 0
   private liveChars = 0
+  private revealPending = false
   private options: TranscriptOptions
 
   /**
@@ -655,6 +796,11 @@ export class TranscriptRenderer {
   /** Characters in the trailing live assistant block; its re-render dominates a stream frame. */
   get liveContentLength(): number {
     return this.liveChars
+  }
+
+  /** True while a completed reasoning block is still being revealed across frames. */
+  get liveRevealPending(): boolean {
+    return this.revealPending
   }
 
   /**
@@ -704,6 +850,7 @@ export class TranscriptRenderer {
   clear(): void {
     this.entries = []
     this.extra = []
+    this.revealPending = false
     this.cached.clear()
     this.container.clear()
   }
@@ -711,6 +858,7 @@ export class TranscriptRenderer {
   private rebuild(): void {
     const reduction = reduceTranscriptWindow(this.entries, this.options)
     this.retained = reduction.retainedFrom
+    this.revealPending = reduction.revealPending
     const durable = reduction.blocks
     const anchored = this.extra.filter((notice): notice is TranscriptBlock & { afterSeq: number } => notice.afterSeq !== undefined)
     const trailing = this.extra.filter(notice => notice.afterSeq === undefined)

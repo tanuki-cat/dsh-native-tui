@@ -92,7 +92,7 @@ export function subscribeSessionEvents(host: SessionEventsHost): () => void {
         code: typeof data.failure?.code === 'string' ? data.failure.code : 'ERROR',
       })
     }
-    if (event.type === 'turn/end') host.endWait()
+    if (event.type === 'turn/end' || event.type === 'assistant/message' || event.type === 'tool/call') host.endWait()
     host.scheduleTranscript()
     host.renderStatus()
   }))

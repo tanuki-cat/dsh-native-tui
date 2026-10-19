@@ -80,6 +80,21 @@ describe('session event wait reporting', () => {
     expect(seen.entries).toHaveLength(1)
   })
 
+  it('clears the wait when a message or tool call settles the request', () => {
+    const { emit, seen } = harness()
+    emit('session/event', { id: 's1' }, {
+      type: 'assistant/message',
+      seq: 8,
+      data: { turn: 1, step: 1, message: { content: [] } },
+    })
+    emit('session/event', { id: 's1' }, {
+      type: 'tool/call',
+      seq: 9,
+      data: { turn: 1, step: 1, callId: 'c1', name: 'run', arguments: '{}' },
+    })
+    expect(seen.ends).toBe(2)
+  })
+
   it('reports a presented deliverable as a notice', () => {
     const { emit, seen } = harness()
     emit('session/event', { id: 's1' }, {

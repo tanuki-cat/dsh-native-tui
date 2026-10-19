@@ -7,6 +7,7 @@ import {
   formatCacheHitPercent,
   formatSessionMetrics,
   formatTokenCount,
+  formatTokensPerSecond,
   contextWindowTokens,
   projectedContextTokens,
 } from '../src/runtime/metrics.js'
@@ -78,6 +79,31 @@ describe('session metrics', () => {
     expect(formatSessionMetrics(metrics)).toContain('1.5K tok')
     expect(formatSessionMetrics(metrics)).toContain('cache 89%')
     expect(formatTokenCount(478_000_000)).toBe('478M')
+  })
+
+  it('derives decode throughput from events without the sessionStats projection', () => {
+    const event = {
+      type: 'assistant/message',
+      seq: 1,
+      time: 3_000,
+      data: {
+        turn: 1,
+        step: 1,
+        message: { content: [{ type: 'text', text: 'done' }] },
+        usage: { inputTokens: 0, outputTokens: 100, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        stream: [{ type: 'text-chunks', time0: 1_000, index: 0, dt: [], texts: ['done'], lastTime: 2_500 }],
+      },
+    } as unknown as SessionEvent
+    const metrics = collectSessionMetrics([event])
+    expect(metrics.tokensPerSecond).toBeCloseTo(50)
+  })
+
+  it('formats decode throughput like the Web stats pill', () => {
+    expect(formatTokensPerSecond(2.44)).toBe('2.4')
+    expect(formatTokensPerSecond(9.96)).toBe('10')
+    expect(formatTokensPerSecond(10.4)).toBe('10')
+    expect(formatTokensPerSecond(1134.4)).toBe('1134')
+    expect(formatTokensPerSecond(0)).toBe('0')
   })
 
   it('counts an interrupted attempt the way the token meter does', () => {

@@ -30,7 +30,7 @@ import type { AgentDefaultModelService, LLM, SessionProjectionsService, SkillsCa
 import { openTuiSettings, showHostSettings } from './commands/settings.js'
 import { errorMessage } from './commands/shared.js'
 import { subscribeSessionEvents } from './session-events.js'
-import { nextStreamInterval, STREAM_MIN_INTERVAL_MS, STREAM_MS_PER_CHAR, TranscriptRenderer, WAIT_ROW_DELAY_MS, waitingText, waitingVisible, type TranscriptBlock, type TranscriptEntry, type WaitRetry } from './transcript.js'
+import { liveChunkHasOutput, nextStreamInterval, STREAM_MIN_INTERVAL_MS, STREAM_MS_PER_CHAR, TranscriptRenderer, WAIT_ROW_DELAY_MS, waitingText, waitingVisible, type TranscriptBlock, type TranscriptEntry, type WaitRetry } from './transcript.js'
 import { Rule } from './rule.js'
 
 
@@ -73,6 +73,7 @@ export async function startTerminalApp(
     palette,
     markdown,
   })
+  let thinkingDisplayMode = config.thinkingDisplay
 
   if (tui instanceof TuiAltScreen) {
     const footer = new VStack([
@@ -201,6 +202,12 @@ export async function startTerminalApp(
     if (renderer.retainedFrom > 0) entries = entries.slice(renderer.retainedFrom)
     const frameMs = performance.now() - started + renderer.liveContentLength * STREAM_MS_PER_CHAR
     transcriptInterval = nextStreamInterval(transcriptInterval, frameMs)
+    // A completed reasoning block can arrive without deltas. Keep repainting at
+    // the streaming floor until its local reveal finishes.
+    if (renderer.liveRevealPending) {
+      transcriptInterval = STREAM_MIN_INTERVAL_MS
+      scheduleTranscript()
+    }
     tui.requestRender()
   }
 
@@ -302,8 +309,10 @@ export async function startTerminalApp(
       host,
       sessionId: () => active.id,
       appendEntry: entry => {
-        // A streamed chunk proves the request is alive, so the wait row is done.
-        if (entry.type === 'live' && waitSince !== undefined) clearWait()
+        // A bare block-start creates an empty live row; keep the wait row until
+        // the chunk produces something the reader can actually see.
+        if (entry.type === 'live' && waitSince !== undefined
+          && liveChunkHasOutput(entry.event.data.chunk, thinkingDisplayMode !== 'hidden')) clearWait()
         entries.push(entry)
       },
       replaceEntries: update => { entries = update(entries) },
@@ -564,6 +573,7 @@ export async function startTerminalApp(
   return {
     setDisplayModes: (thinkingDisplay, runCodeDisplay) => {
       if (disposed) return
+      thinkingDisplayMode = thinkingDisplay
       renderer.setDisplayModes(thinkingDisplay, runCodeDisplay)
       tui.requestRender()
     },

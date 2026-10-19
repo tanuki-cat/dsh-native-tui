@@ -1,4 +1,4 @@
-import { lastAssistantStreamChunk, type AssistantStreamRecord } from '@deepseek-ai/dsh-llm'
+import { assistantStreamFirstTokenTime, lastAssistantStreamChunk, type AssistantStreamRecord } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 
 /**
@@ -281,6 +281,9 @@ export function collectSessionMetrics(
    */
   let settled: { readonly turn: unknown; readonly step: unknown; readonly buckets: UsageBuckets } | undefined
   let latestPromptTokens = 0
+  /** Event-log decode totals when the sessionStats projection is not mounted. */
+  let fallbackDecodeMs = 0
+  let fallbackDecodeTokens = 0
   for (const event of events) {
     if (stats === undefined && event.type === 'turn/start') turns += 1
     if (stats === undefined && event.type === 'step/end') steps += 1
@@ -298,6 +301,16 @@ export function collectSessionMetrics(
     }
     const usage = usageOf(event)
     if (usage === undefined) continue
+    if (stats === undefined && event.type === 'assistant/message') {
+      const first = Array.isArray(event.data.stream)
+        ? assistantStreamFirstTokenTime(event.data.stream)
+        : undefined
+      const output = usage.outputTokens
+      if (first !== undefined && typeof output === 'number' && Number.isFinite(output) && output >= 0) {
+        fallbackDecodeMs += Math.max(0, event.time - first)
+        fallbackDecodeTokens += output
+      }
+    }
     const next: UsageBuckets = {
       input: usageNumber(usage, 'inputTokens'),
       output: usageNumber(usage, 'outputTokens'),
@@ -328,8 +341,10 @@ export function collectSessionMetrics(
   // total never enters the figure.
   const totalTokens = promptTokens + buckets.output
   const cacheHit = formatCacheHitPercent(buckets.cacheRead, promptTokens)
-  const tokensPerSecond = stats !== undefined && stats.decodeMs > 0 && stats.decodeTokens > 0
-    ? stats.decodeTokens / (stats.decodeMs / 1000)
+  const decodeMs = stats?.decodeMs ?? fallbackDecodeMs
+  const decodeTokens = stats?.decodeTokens ?? fallbackDecodeTokens
+  const tokensPerSecond = decodeMs > 0 && decodeTokens > 0
+    ? decodeTokens / (decodeMs / 1000)
     : undefined
   // The compactor prices the surface the meter estimates, so a mounted meter
   // owns the figure — including its silence before the first provider sample.
@@ -386,12 +401,23 @@ function formatContext(metrics: SessionMetrics): string {
     + formatTokenCount(estimate) + ' / ' + formatTokenCount(window) + trigger + ')'
 }
 
+/**
+ * Format the session's decode throughput the way the Web stats pill does:
+ * whole numbers from ten up, one decimal below.
+ * @param tps - tokens per second.
+ * @returns the number without its unit.
+ */
+export function formatTokensPerSecond(tps: number): string {
+  const clamped = Math.max(0, tps)
+  return clamped >= 10 ? String(Math.round(clamped)) : String(Math.round(clamped * 10) / 10)
+}
+
 /** Render the compact metrics segment for the status bar. */
 export function formatSessionMetrics(metrics: SessionMetrics): string {
   return [
     String(metrics.turns) + ' turns',
     String(metrics.steps) + ' steps',
-    metrics.tokensPerSecond === undefined ? '— tok/s' : Math.round(metrics.tokensPerSecond) + ' tok/s',
+    metrics.tokensPerSecond === undefined ? '— tok/s' : formatTokensPerSecond(metrics.tokensPerSecond) + ' tok/s',
     formatTokenCount(metrics.totalTokens) + ' tok',
     'cache ' + (metrics.cacheHit === undefined ? '—' : metrics.cacheHit + '%'),
     formatContext(metrics),
