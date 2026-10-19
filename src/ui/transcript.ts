@@ -535,6 +535,7 @@ export function reduceTranscriptWindow(
       case 'tool/call': {
         const callId = event.data.callId
         const seenSeq = callIdBySeq.get(seq) === callId
+        const knownCall = seenSeq ? false : [...callIdBySeq.values()].some(value => value === callId)
         callIdBySeq.set(seq, callId)
         if (prunedSeqs.has(seq) || prunedCalls.has(callId)) {
           prunedCalls.add(callId)
@@ -544,7 +545,7 @@ export function reduceTranscriptWindow(
         // result mapping of the card that already exists. A normal rebuild sees
         // its original seq, so persistent settlement must not suppress it.
         if (toolByCall.has(callId) || hiddenCodeExecutionCalls.has(callId)) break
-        if (!seenSeq && settledCalls.has(callId)) break
+        if (!seenSeq && (settledCalls.has(callId) || knownCall)) break
         if (runCodeDisplay === 'hidden' && isCodeExecutionTool(event.data.name)) {
           hiddenCodeExecutionCalls.add(callId)
           break

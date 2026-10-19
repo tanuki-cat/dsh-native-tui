@@ -382,6 +382,25 @@ describe('reduceTranscript', () => {
     expect(second.blocks[0]).toMatchObject({ kind: 'tool', callId: 'call-1', result: 'first output' })
   })
 
+  it('ignores a duplicate pending tool call across a sliced window', () => {
+    const toolMemory = {
+      settled: new Set<string>(),
+      pruned: new Set<string>(),
+      prunedSeqs: new Set<number>(),
+      callBySeq: new Map<number, string>(),
+    }
+    const tracked = { ...options, toolMemory }
+    const first = reduceTranscriptWindow([
+      durable('tool/call', { turn: 1, step: 1, callId: 'call-1', name: 'run_code', arguments: '{}' }, 1),
+    ], tracked, 1_000)
+    expect(first.blocks).toHaveLength(1)
+
+    const late = reduceTranscriptWindow([
+      durable('tool/call', { turn: 1, step: 1, callId: 'call-1', name: 'run_code', arguments: '{}' }, 2),
+    ], tracked, 1_000)
+    expect(late.blocks).toHaveLength(0)
+  })
+
   it('keeps prune memory after the original entries leave the window', () => {
     const toolMemory = {
       settled: new Set<string>(),
