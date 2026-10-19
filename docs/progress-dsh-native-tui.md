@@ -62,10 +62,10 @@ pnpm check
   tsc -p tsconfig.build.json
 
 Test Files  33 passed (33)
-Tests      275 passed (275)
+Tests      278 passed (278)
 ```
 
-> 2026-10-19 复核：测试规模从最初的 17/86 增长到 33/275，覆盖 transcript 渲染、session 事件接线、provider 默认值、CodeBuddy 流与重试策略；本轮新增 context meter 投影用例与 `tests/router.spec.ts`。
+> 2026-10-19 复核：测试规模从最初的 17/86 增长到 33/278，覆盖 transcript 渲染、session 事件接线、provider 默认值、CodeBuddy 流与重试策略；本轮新增 context meter 投影用例与 `tests/router.spec.ts`。
 
 ### 安装与启动
 
@@ -109,7 +109,7 @@ src/index.ts                 Cordis 入口、TTY 守卫
 src/config.ts                schemastery 配置、fullscreen
 src/runtime/                 agent/session、attachments、bundle、html、images、open、providers、settings、tool-log
 src/ui/                      app（wiring）、commands/（每命令族一模块 + router.ts 分发器）、autocomplete、dialogs、transcript、diff、theme
-tests/                       33 个测试文件，275 个测试
+tests/                       33 个测试文件，278 个测试
 scripts/fake-tty-*.mjs       fake-TTY 验证脚本
 README.md
 docs/design-task-feature-dsh-native-tui-host-native.md
@@ -197,7 +197,7 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 
 ## 9. 剩余事项（2026-10-17 审查记录）
 
-当前代码与 275 个测试通过（33 个测试文件）；以下按优先级保留，不再混入已完成项。
+当前代码与 278 个测试通过（33 个测试文件）；以下按优先级保留，不再混入已完成项。
 
 ### P1
 

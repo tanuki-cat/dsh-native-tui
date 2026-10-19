@@ -156,10 +156,11 @@ function asUsage(value: unknown): Record<string, unknown> | undefined {
 }
 
 /**
- * Provider usage one durable settlement reports. Mirrors the token meter's
- * fold: a message's own `usage` first, then the last streamed chunk, because an
- * interrupted attempt is billed through its stream and would otherwise be
- * dropped from both the total and the cache share.
+ * Provider usage one durable settlement reports. Mirrors `usageOf` in
+ * `@deepseek-ai/dsh-token-meter` (`usage-projection.js`): a message's own
+ * `usage` first, then the last streamed chunk, because an interrupted attempt is
+ * billed through its stream and would otherwise be dropped from both the total
+ * and the cache share.
  * @param event - one durable Session event.
  * @returns the usage record, or undefined when this event reports none.
  */
@@ -215,9 +216,11 @@ function displayPercentUnits(units: number, decimalPlaces: number): string {
  *
  * A partial hit is never rounded up to 100: when ordinary precision would claim
  * a complete hit, the figure carries just enough extra precision to stay below
- * the true share (99.8, 99.99, …). This is the Web pill's own formatter, kept
- * here so both surfaces print one number; callers that need arithmetic use the
- * raw counters instead.
+ * the true share (99.8, 99.99, …). Ported verbatim from `formatCacheHitPercent`
+ * with its `roundedPercentUnits`/`displayPercentUnits` helpers in
+ * `@deepseek-ai/dsh-client-ui-chat` (the Web stats pill) so both surfaces print
+ * one number; keep the two in step when either moves. Callers that need
+ * arithmetic use the raw counters instead.
  * @param cacheReadTokens - prompt tokens served from cache.
  * @param promptTokens - prompt-side tokens the session billed.
  * @param decimalPlaces - ordinary ratio precision; 0 everywhere the pill is drawn.
@@ -352,9 +355,9 @@ export function collectSessionMetrics(
 }
 
 /**
- * Compact token count used in the status bar, matching the Web chat's pill:
- * one decimal below 100 units, whole numbers from there up, and no unit above
- * millions (a billion tokens reads as 1200M).
+ * Compact token count used in the status bar, matching `formatTokens` in
+ * `@deepseek-ai/dsh-client-ui-chat`: one decimal below 100 units, whole numbers
+ * from there up, and no unit above millions (a billion tokens reads as 1200M).
  */
 export function formatTokenCount(value: number): string {
   const scaled = (candidate: number): string => candidate >= 100

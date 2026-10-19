@@ -480,102 +480,100 @@ export async function startTerminalApp(
     skills: loadSkills,
   })
 
-    const handleSubmit = (text: string): void => {
-        const trimmed = text.trim();
-        if (trimmed === '' && pendingAttachments.length === 0)
-            return;
-        editor.setText('');
-        if (trimmed === 'exit' || trimmed === 'quit') {
-            requestExit(0);
-            return;
-        }
-        if (trimmed.startsWith('/')) {
-            void runCommand(trimmed);
-            return;
-        }
-        sendPrompt(trimmed);
-    };
-    const requestExit = (code: number): void => {
-        if (exiting || disposed)
-            return;
-        exiting = true;
-        void dispose().then(() => { onExit(code); }, () => { onExit(code); });
-    };
-    const onSignal = () => {
-        void dispose().finally(() => { process.exit(143); });
-    };
-    const dispose = async () => {
-        if (disposed)
-            return;
-        disposed = true;
-        interactionAbort.abort(new Error('native-tui: terminal disposed'));
-        disposeModelSelection?.();
-        disposeModelSelection = undefined;
-        disposeInteractions();
-        clearSubscriptions();
-        process.off('SIGTERM', onSignal);
-        process.off('SIGHUP', onSignal);
-        try {
-            tui.stop();
-        }
-        catch {
-            // The terminal may already be gone; restoration is best-effort here.
-        }
-        if (!reportedSession) {
-            reportedSession = true;
-            try {
-                process.stdout.write('\nSession: ' + active.id + '\nResume: dsh --profile tui --resume ' + active.id + '\n');
-            }
-            catch {
-                // A closed stdout must not turn a normal exit into a failure.
-            }
-        }
-        await active.dispose();
-    };
-    editor.onSubmit = handleSubmit;
-    tui.addInputListener((data) => {
-        const shortcut = globalShortcut(data, active.agent.status === 'running');
-        if (shortcut === undefined)
-            return undefined;
-        if (shortcut === 'cancel-turn') {
-            if (tui.hasOverlay())
-                return undefined;
-            active.agent.cancel({ kind: 'user' });
-            return { consume: true };
-        }
-        requestExit(0);
-        return { consume: true };
-    });
-    process.once('SIGTERM', onSignal);
-    process.once('SIGHUP', onSignal);
+  const handleSubmit = (text: string): void => {
+    const trimmed = text.trim()
+    if (trimmed === '' && pendingAttachments.length === 0) return
+    editor.setText('')
+    if (trimmed === 'exit' || trimmed === 'quit') {
+      requestExit(0)
+      return
+    }
+    if (trimmed.startsWith('/')) {
+      void runCommand(trimmed)
+      return
+    }
+    sendPrompt(trimmed)
+  }
+
+  const requestExit = (code: number): void => {
+    if (exiting || disposed) return
+    exiting = true
+    void dispose().then(() => { onExit(code) }, () => { onExit(code) })
+  }
+
+  const onSignal = (): void => {
+    void dispose().finally(() => { process.exit(143) })
+  }
+
+  const dispose = async (): Promise<void> => {
+    if (disposed) return
+    disposed = true
+    interactionAbort.abort(new Error('native-tui: terminal disposed'))
+    disposeModelSelection?.()
+    disposeModelSelection = undefined
+    disposeInteractions()
+    clearSubscriptions()
+    process.off('SIGTERM', onSignal)
+    process.off('SIGHUP', onSignal)
     try {
-        registerInteractions();
-        subscribeActive();
-        tui.start();
-        tui.setFocus(editor);
-        tui.requestRender();
-        void refreshContextWindow();
+      tui.stop()
     }
-    catch (error) {
-        process.off('SIGTERM', onSignal);
-        process.off('SIGHUP', onSignal);
-        await dispose();
-        throw error;
+    catch {
+      // The terminal may already be gone; restoration is best-effort here.
     }
-    return {
-        setDisplayModes: (thinkingDisplay, runCodeDisplay) => {
-            if (disposed) return;
-            renderer.setDisplayModes(thinkingDisplay, runCodeDisplay);
-            tui.requestRender();
-        },
-        setMaxEntries: (maxEntries) => {
-            if (disposed) return;
-            renderer.setMaxEntries(maxEntries);
-            tui.requestRender();
-        },
-        dispose: async () => {
-            await dispose();
-        },
-    };
+    if (!reportedSession) {
+      reportedSession = true
+      try {
+        process.stdout.write('\nSession: ' + active.id + '\nResume: dsh --profile tui --resume ' + active.id + '\n')
+      }
+      catch {
+        // A closed stdout must not turn a normal exit into a failure.
+      }
+    }
+    await active.dispose()
+  }
+
+  editor.onSubmit = handleSubmit
+  tui.addInputListener(data => {
+    const shortcut = globalShortcut(data, active.agent.status === 'running')
+    if (shortcut === undefined) return undefined
+    if (shortcut === 'cancel-turn') {
+      if (tui.hasOverlay()) return undefined
+      active.agent.cancel({ kind: 'user' })
+      return { consume: true }
+    }
+    requestExit(0)
+    return { consume: true }
+  })
+  process.once('SIGTERM', onSignal)
+  process.once('SIGHUP', onSignal)
+  try {
+    registerInteractions()
+    subscribeActive()
+    tui.start()
+    tui.setFocus(editor)
+    tui.requestRender()
+    void refreshContextWindow()
+  }
+  catch (error) {
+    process.off('SIGTERM', onSignal)
+    process.off('SIGHUP', onSignal)
+    await dispose()
+    throw error
+  }
+  return {
+    setDisplayModes: (thinkingDisplay, runCodeDisplay) => {
+      if (disposed) return
+      renderer.setDisplayModes(thinkingDisplay, runCodeDisplay)
+      tui.requestRender()
+    },
+    setMaxEntries: maxEntries => {
+      if (disposed) return
+      renderer.setMaxEntries(maxEntries)
+      tui.requestRender()
+    },
+    dispose: async () => {
+      await dispose()
+    },
+  }
 }
-//# sourceMappingURL=app.js.map

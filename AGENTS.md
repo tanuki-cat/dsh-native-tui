@@ -23,13 +23,13 @@
 
 ## Coding Style & Naming Conventions
 
-TypeScript ESM (NodeNext): relative imports end in `.js`, type-only imports use `type`. Two-space indent, single quotes, no semicolons (legacy exception: `src/ui/app.ts`). `strict` and `noUncheckedIndexedAccess` are enabled. Files are `kebab-case.ts`; types `PascalCase`; functions and variables `camelCase`. No linter or formatter is configured — match the surrounding file and keep diffs minimal.
+TypeScript ESM (NodeNext): relative imports end in `.js`, type-only imports use `type`. Two-space indent, single quotes, no semicolons. `strict` and `noUncheckedIndexedAccess` are enabled. Files are `kebab-case.ts`; types `PascalCase`; functions and variables `camelCase`. No linter or formatter is configured — match the surrounding file and keep diffs minimal.
 
 **A source file must not exceed 1000 lines.** When a file grows past that, split it by responsibility rather than adding another branch to it: the command handlers live in `src/ui/commands/`, the host-facing helpers in `src/runtime/`. A split moves code and injects its collaborators; it does not change behavior.
 
 ## Testing Guidelines
 
-Vitest with `environment: 'node'`, specs at `tests/<module>.spec.ts`. Command handlers under `src/ui/commands/` and the dispatcher are testable directly against a stub `CommandContext` (see `tests/commands.spec.ts`, `tests/router.spec.ts`); the terminal wiring in `app.ts` is covered by the fake-TTY probes instead. Add focused unit tests for behavior changes and keep `pnpm check` green (currently 33 files / 275 tests). For Host or TUI integration, add or run a `scripts/fake-tty-*.mjs` probe and report its real output.
+Vitest with `environment: 'node'`, specs at `tests/<module>.spec.ts`. Command handlers under `src/ui/commands/` and the dispatcher are testable directly against a stub `CommandContext` (see `tests/commands.spec.ts`, `tests/router.spec.ts`); the terminal wiring in `app.ts` is covered by the fake-TTY probes instead. Add focused unit tests for behavior changes and keep `pnpm check` green (currently 33 files / 278 tests). For Host or TUI integration, add or run a `scripts/fake-tty-*.mjs` probe and report its real output.
 
 ## Commit & Pull Request Guidelines
 

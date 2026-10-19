@@ -109,6 +109,38 @@ describe('session metrics', () => {
     expect(collectSessionMetrics([event]).totalTokens).toBe(920)
   })
 
+  it('falls back to a message stream that carries the usage', () => {
+    // A v2 settlement can report usage only inside its compact stream.
+    const event = {
+      type: 'assistant/message',
+      seq: 1,
+      time: 1,
+      data: {
+        turn: 6,
+        step: 1,
+        message: { content: [] },
+        stream: [{ type: 'chunk', time: 1, chunk: { type: 'usage', usage: usageRecord({ input: 10, output: 5, cacheRead: 85, cacheWrite: 0 }) } }],
+      },
+    } as unknown as SessionEvent
+    expect(collectSessionMetrics([event])).toMatchObject({ totalTokens: 100, cacheHit: '89' })
+  })
+
+  it('ignores settlements that carry neither usage nor a stream', () => {
+    const events = [
+      { type: 'assistant/message', seq: 1, time: 1, data: { turn: 7, step: 1, message: { content: [] } } },
+      { type: 'assistant/attempt', seq: 2, time: 2, data: { turn: 7, step: 2 } },
+    ] as unknown as SessionEvent[]
+    expect(collectSessionMetrics(events)).toMatchObject({ totalTokens: 0 })
+    expect(collectSessionMetrics(events).cacheHit).toBeUndefined()
+  })
+
+  it('renders an em dash for the figures a session has not measured yet', () => {
+    const line = formatSessionMetrics(collectSessionMetrics([]))
+    expect(line).toContain('— tok/s')
+    expect(line).toContain('cache —')
+    expect(line).toContain('ctx —')
+  })
+
   it('formats token counts the way the Web pill does', () => {
     expect(formatTokenCount(999)).toBe('999')
     expect(formatTokenCount(1_450)).toBe('1.5K')
