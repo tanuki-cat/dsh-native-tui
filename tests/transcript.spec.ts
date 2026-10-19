@@ -611,6 +611,60 @@ describe('reduceTranscript', () => {
     expect(output).toContain('Tool output pruned')
   })
 
+  it('marks a compaction start left open by a crashed process as interrupted', () => {
+    // A crash between compaction/start and compaction/end leaves the durable
+    // lock held. Resuming appends turn/end{interrupted} and then
+    // session/end-seed (that is the order the Host writes), so the card must
+    // read as interrupted rather than as a summarizer failure or still running.
+    const abandoned: TranscriptEntry[] = [
+      durable('compaction/start', { compactionId: 'c1', turn: 1 }, 1),
+      durable('compaction/prune', { shadowedSeqs: [2], shadowedTokenCount: 10 }, 2),
+    ]
+    const live = reduceTranscript(abandoned, options)
+    expect(live[0]).toMatchObject({ kind: 'compaction', state: 'running' })
+
+    const closedByTurn: TranscriptEntry[] = [
+      ...abandoned,
+      durable('turn/end', { turn: 1, reason: { kind: 'interrupted' } }, 3),
+      durable('session/end-seed', {}, 4),
+    ]
+    const reopened = reduceTranscript(closedByTurn, options)
+    expect(reopened[0]).toMatchObject({ kind: 'compaction', state: 'interrupted' })
+    expect(reopened[0]?.kind === 'compaction' ? reopened[0].error : undefined).toBeUndefined()
+
+    const renderer = new TranscriptRenderer(options)
+    renderer.set(closedByTurn, [])
+    const output = renderer.container.render(80).join('\n')
+    expect(output).toContain('Compaction interrupted')
+    expect(output).not.toContain('Compacting context…')
+    expect(output).not.toContain('Compaction failed')
+
+    // The resume marker alone closes it too: a log whose turn already ended
+    // before the crash still holds the compaction lock until the seed marker.
+    const seedOnly = reduceTranscript([...abandoned, durable('session/end-seed', {}, 5)], options)
+    expect(seedOnly[0]).toMatchObject({ kind: 'compaction', state: 'interrupted' })
+  })
+
+  it('keeps a compaction that later events closed in the error state', () => {
+    // Without the resume marker the log simply continued past the start: that
+    // is a summarizer failure, not a process that died mid-compaction.
+    const entries: TranscriptEntry[] = [
+      durable('compaction/start', { compactionId: 'c1', turn: 1 }, 1),
+      durable('assistant/message', { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'next' }] }, stream: [] }, 2),
+    ]
+    const blocks = reduceTranscript(entries, options)
+    expect(blocks[0]).toMatchObject({ kind: 'compaction', state: 'error', error: 'Compaction did not finish' })
+  })
+
+  it('reports a turn the Host closed during resume', () => {
+    const entries: TranscriptEntry[] = [
+      durable('turn/start', { turn: 1 }, 1),
+      durable('turn/end', { turn: 1, reason: { kind: 'interrupted' } }, 2),
+    ]
+    const blocks = reduceTranscript(entries, options)
+    expect(blocks.at(-1)).toMatchObject({ kind: 'notice', tone: 'warning', text: 'Turn interrupted before it finished' })
+  })
+
   it('supports compact and hidden reasoning/run_code blocks', () => {
     const entries: TranscriptEntry[] = [
       durable('user/message', { content: [{ type: 'text', text: 'calc' }], source: { kind: 'user' } }, 1),

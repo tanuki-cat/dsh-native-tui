@@ -97,7 +97,13 @@ export type TranscriptBlock = ({
 } | {
   readonly kind: 'compaction'
   readonly compactionId: string
-  readonly state: 'running' | 'done' | 'error'
+  /**
+   * `interrupted` is a start with no matching end in a log that was reopened:
+   * the process stopped before the compaction committed, and the resume marker
+   * is what released its durable lock. It is not a summarizer failure, so it
+   * reads differently from `error`.
+   */
+  readonly state: 'running' | 'done' | 'error' | 'interrupted'
   readonly shadowedItems?: number
   readonly shadowedTokens?: number
   readonly summary?: string
@@ -315,12 +321,39 @@ export function reduceTranscriptWindow(
     // local reveal; compact shows one line and must not hold later rows.
     return revealDurableReasoning(text, from, now, showReasoning && thinkingDisplay === 'detailed', progress, options.revealProgress !== undefined)
   }
-  const finishOpenCompactions = (seq: number): void => {
+  /**
+   * Why an open compaction ended at this event, or undefined when it does not
+   * close one.
+   *
+   * A resume writes `turn/end{interrupted}` and then `session/end-seed`: the
+   * turn closer is what releases the compaction lock, so the start it leaves
+   * behind died with the previous process. Reaching any other boundary means
+   * the log kept going and the summarizer itself failed.
+   * @param event - one durable event.
+   * @returns the state to close open compactions with, or undefined.
+   */
+  const compactionCloseState = (event: SessionEvent): 'error' | 'interrupted' | undefined => {
+    const type = (event as unknown as { type: string }).type
+    if (type === 'session/end-seed') return 'interrupted'
+    if (type !== 'assistant/message' && type !== 'turn/end') return undefined
+    const reason = type === 'turn/end'
+      ? (event.data as { readonly reason?: { readonly kind?: unknown } }).reason
+      : undefined
+    return reason?.kind === 'interrupted' ? 'interrupted' : 'error'
+  }
+  /**
+   * Close every compaction still marked running.
+   * @param seq - event that closed them.
+   * @param state - `error` when the log kept going past a start that never
+   *   wrote its end, `interrupted` when the log was reopened instead.
+   */
+  const finishOpenCompactions = (seq: number, state: 'error' | 'interrupted' = 'error'): void => {
     for (const index of compactionByCall.values()) {
       const prior = blocks[index]
-      if (prior?.kind === 'compaction' && prior.state === 'running') {
-        blocks[index] = { ...prior, state: 'error', error: 'Compaction did not finish', seq }
-      }
+      if (prior?.kind !== 'compaction' || prior.state !== 'running') continue
+      blocks[index] = state === 'interrupted'
+        ? { ...prior, state: 'interrupted', seq }
+        : { ...prior, state: 'error', error: 'Compaction did not finish', seq }
     }
   }
 
@@ -480,7 +513,8 @@ export function reduceTranscriptWindow(
       }
       continue
     }
-    if (event.type === 'assistant/message' || event.type === 'turn/end') finishOpenCompactions(seq)
+    const closeState = compactionCloseState(event)
+    if (closeState !== undefined) finishOpenCompactions(seq, closeState)
     switch (event.type) {
       case 'user/message': {
         const source = event.data.source
@@ -659,6 +693,10 @@ export function reduceTranscriptWindow(
           blocks.push({ kind: 'notice', tone: 'warning', text: 'Turn cancelled', seq })
         } else if (reason.kind === 'max-tokens') {
           blocks.push({ kind: 'notice', tone: 'warning', text: 'Turn stopped at the output-token limit', seq })
+        } else if (reason.kind === 'interrupted') {
+          // The Host appends this closer while resuming a log whose turn never
+          // ended. Without a row the transcript would simply stop mid-turn.
+          blocks.push({ kind: 'notice', tone: 'warning', text: 'Turn interrupted before it finished', seq })
         }
         break
       }

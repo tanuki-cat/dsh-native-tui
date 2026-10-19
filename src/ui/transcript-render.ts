@@ -140,10 +140,15 @@ export function renderTranscriptBlock(block: TranscriptBlock, options: Transcrip
       ].filter((value): value is string => value !== undefined)
       const title = block.state === 'error'
         ? '✕ Compaction failed'
-        : block.state === 'running' ? '⟳ Compacting context…' : '✓ Context compacted'
+        : block.state === 'interrupted'
+          ? '⚠ Compaction interrupted'
+          : block.state === 'running' ? '⟳ Compacting context…' : '✓ Context compacted'
       container.addChild(new Text(palette.bold(palette.accent(title)) + (meta.length === 0 ? '' : '  ' + palette.dim(meta.join(' · '))), 0, 0))
       if (block.summary !== undefined && block.summary.trim() !== '') {
         container.addChild(new BarText(clip(block.summary, 800), '│ ', palette.dim, palette.dim))
+      }
+      if (block.state === 'interrupted') {
+        container.addChild(new Text(palette.warning(clip('Stopped before it committed; the session reopened after it.', 600)), 0, 0))
       }
       if (block.error !== undefined) container.addChild(new Text(palette.error(clip(block.error, 600)), 0, 0))
       return container
