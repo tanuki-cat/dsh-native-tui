@@ -8,6 +8,7 @@ import {
   DEFAULT_REASONING_EFFORTS,
   defaultApiKeyEnv,
   defaultMaxOutputTokens,
+  discoveredInputModalities,
   nativeAuthEnv,
   isValidEnvName,
   isValidProviderRoute,
@@ -128,15 +129,19 @@ describe('provider config helpers', () => {
           reasoningEfforts: { high: 'high' },
         },
         { id: 'legacy-model', name: 'Legacy' },
+        // The config schema materializes [] for an absent array, so an
+        // auto-imported model reads back this way instead of undefined.
+        { id: 'empty-model', name: 'Empty', input: [] },
       ],
     }
     const merged = mergeDiscoveredProviderModels(existing, [
       { id: 'old-model', name: 'Old updated', contextWindow: 64000, maxTokens: 8192 },
       { id: 'legacy-model', name: 'Legacy updated', contextWindow: 8000, maxTokens: 1024 },
+      { id: 'empty-model', name: 'Empty updated', contextWindow: 16000, maxTokens: 2048, inputModalities: ['text', 'image'] },
       { id: 'new-model', name: 'New', contextWindow: 16000, maxTokens: 2048, inputModalities: ['text'] },
     ])
     expect(merged.added).toBe(1)
-    expect(merged.updated).toBe(2)
+    expect(merged.updated).toBe(3)
     expect(merged.provider.models).toEqual([
       {
         id: 'old-model',
@@ -147,7 +152,16 @@ describe('provider config helpers', () => {
         reasoningEfforts: { high: 'high' },
       },
       // An existing model keeps the absence of a map: blank means "no reasoning".
-      { id: 'legacy-model', name: 'Legacy updated', contextWindow: 8000, maxTokens: 1024 },
+      // An undisclosed listing persists text-only instead of leaving input unset.
+      { id: 'legacy-model', name: 'Legacy updated', contextWindow: 8000, maxTokens: 1024, input: ['text'] },
+      // An empty input declares nothing, so the discovered modalities fill it in.
+      {
+        id: 'empty-model',
+        name: 'Empty updated',
+        contextWindow: 16000,
+        maxTokens: 2048,
+        input: ['text', 'image'],
+      },
       {
         id: 'new-model',
         name: 'New',
@@ -159,7 +173,19 @@ describe('provider config helpers', () => {
     ])
     // The default is copied per model so callers cannot share one mutable map.
     const mergedModels = merged.provider.models as readonly { readonly reasoningEfforts?: unknown }[]
-    expect(mergedModels[2]?.reasoningEfforts).not.toBe(DEFAULT_REASONING_EFFORTS)
+    expect(mergedModels[3]?.reasoningEfforts).not.toBe(DEFAULT_REASONING_EFFORTS)
+  })
+
+  it('persists the declared input modalities with a text-only fallback', () => {
+    expect(discoveredInputModalities({ inputModalities: ['text', 'image'] })).toEqual(['text', 'image'])
+    expect(discoveredInputModalities({ inputModalities: ['image'] })).toEqual(['image'])
+    // Absent, empty, and unusable declarations all mean "not disclosed".
+    expect(discoveredInputModalities({})).toEqual(['text'])
+    expect(discoveredInputModalities({ inputModalities: [] })).toEqual(['text'])
+    expect(discoveredInputModalities({ inputModalities: ['audio'] })).toEqual(['text'])
+    expect(discoveredInputModalities({ inputModalities: ['audio', 'text', 'text'] })).toEqual(['text'])
+    // Each call returns its own list, so no two model entries share one array.
+    expect(discoveredInputModalities({})).not.toBe(discoveredInputModalities({}))
   })
 
   it('builds an auto-imported discovery model with the default reasoning map', () => {
@@ -189,6 +215,7 @@ describe('provider config helpers', () => {
       name: 'bare-model',
       contextWindow: 128000,
       maxTokens: 32768,
+      input: ['text'],
       reasoningEfforts: { low: 'low', medium: 'medium', high: 'high' },
     })
     expect(buildDiscoveredModelEntry({ id: 'zero-model', contextWindow: 0, maxTokens: -1, inputModalities: [] }))
@@ -197,6 +224,7 @@ describe('provider config helpers', () => {
         name: 'zero-model',
         contextWindow: 128000,
         maxTokens: 32768,
+        input: ['text'],
         reasoningEfforts: { low: 'low', medium: 'medium', high: 'high' },
       })
     // Modalities pi-ai cannot represent are dropped instead of stored as input.
@@ -206,6 +234,7 @@ describe('provider config helpers', () => {
         name: 'odd-model',
         contextWindow: 128000,
         maxTokens: 32768,
+        input: ['text'],
         reasoningEfforts: { low: 'low', medium: 'medium', high: 'high' },
       })
   })

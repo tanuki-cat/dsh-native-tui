@@ -192,6 +192,39 @@ export interface DiscoveredProviderModel {
   readonly inputModalities?: readonly string[]
 }
 
+/**
+ * Input modalities to persist for one discovered model.
+ *
+ * Discovery reports modalities only when the installed catalogue or the
+ * endpoint states them; a custom gateway listing usually discloses capacities
+ * alone. An absent or unusable list therefore means "not disclosed", and the
+ * entry is stored as text-only instead of leaving `input` unset, where it would
+ * silently inherit the route's `defaultInput`.
+ * @param candidate - one model returned by endpoint discovery.
+ * @returns the declared text/image modalities, or `['text']` when none.
+ */
+export function discoveredInputModalities(
+  candidate: Pick<DiscoveredProviderModel, 'inputModalities'>,
+): ProviderInputModality[] {
+  const declared = candidate.inputModalities?.filter(
+    (modality): modality is ProviderInputModality => modality === 'text' || modality === 'image',
+  ) ?? []
+  const unique = [...new Set(declared)]
+  return unique.length > 0 ? unique : ['text']
+}
+
+/**
+ * Modalities an existing model entry already declares. The config schema
+ * materializes `[]` for an absent array, and pi-ai treats both forms as "no
+ * answer", so neither may shadow a discovered declaration.
+ * @param value - the entry's `input` field.
+ * @returns the usable modalities, possibly empty.
+ */
+function declaredInputModalities(value: unknown): ProviderInputModality[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((modality): modality is ProviderInputModality => modality === 'text' || modality === 'image')
+}
+
 /** Result of refreshing one existing provider route from its model listing. */
 export interface MergedDiscoveredModels {
   readonly provider: Record<string, unknown>
@@ -201,9 +234,11 @@ export interface MergedDiscoveredModels {
 
 /**
  * Upsert every endpoint-discovered model into an existing route profile.
- * Existing model settings (reasoning maps, custom input) survive a refresh;
- * discovered capacities and names replace stale metadata. A newly added model
- * that declares no map gets {@link DEFAULT_REASONING_EFFORTS}.
+ * Existing model settings (reasoning maps, an explicit input list) survive a
+ * refresh; discovered capacities and names replace stale metadata. An entry
+ * whose `input` is absent or empty declares nothing, so the discovered
+ * modalities fill it in and an undisclosed model is saved as text-only. A newly
+ * added model that declares no map gets {@link DEFAULT_REASONING_EFFORTS}.
  * @param existing - current route profile.
  * @param discovered - models returned by discovery.
  * @returns the updated provider plus added and updated counts.
@@ -227,7 +262,7 @@ export function mergeDiscoveredProviderModels(
   for (const candidate of discovered) {
     if (candidate.id.trim() === '') continue
     const current = byId.get(candidate.id)
-    const input = candidate.inputModalities?.filter(modality => modality === 'text' || modality === 'image')
+    const configuredInput = declaredInputModalities(current?.input)
     const contextWindow = typeof candidate.contextWindow === 'number' && candidate.contextWindow > 0
       ? candidate.contextWindow
       : (typeof current?.contextWindow === 'number' ? current.contextWindow : 128000)
@@ -239,7 +274,7 @@ export function mergeDiscoveredProviderModels(
       maxTokens: typeof candidate.maxTokens === 'number' && candidate.maxTokens > 0
         ? candidate.maxTokens
         : (typeof current?.maxTokens === 'number' ? current.maxTokens : defaultMaxOutputTokens(contextWindow)),
-      ...(current?.input === undefined && input !== undefined && input.length > 0 ? { input } : {}),
+      ...(configuredInput.length > 0 ? {} : { input: discoveredInputModalities(candidate) }),
       ...(current === undefined ? { reasoningEfforts: { ...DEFAULT_REASONING_EFFORTS } } : {}),
     }
     if (current === undefined) added += 1
@@ -253,12 +288,13 @@ export function mergeDiscoveredProviderModels(
  * Build the route entry for one discovery model the operator did not configure
  * by hand. Used for the extra models /provider add imports next to the selected
  * one. A missing capacity falls back to a default bounded by the model's
- * context window, and the entry always carries {@link DEFAULT_REASONING_EFFORTS}.
+ * context window, `input` always records the discovered modalities (text-only
+ * when the listing declared none), and the entry always carries
+ * {@link DEFAULT_REASONING_EFFORTS}.
  * @param candidate - one model returned by endpoint discovery.
  * @returns a model entry ready to append to a route profile.
  */
 export function buildDiscoveredModelEntry(candidate: DiscoveredProviderModel): Record<string, unknown> {
-  const input = candidate.inputModalities?.filter(modality => modality === 'text' || modality === 'image')
   const contextWindow = typeof candidate.contextWindow === 'number' && candidate.contextWindow > 0
     ? candidate.contextWindow
     : 128000
@@ -269,7 +305,7 @@ export function buildDiscoveredModelEntry(candidate: DiscoveredProviderModel): R
     maxTokens: typeof candidate.maxTokens === 'number' && candidate.maxTokens > 0
       ? candidate.maxTokens
       : defaultMaxOutputTokens(contextWindow),
-    ...(input === undefined || input.length === 0 ? {} : { input }),
+    input: discoveredInputModalities(candidate),
     reasoningEfforts: { ...DEFAULT_REASONING_EFFORTS },
   }
 }

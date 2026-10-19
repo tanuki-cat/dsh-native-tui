@@ -88,11 +88,12 @@ export const LOCAL_COMMANDS: readonly CommandSuggestion[] = [
     { name: 'checkin', description: 'claim today credits', hint: '[cn|en]' },
     { name: 'doctor', description: 'endpoint and catalogue probe' },
   ] },
-  { name: 'provider', description: 'guided third-party model provider setup', input: { hint: '[add|list|edit|models|remove <route>]' }, subcommands: [
+  { name: 'provider', description: 'guided third-party model provider setup', input: { hint: '[add|list|edit|models|input|remove <route>]' }, subcommands: [
     { name: 'add', description: 'guide a new provider route' },
     { name: 'list', description: 'list configured providers' },
-    { name: 'edit', description: 'open a provider and fetch its models', hint: '[route]' },
+    { name: 'edit', description: 'open a provider, fetch its models, or edit input types', hint: '[route]' },
     { name: 'models', description: 'refresh models for a provider route', hint: '<route>' },
+    { name: 'input', description: 'edit the selected or named model input types', hint: '[provider/model]' },
     { name: 'remove', description: 'delete a provider route', hint: '<route>' },
   ] },
   { name: 'export', description: 'export JSONL, ZIP bundle, or static HTML', input: { hint: '[path|zip [path]|html [path]]' } },

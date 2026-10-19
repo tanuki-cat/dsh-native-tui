@@ -17,6 +17,7 @@ import {
   DEFAULT_MAX_OUTPUT_TOKENS,
   defaultApiKeyEnv,
   defaultMaxOutputTokens,
+  discoveredInputModalities,
   isValidEnvName,
   isValidProviderRoute,
   mergeDiscoveredProviderModels,
@@ -27,6 +28,7 @@ import {
   type ProviderProtocol,
 } from '../../runtime/providers.js'
 import type { CommandContext } from './context.js'
+import { chooseRouteModelInput, openModelInputEditor } from './model-input.js'
 import { selectModel } from './model.js'
 import type { CredentialsService, LLM, SettingsService } from './services.js'
 import { NL, errorMessage } from './shared.js'
@@ -111,6 +113,32 @@ export async function providerCommand(ctx: CommandContext, args: string): Promis
     await fetchProviderModels(ctx, settings, llm, route)
     return
   }
+  if (args === 'input' || args.startsWith('input ')) {
+    const raw = args === 'input' ? '' : args.slice('input '.length).trim()
+    const selected = ctx.modelSelection.current
+    let route = selected?.provider
+    let model = selected?.model
+    if (raw !== '') {
+      const slash = raw.indexOf('/')
+      if (slash === -1) {
+        model = raw
+      }
+      else {
+        route = raw.slice(0, slash)
+        model = raw.slice(slash + 1)
+      }
+    }
+    if (route === undefined || model === undefined || route === '' || model === '') {
+      ctx.notice('warning', 'No model is selected. Usage: /provider input [provider/model]')
+      return
+    }
+    if (!isValidProviderRoute(route) || !Object.hasOwn(providerRecord, route)) {
+      ctx.notice('warning', 'Provider "' + route + '" is not a configured llm-pi-ai route; adapters such as CodeBuddy manage their own input declarations.')
+      return
+    }
+    await openModelInputEditor(ctx, route, model)
+    return
+  }
   if (args.startsWith('remove ')) {
     const route = args.slice('remove '.length).trim()
     if (route === '' || !isValidProviderRoute(route)) {
@@ -137,7 +165,7 @@ export async function providerCommand(ctx: CommandContext, args: string): Promis
     return
   }
   if (args !== '' && args !== 'add') {
-    ctx.notice('warning', 'Usage: /provider [add | list | edit [route] | models <route> | remove <route>]')
+    ctx.notice('warning', 'Usage: /provider [add | list | edit [route] | models <route> | input [provider/model] | remove <route>]')
     return
   }
   await addProvider(ctx, {
@@ -263,7 +291,16 @@ async function fetchProviderModels(ctx: CommandContext, settings: SettingsServic
     ctx.notice('error', 'Fetched models but could not save them: ' + errorMessage(error))
     return
   }
-  ctx.notice('info', 'Fetched ' + String(discovered.length) + ' model(s) for ' + route + ': ' + String(merged.added) + ' added, ' + String(merged.updated) + ' refreshed. Use /model to switch.')
+  // Discovery only discloses modalities when the catalogue or the endpoint
+  // states them, so say which models fell back to text-only instead of leaving
+  // the operator to wonder why a listing produced no image declarations.
+  const disclosed = discovered.filter(candidate => candidate.inputModalities !== undefined && candidate.inputModalities.length > 0).length
+  const inputNote = disclosed === 0
+    ? ' The listing disclosed no input types; every model was saved as text-only.'
+    : (disclosed < discovered.length
+        ? ' ' + String(discovered.length - disclosed) + ' model(s) disclosed no input types and were saved as text-only.'
+        : '')
+  ctx.notice('info', 'Fetched ' + String(discovered.length) + ' model(s) for ' + route + ': ' + String(merged.added) + ' added, ' + String(merged.updated) + ' refreshed.' + inputNote + ' Use /model to switch.')
 }
 
 /** The per-route edit menu. */
@@ -280,10 +317,13 @@ async function editProvider(
   }
   const action = await showChoice(ctx.tui, ctx.palette, 'Provider ' + route, [
     { value: 'fetch', label: 'Fetch available models', description: 'Discover models from the configured endpoint and merge them into this route' },
+    { value: 'input', label: 'Edit model input types', description: 'Declare Text only or Text + image for one model on this route' },
     { value: 'cancel', label: 'Cancel' },
   ], 'Enter selects · Esc cancels', ctx.signal)
   if (action === 'fetch')
     await fetchProviderModels(ctx, settings, llm, route)
+  if (action === 'input')
+    await chooseRouteModelInput(ctx, settings, llm, route)
 }
 
 /** Warn about a credential field that is not an exported environment name. */
@@ -426,6 +466,7 @@ async function addProvider(ctx: CommandContext, state: WizardState): Promise<voi
     }
     let provider: Record<string, unknown>
     let chosenModel: string | undefined
+    let savedInput: 'text only' | 'text+image' | undefined
     let discovered: readonly DiscoveredModel[] = []
     if (kind === 'catalog') {
       provider = buildCatalogProvider(env)
@@ -484,20 +525,25 @@ async function addProvider(ctx: CommandContext, state: WizardState): Promise<voi
       }
       if (model === undefined)
         return
+      // Discovery discloses modalities only when the catalogue or endpoint
+      // states them. A custom gateway listing usually does not, so the choice
+      // falls back to text-only but stays overridable: a model can accept
+      // images without ever advertising them (measured on command-code).
       const supportsImage = model.inputModalities?.includes('image') === true
-      const imageFirst = supportsImage || model.inputModalities === undefined
-      const inputChoice = await showChoice(ctx.tui, ctx.palette, 'Input modalities', imageFirst
+      const disclosed = model.inputModalities !== undefined && model.inputModalities.length > 0
+      const inputChoice = await showChoice(ctx.tui, ctx.palette, 'Input modalities', supportsImage
         ? [
-            { value: 'image', label: 'Text + image', description: supportsImage ? 'The endpoint reports image input' : 'Only if the endpoint accepts image input' },
-            { value: 'text', label: 'Text only', description: 'Safest for text-only models' },
+            { value: 'image', label: 'Text + image', description: 'The endpoint reports image input' },
+            { value: 'text', label: 'Text only', description: 'Override only if this model rejects images' },
           ]
         : [
-            { value: 'text', label: 'Text only', description: 'The endpoint reports text input only' },
-            { value: 'image', label: 'Text + image', description: 'Override only if the endpoint accepts images' },
+            { value: 'text', label: 'Text only', description: disclosed ? 'The endpoint reports text input only' : 'Default: the listing disclosed no input types' },
+            { value: 'image', label: 'Text + image', description: disclosed ? 'Override only if this model accepts images' : 'Only if this model accepts image input' },
           ], 'Enter selects · Esc cancels', ctx.signal)
       if (inputChoice === undefined)
         return
       const input = inputChoice === 'image' ? ['text', 'image'] as const : ['text'] as const
+      savedInput = inputChoice === 'image' ? 'text+image' : 'text only'
       const reasoningRaw = await showTextInput(ctx.tui, ctx.palette, 'Reasoning levels', 'low, medium, high', 'Comma-separated: off/minimal/low/medium/high/xhigh/max; blank = no reasoning · Esc cancels', ctx.signal, 'low,medium,high')
       if (reasoningRaw === undefined)
         return
@@ -554,7 +600,9 @@ async function addProvider(ctx: CommandContext, state: WizardState): Promise<voi
       }
     }
     await settings.mutate('llm-pi-ai', [{ op: 'set', path: ['providers', route], value: provider }], state.revision)
-    ctx.notice('info', 'Saved provider route: ' + route + ' · key is read from ' + ((provider as { apiKeyEnv?: string }).apiKeyEnv ?? nativeEnv ?? 'no credential reference'))
+    ctx.notice('info', 'Saved provider route: ' + route
+      + (savedInput === undefined ? '' : ' · input ' + savedInput)
+      + ' · key is read from ' + ((provider as { apiKeyEnv?: string }).apiKeyEnv ?? nativeEnv ?? 'no credential reference'))
     if (chosenModel !== undefined) {
       await selectModel(ctx, llm, route + '/' + chosenModel)
       return
