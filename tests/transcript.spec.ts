@@ -3,7 +3,7 @@ import { Spacer } from '@earendil-works/pi-tui'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import { Rule } from '../src/ui/rule.js'
 import { createPalette, markdownTheme } from '../src/ui/theme.js'
-import { contentText, formatToolArguments, nextStreamInterval, reduceTranscript, reduceTranscriptWindow, sameTranscriptBlock, STREAM_MIN_INTERVAL_MS, TranscriptRenderer, type TranscriptBlock, type TranscriptEntry } from '../src/ui/transcript.js'
+import { contentText, formatToolArguments, nextStreamInterval, reduceTranscript, reduceTranscriptWindow, sameTranscriptBlock, STREAM_MIN_INTERVAL_MS, TranscriptRenderer, WAIT_ROW_DELAY_MS, waitingText, waitingVisible, type TranscriptBlock, type TranscriptEntry } from '../src/ui/transcript.js'
 
 const palette = createPalette('plain')
 const options = {
@@ -410,6 +410,34 @@ describe('sameTranscriptBlock', () => {
   })
 })
 
+describe('waitingText', () => {
+  it('counts the seconds the request has been in flight', () => {
+    expect(waitingText(1_000, undefined, 1_000)).toBe('waiting for API response · 0s')
+    expect(waitingText(1_000, undefined, 4_400)).toBe('waiting for API response · 3s')
+  })
+
+  it('names the automatic retry so the reader does not retry by hand', () => {
+    expect(waitingText(1_000, { retry: 2, maxRetries: 5, code: 'TRANSPORT' }, 6_000))
+      .toBe('waiting for API response · 5s  ·  retry 2/5 after TRANSPORT (automatic)')
+  })
+
+  it('never counts backwards when the clock jumps', () => {
+    expect(waitingText(5_000, undefined, 1_000)).toBe('waiting for API response · 0s')
+  })
+})
+
+describe('waitingVisible', () => {
+  it('holds the row back through the flash window', () => {
+    expect(waitingVisible(0, undefined, WAIT_ROW_DELAY_MS - 1)).toBe(false)
+    expect(waitingVisible(0, undefined, WAIT_ROW_DELAY_MS)).toBe(true)
+  })
+
+  it('shows a scheduled retry immediately', () => {
+    // The reader already sat through the failed attempt, so the replay is news.
+    expect(waitingVisible(0, { retry: 1, maxRetries: 5, code: 'TRANSPORT' }, 1)).toBe(true)
+  })
+})
+
 describe('nextStreamInterval', () => {
   it('holds the streaming floor for a cheap frame', () => {
     expect(nextStreamInterval(STREAM_MIN_INTERVAL_MS, 0)).toBe(STREAM_MIN_INTERVAL_MS)
@@ -486,6 +514,15 @@ describe('TranscriptRenderer component reuse', () => {
     }
     expect(entries.length).toBeLessThanOrEqual(8)
     expect(renderer.container.render(80).join('\n')).toContain('m40')
+  })
+
+  it('renders the transient model-wait row after the transcript', () => {
+    const renderer = new TranscriptRenderer(options)
+    renderer.set([user(1, 'question')], [{ kind: 'waiting', text: waitingText(0, undefined, 3_000) }])
+    const output = renderer.container.render(80).join('\n')
+    expect(output).toContain('⟳ waiting for API response · 3s')
+    // The row is transient, so it leaves no cached component behind.
+    expect(renderer.container.children).toHaveLength(3)
   })
 
   it('reports the trailing live block size for frame pacing', () => {

@@ -47,7 +47,7 @@ import { diffCommand, toolCommand, toolsCommand } from './commands/tools.js'
 import { exportCommand, openCommand, presetCommand, previewCommand } from './commands/workspace-files.js'
 import { scheduleCommand, workspacesCommand } from './commands/workspace.js'
 import { subscribeSessionEvents } from './session-events.js'
-import { nextStreamInterval, STREAM_MIN_INTERVAL_MS, STREAM_MS_PER_CHAR, TranscriptRenderer, type TranscriptBlock, type TranscriptEntry } from './transcript.js'
+import { nextStreamInterval, STREAM_MIN_INTERVAL_MS, STREAM_MS_PER_CHAR, TranscriptRenderer, WAIT_ROW_DELAY_MS, waitingText, waitingVisible, type TranscriptBlock, type TranscriptEntry, type WaitRetry } from './transcript.js'
 import { Rule } from './rule.js'
 import { diffLines } from './diff.js'
 
@@ -376,6 +376,10 @@ export async function startTerminalApp(
   let pendingAttachments: PendingAttachment[] = []
   let transcriptTimer: ReturnType<typeof setTimeout> | undefined
   let transcriptInterval = STREAM_MIN_INTERVAL_MS
+  /** Epoch ms the in-flight model request began, undefined when none is pending. */
+  let waitSince: number | undefined
+  let waitRetry: WaitRetry | undefined
+  let waitTicker: ReturnType<typeof setInterval> | undefined
   let unsubscribeSession: (() => void) | undefined
   let interactionDisposers: Array<() => void> = []
   const interactionAbort = new AbortController()
@@ -405,7 +409,8 @@ export async function startTerminalApp(
   const renderTranscript = (): void => {
     if (disposed) return
     const started = performance.now()
-    renderer.set(entries, localNotices)
+    const pending = waitingBlock()
+    renderer.set(entries, pending === undefined ? localNotices : [...localNotices, pending])
     // Bound the next rebuild, then pace it: the rebuild excludes pi-tui's later
     // container render, whose dominant cost is the growing live Markdown.
     if (renderer.retainedFrom > 0) entries = entries.slice(renderer.retainedFrom)
@@ -429,6 +434,36 @@ export async function startTerminalApp(
       transcriptTimer = undefined
       renderTranscript()
     }, transcriptInterval)
+  }
+
+  /** Stop the one-second repaint that keeps the wait row's elapsed time live. */
+  const stopWaitTicker = (): void => {
+    if (waitTicker === undefined) return
+    clearInterval(waitTicker)
+    waitTicker = undefined
+  }
+
+  /** Forget the pending request: it answered, or the turn settled. */
+  const clearWait = (): void => {
+    waitSince = undefined
+    waitRetry = undefined
+    stopWaitTicker()
+  }
+
+  /**
+   * Record that a request is in flight and repaint the row once a second, so a
+   * reader can tell a slow model from a turn that is no longer moving.
+   */
+  const beginWait = (): void => {
+    waitSince = Date.now()
+    // Repaint on the same cadence the row becomes reportable, so it shows on time.
+    if (waitTicker === undefined) waitTicker = setInterval(() => { scheduleTranscript(true) }, WAIT_ROW_DELAY_MS)
+  }
+
+  const waitingBlock = (): TranscriptBlock | undefined => {
+    const now = Date.now()
+    if (waitSince === undefined || !waitingVisible(waitSince, waitRetry, now)) return undefined
+    return { kind: 'waiting', text: waitingText(waitSince, waitRetry, now) }
   }
 
   const pushNotice = (tone: 'info' | 'warning' | 'error', text: string): void => {
@@ -476,7 +511,11 @@ export async function startTerminalApp(
     unsubscribeSession = subscribeSessionEvents({
       host,
       sessionId: () => active.id,
-      appendEntry: entry => { entries.push(entry) },
+      appendEntry: entry => {
+        // A streamed chunk proves the request is alive, so the wait row is done.
+        if (entry.type === 'live' && waitSince !== undefined) clearWait()
+        entries.push(entry)
+      },
       replaceEntries: update => { entries = update(entries) },
       notice: text => pushNotice('info', text),
       scheduleTranscript: () => scheduleTranscript(),
@@ -485,6 +524,12 @@ export async function startTerminalApp(
       endAttempt: id => { attemptPositions.delete(id) },
       nextLiveSeq: () => { liveSeq += 1; return liveSeq },
       attemptPosition: id => attemptPositions.get(id),
+      beginWait,
+      retryScheduled: retry => {
+        waitRetry = retry
+        beginWait()
+      },
+      endWait: clearWait,
     })
     scheduleTranscript(true)
     renderStatus()
@@ -493,6 +538,7 @@ export async function startTerminalApp(
   const clearSubscriptions = (): void => {
     unsubscribeSession?.()
     unsubscribeSession = undefined
+    clearWait()
     if (transcriptTimer !== undefined) {
       clearTimeout(transcriptTimer)
       transcriptTimer = undefined

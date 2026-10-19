@@ -13,7 +13,7 @@ import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { ChangesSummaryView } from '../runtime/changes.js'
 import { formatChangesSummary } from '../runtime/changes.js'
 import { formatDeliverables, type PresentedFileView } from '../runtime/deliverables.js'
-import type { TranscriptEntry } from './transcript.js'
+import type { TranscriptEntry, WaitRetry } from './transcript.js'
 
 /** The workspace-changes service slice the live listener reads. */
 interface ChangesService {
@@ -44,6 +44,12 @@ export interface SessionEventsHost {
   readonly nextLiveSeq: () => number
   /** The turn/step recorded for one attempt, when it is known. */
   readonly attemptPosition: (attemptId: string) => { turn: number; step: number } | undefined
+  /** A model request started; nothing has streamed from it yet. */
+  readonly beginWait: () => void
+  /** A failed attempt scheduled a retry, which is now the reason for waiting. */
+  readonly retryScheduled: (retry: WaitRetry) => void
+  /** The turn settled, so no request is in flight any more. */
+  readonly endWait: () => void
 }
 
 /** Subscribe the transcript to one session's events. */
@@ -74,6 +80,19 @@ export function subscribeSessionEvents(host: SessionEventsHost): () => void {
       const data = event.data as { readonly turn: number; readonly files: readonly PresentedFileView[] }
       host.notice(formatDeliverables([{ turn: data.turn, files: data.files }]))
     }
+    if ((event.type as string) === 'llm/retry') {
+      const data = event.data as {
+        readonly retry?: unknown
+        readonly maxRetries?: unknown
+        readonly failure?: { readonly code?: unknown }
+      }
+      host.retryScheduled({
+        retry: typeof data.retry === 'number' ? data.retry : 0,
+        maxRetries: typeof data.maxRetries === 'number' ? data.maxRetries : 0,
+        code: typeof data.failure?.code === 'string' ? data.failure.code : 'ERROR',
+      })
+    }
+    if (event.type === 'turn/end') host.endWait()
     host.scheduleTranscript()
     host.renderStatus()
   }))
@@ -82,6 +101,7 @@ export function subscribeSessionEvents(host: SessionEventsHost): () => void {
     if (agent.id !== host.sessionId()) return
     if (frame.type === 'start') {
       host.beginAttempt(String(frame.attemptId), frame.turn, frame.step)
+      host.beginWait()
       return
     }
     if (frame.type === 'end') {
