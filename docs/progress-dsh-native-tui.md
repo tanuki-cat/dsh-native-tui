@@ -1,6 +1,6 @@
 # dsh-native-tui 实施进度
 
-> 记录时间：2026-10-17 17:48 CST
+> 记录时间：2026-10-17 17:48 CST（2026-10-19 复核更新）
 > 工作区：`/Users/wangzy/WorkSpace/WebStormProjects/dsh-native-tui`
 > 状态：**Goal complete**（30/30 轮），插件可构建、可测试、可安装
 > 包版本：`dsh-native-tui@0.2.1-rc.2`
@@ -35,7 +35,7 @@ dsh --profile tui
 | 领域 | 已实现 |
 | --- | --- |
 | Session | 新建、恢复、列表、状态、清屏、导出、安全退出 |
-| 对话 | 流式 assistant/reasoning、Markdown、steer、cancel、失败 turn 展示 |
+| 对话 | 流式 assistant/reasoning、Markdown、steer、cancel、失败 turn 展示、等待 API 响应提示行（含自动重试状态） |
 | 工具 | 工具卡片、write/edit diff 行、`/tools`、`/tool <index>` 分页、`/diff [index]` |
 | 审批/问答 | approval waterfall、question 面板、单选/多选、Other 自由文本、单题跳过 |
 | 模型/命令 | 模型选择、第三方 provider 引导、权限预设、Host commands、jobs、subagents（仅 `/agents` 只读列举直接子级） |
@@ -61,9 +61,11 @@ pnpm check
   vitest run
   tsc -p tsconfig.build.json
 
-Test Files  17 passed (17)
-Tests       86 passed (86)
+Test Files  32 passed (32)
+Tests      237 passed (237)
 ```
+
+> 2026-10-19 复核：测试规模从最初的 17/86 增长到 32/237，覆盖 transcript 渲染、session 事件接线、provider 默认值、CodeBuddy 流与重试策略。
 
 ### 安装与启动
 
@@ -88,6 +90,7 @@ EXIT 0
 - 剪贴板 RGB PNG → `/attach paste` → `/attach preview` → `/attachments` → 图片 overlay。
 - `@@` 在真实 profile 中列出其他 Session 候选；Tab 插入后的发送未完整验证。
 - `fullscreen: true` 启动、`/help`、Ctrl+D 退出；桌面鼠标拖拽未验证。
+- 等待提示行：mock SSE provider + 真实 Host + 真实 TUI 抓取渲染流，确认 `⟳ waiting for API response · Ns` 逐秒递增、首帧到达即消失；mock 首次返回 500 时显示 `retry 1/5 after SERVER (automatic)` 并在重放成功后清除。
 
 ### 未完成真实验证
 
@@ -194,7 +197,7 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 
 ## 9. 剩余事项（2026-10-17 审查记录）
 
-当前代码与 138 个测试通过（26 个测试文件）；以下按优先级保留，不再混入已完成项。
+当前代码与 237 个测试通过（32 个测试文件）；以下按优先级保留，不再混入已完成项。
 
 ### P1
 
@@ -243,4 +246,9 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - [x] 真实审批 waterfall E2E（2026-10-18）：新增 `scripts/approval-gate-probe`（把 `tools/pre-execute` 对 `bash` 的 `ask` 决策交给真实 ApprovalService）与 `scripts/fake-tty-approval.mjs`（mock OpenAI SSE 模型 + 真实 Host + TUI overlay，逐模式复跑）。四模式通过：`allow` → bash 执行并回传 `approval-probe-ok`；`reject` → `Error: the user rejected tool "bash"`；`cancel-row`（显式 Cancel 行）与 `cancel-esc`（Esc）→ `Error: approval for tool "bash" was cancelled`。覆盖真实审批服务、`approval/request` waterfall、审计配对和 TUI 决定链路；仍为 mock 模型而非真实凭据。
 - [x] 内置 provider 目录对齐 Web 端（2026-10-18）：TUI 的 `LlmCatalog` 补 `listConfigurableProviders`；`/provider add` 的 catalog 路径改为 searchable 内置 provider 选择器（Host 目录，约 60 个 id），credential 默认值与「Use built-in environment auth」取自 provider 原生 env（如 `amazon-bedrock` → `AWS_BEARER_TOKEN_BEDROCK`），目录不可用时才回退手输；新增 `configurableProvidersIn / nativeAuthEnv / defaultApiKeyEnv` 与 `buildCatalogProvider()`（无 reference = 原生认证）及单测（`tests/providers.spec.ts`，139 tests）；真实 Host 冒烟 `scripts/fake-tty-provider-catalog.mjs` 连续两次通过（选择器、原生 env、保存后内置模型列表）。
 - [x] 内置 CodeBuddy / WorkBuddy provider（2026-10-18）：把 `pi-codebuddy-provider`（Pi Extension）移植为 bundle 内置插件 `dsh-native-tui/codebuddy`，不依赖 dsh-router / 本地代理、不新增运行时依赖。新增 `src/codebuddy/`（profiles/auth/models/credits/errors/wire/sse/stream/adapter）与插件入口；`ctx.llm.registerAdapter` 注册 `codebuddy`(copilot.tencent.com) 与 `codebuddy-en`(workbuddy.ai) 两条路由，OAuth 走 `ctx.authorization` 流程、凭据存 `ctx.credentials`（scope `codebuddy`），续期在 `modifyRecord` 互斥写内、401/403 受控重放一次；目录来自 `/v3/config`（登录前用 seed 列表）；SSE 与 wire 序列化自实现（无 store/stream_options、`max_tokens`、`reasoning_effort`+`reasoning_summary`、EN 404/405 端点回退）。TUI 增 `/codebuddy status|login|logout|models refresh|quota|checkin|doctor`。`pnpm check` 通过（26 → 29 个测试文件 / 140 → 184 个测试）；真实 Host 冒烟 `scripts/fake-tty-codebuddy.mjs` 六项全通过（两条路由挂载、seed 模型、doctor 端点、`/model` 列出 `codebuddy/deepseek-v4-pro`）。真实账号路径未验收。
+- [x] 失败/中断 attempt 不再丢失已流式输出（2026-10-19）：模型响应被截断时 Host 只写 `assistant/attempt`（带完整 compact stream），旧实现只清空 live 块、忽略事件负载，67955 字符的 reasoning 在转录里整体消失，只剩一条红色错误。改为用 `assembleAssistantStream(...).interruptedBlocks()` 重建 attempt 的可见内容（工具调用按设计剔除：中断发生在派发前，保留会显示一个从未执行的调用）；同时 `assistant/attempt` 不再写入 `finalizedSteps` 并重置该步 live 累加器，同一步重试可继续流式；`session-events` 同步清理该步 live entries。用真实失败载荷（`deepseek/deepseek-v4.1-flash`, `Response incomplete: length`）验证恢复出 67955 字符 reasoning。
+- [x] 长会话流式渲染三项优化（2026-10-19）：① 组件复用从「下标对齐」改为按 block 身份（`seq`/`callId`/`compactionId`）缓存——`maxEntries` 截断会让整表左移，旧实现每次新增行都重排全部 Markdown；② `reduceTranscriptWindow` 返回 `retainedFrom`，调用方丢弃无引用前缀，并删掉 `/clear` 后每帧的 `entries.filter`；③ 帧间隔按帧成本自适应（33 ms 起，超预算最多退到 100 ms）。基准 `scripts/bench-transcript.ts`（新增饱和窗口用例）：cap 2000 饱和位移帧 64.9 ms → 2.0 ms；10 万事件窗口 19.1 ms → 3.9 ms。
+- [x] provider 默认 `maxTokens` 对齐 Web（2026-10-19）：模型列表返回的 `maxTokens` 优先，列表未返回时不再写死 16k，改为 32k（与 pi-ai 的 `DEFAULT_MAX_TOKENS` / Web 端一致），并按 `contextWindow` 收窄，避免 `max_tokens` 超过模型窗口被接口拒绝。CodeBuddy 目录兜底值同步 32k。
+- [x] CodeBuddy 流空闲看门狗与截断流重试（2026-10-19）：此前该路径没有 idle 守卫，连接被无声切断时 `reader.read()` 永远挂起；且「无 finish 帧即关流」抛出的 `INCOMPLETE_STREAM` 不在 Host 默认可重试码里，直接失败。现补 5 分钟可重臂空闲预算（每收到一帧重新计时，超时先抛 `TIMEOUT` 再 abort socket，保证结果不会被 abort 产生的 transport 错误顶掉），并由适配器 `providerRetryPolicy` 在 Host 默认码集合上追加 `INCOMPLETE_STREAM`（默认值 `resolveRetryPolicy(undefined, …)` 读取后追加，不复制列表）。至此两条 provider 路径对「休眠断网 / 流被截断」的处理一致。
+- [x] 等待 API 响应提示（2026-10-19）：`agent/assistant-stream` 的 start 帧起、任意流式 chunk 或 `turn/end` 止，在转录末尾显示 `⟳ waiting for API response · Ns`，1 秒 ticker 仅在该行可见时运行；`llm/retry` 事件追加 `· retry 1/5 after SERVER (automatic)`，用来区分「系统正自动重试」与「需要手动重发」。为防止快模型下每步闪一下，行在等待超过 `WAIT_ROW_DELAY_MS`(1 s) 后才出现，但已排定的重试立即显示。mock SSE provider + 真实 Host + 真实 TUI 抓取验证（逐秒递增、首帧到达即消失、500 后显示 automatic 重试并在重放成功后清除）。
 - [x] 手动调用技能对齐 Web 端（2026-10-18）：`/` 补全在命令后列出 Host `ctx.skills` 的用户可调用技能（过滤 `userInvocable`，仅用户可调用的标注 `user-only`），选中插入 `/skill-name`；`runCommand` 的未知命令分支先尝试 Host 命令，再匹配技能并以普通 prompt 发送（`dsh-tool-skill` 的 `SKILL_GESTURE` 在 pre-step 注入技能正文）；`/help` 增加 `Skills:` 行。`tests/autocomplete.spec.ts` 补技能补全/命令遮蔽用例（140 tests）；真实 Host 冒烟 `scripts/fake-tty-skill.mjs` 通过（菜单列出、非未知命令、正文注入）。
