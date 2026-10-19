@@ -52,9 +52,12 @@ export function createPalette(theme: Config['theme']): Palette {
       dialogBorder: identity,
     }
   }
+  // Tool cards use a neutral surface instead of a saturated state color: the
+  // card already carries success/error in its label, and a full-width green
+  // band dominates the transcript (dark) or washes it out (light).
   const bands = theme === 'light'
-    ? { user: '48;5;195', tool: '48;5;194', thinking: '48;5;254' }
-    : { user: '48;5;23', tool: '48;5;22', thinking: '48;5;235' }
+    ? { user: '48;5;195', tool: '48;5;253', thinking: '48;5;254' }
+    : { user: '48;5;23', tool: '48;5;237', thinking: '48;5;235' }
   return {
     plain: false,
     dim: sgr('2', '22'),
