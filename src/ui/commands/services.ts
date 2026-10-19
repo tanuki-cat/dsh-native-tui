@@ -53,6 +53,8 @@ export interface SettingsService {
   describe(options?: { redactSecrets?: boolean }): readonly {
     ns: string
     value: Record<string, unknown>
+    /** The profile patch's own section, used to address array indexes without restating them. */
+    user?: unknown
     schema: unknown
     revision: number
     secrets?: readonly { path: readonly string[]; set: boolean }[]

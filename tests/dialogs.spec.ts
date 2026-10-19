@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { visibleWidth } from '@earendil-works/pi-tui'
-import { showApproval, showChoice, showQuestionBatch, showSearchChoice } from '../src/ui/dialogs.js'
+import { showApproval, showChoice, showQuestionBatch, showSearchChoice, showTextInput } from '../src/ui/dialogs.js'
 import { createPalette } from '../src/ui/theme.js'
 
 describe('dialog frame', () => {
@@ -70,6 +70,21 @@ describe('dialog frame', () => {
     expect(filtered).not.toContain('Alpha')
     component!.handleInput('\r')
     await expect(promise).resolves.toBe('provider/beta')
+  })
+})
+
+describe('text input dialog', () => {
+  it('opens a prefilled value with the cursor at the end', async () => {
+    let component: { render(width: number): string[]; handleInput(data: string): void } | undefined
+    const promise = showTextInput({
+      showOverlay(value: { render(width: number): string[]; handleInput(data: string): void }) {
+        component = value
+        return { hide() {} }
+      },
+    } as never, createPalette('plain'), 'Wire value', 'high', 'Enter saves', new AbortController().signal, 'high')
+    component!.handleInput('x')
+    component!.handleInput('\r')
+    await expect(promise).resolves.toBe('highx')
   })
 })
 

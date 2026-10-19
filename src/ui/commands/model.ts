@@ -7,6 +7,7 @@
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { showChoice, showSearchChoice } from '../dialogs.js'
 import type { CommandContext } from './context.js'
+import { openReasoningMapEditor } from './reasoning-map.js'
 import type { LLM } from './services.js'
 import { errorMessage } from './shared.js'
 
@@ -88,17 +89,26 @@ export async function modelCommand(ctx: CommandContext, args: string): Promise<v
 
 /** The `/reasoning` command. */
 export async function reasoningCommand(ctx: CommandContext, args: string): Promise<void> {
-  const llm = ctx.host.get('llm') as LLM | undefined
   const selected = ctx.modelSelection.current
-  if (llm === undefined || selected === undefined) {
+  if (selected === undefined) {
     ctx.notice('warning', 'No active model selection is available.')
+    return
+  }
+  const requested = args.trim().toLowerCase()
+  if (requested === 'map') {
+    await openReasoningMapEditor(ctx)
+    return
+  }
+  const llm = ctx.host.get('llm') as LLM | undefined
+  if (llm === undefined) {
+    ctx.notice('warning', 'The LLM catalog service is unavailable.')
     return
   }
   try {
     const info = await llm.resolveModelInfo(selected.provider, selected.model)
     const reasoning = info.reasoning
     if (reasoning === undefined || reasoning.efforts.length === 0) {
-      ctx.notice('warning', 'Model ' + selected.provider + '/' + selected.model + ' exposes no reasoning efforts. Add reasoningEfforts to the provider model or choose another model.')
+      ctx.notice('warning', 'Model ' + selected.provider + '/' + selected.model + ' exposes no reasoning efforts. Use /reasoning map to add levels and wire values, or choose another model.')
       return
     }
     const applyEffort = async (effort: string | undefined): Promise<void> => {
@@ -116,7 +126,6 @@ export async function reasoningCommand(ctx: CommandContext, args: string): Promi
     }
     const currentEffort = selected.reasoningEffort
     if (args !== '') {
-      const requested = args.trim().toLowerCase()
       if (requested === 'default' || requested === 'auto' || requested === 'clear') {
         await applyEffort(undefined)
         return
@@ -140,6 +149,11 @@ export async function reasoningCommand(ctx: CommandContext, args: string): Promi
         description: candidate.name + (candidate.description === undefined ? '' : ' — ' + candidate.description),
       })
     }
+    items.push({
+      value: '__map__',
+      label: 'Edit reasoning map…',
+      description: 'Add, change, or remove levels and their wire values',
+    })
     const choice = await showChoice(
       ctx.tui,
       ctx.palette,
@@ -150,6 +164,10 @@ export async function reasoningCommand(ctx: CommandContext, args: string): Promi
     )
     if (choice === undefined)
       return
+    if (choice === '__map__') {
+      await openReasoningMapEditor(ctx)
+      return
+    }
     await applyEffort(choice === '__default__' ? undefined : choice)
   }
   catch (error) {

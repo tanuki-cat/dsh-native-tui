@@ -154,7 +154,12 @@ class TextInputDialog implements Component {
     initialValue?: string,
   ) {
     this.input = new Input({ prompt: '> ', placeholder })
-    if (initialValue !== undefined) this.input.setValue(initialValue)
+    if (initialValue !== undefined) {
+      this.input.setValue(initialValue)
+      // setValue leaves the cursor before the old text; a prefilled field should
+      // open at its end so typing extends the value instead of prepending to it.
+      this.input.handleInput('\x05')
+    }
     this.input.focused = true
   }
 
