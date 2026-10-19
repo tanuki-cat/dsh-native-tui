@@ -113,6 +113,13 @@ export const DEFAULT_CONTEXT_WINDOW = 200_000
 /** Output cap used when the catalogue states no usable `maxOutputTokens`; the same parity default the provider wizard configures. */
 export const DEFAULT_MAX_OUTPUT_TOKENS = 32_768
 
+/**
+ * Idle budget between two chat frames before the request is treated as dead.
+ * Matches the pi-ai route default so both provider families recover from a
+ * connection that was cut without a FIN.
+ */
+export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 5 * 60 * 1000
+
 // ---------------------------------------------------------------------------
 // International-gateway payload normalization
 // ---------------------------------------------------------------------------

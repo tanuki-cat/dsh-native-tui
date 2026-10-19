@@ -9,13 +9,14 @@
  * @module dsh-native-tui/codebuddy/adapter
  */
 
-import { LlmAdapter, LlmError, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import { LlmAdapter, LlmError, ReasoningEffortId, resolveRetryPolicy } from '@deepseek-ai/dsh-llm'
 import type {
   GenerateOptions,
   LlmModelInfo,
   LlmProviderInfo,
   LlmResolvedModelInfo,
   PreparedAdapterCall,
+  ResolvedRetryPolicy,
   StreamChunk,
 } from '@deepseek-ai/dsh-llm'
 import { accessToken, logout, readGrant, type CredentialStoreLike } from './auth.js'
@@ -29,6 +30,25 @@ const CATALOGUE_TTL_MS = 5 * 60 * 1000
 
 /** Ceiling for one lazy catalogue refresh. */
 const CATALOGUE_TIMEOUT_MS = 15_000
+
+/** Host retry defaults, read once so the policy below can extend their code set. */
+const HOST_RETRY_DEFAULTS = resolveRetryPolicy(undefined, 'codebuddy retryPolicy')
+
+/**
+ * Retry policy for both CodeBuddy routes: the host defaults plus
+ * `INCOMPLETE_STREAM`, raised when the gateway closed a stream without a finish
+ * frame. That completion cannot be resumed, so replaying the request is the
+ * only way to recover it.
+ */
+const RETRY_POLICY: ResolvedRetryPolicy = resolveRetryPolicy({
+  mode: 'normal',
+  retryableCodes: [
+    // Omission of config always resolves to a normal policy, so this guard only
+    // narrows the union for the compiler; it never drops a code in practice.
+    ...(HOST_RETRY_DEFAULTS.mode === 'normal' ? HOST_RETRY_DEFAULTS.retryableCodes : []),
+    'INCOMPLETE_STREAM',
+  ],
+}, 'codebuddy retryPolicy')
 
 /** Mutable per-route state: the catalogue and the last refresh outcome. */
 interface ProfileState {
@@ -104,6 +124,10 @@ export class CodeBuddyAdapter extends LlmAdapter {
 
   override providerInfo(provider: string): LlmProviderInfo {
     return { id: provider, name: this.profileOf(provider).name }
+  }
+
+  override providerRetryPolicy(_provider: string): ResolvedRetryPolicy {
+    return RETRY_POLICY
   }
 
   override listModels(provider: string): Promise<readonly LlmModelInfo[]> {

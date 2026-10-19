@@ -186,6 +186,18 @@ describe('codebuddy adapter', () => {
     expect((await adapter.listModels('codebuddy')).map(model => model.id)).toEqual(['chat-a'])
   })
 
+  it('replays a truncated stream on top of the host retry defaults', () => {
+    const policy = new CodeBuddyAdapter({ store: () => undefined }).providerRetryPolicy('codebuddy')
+    expect(policy.mode).toBe('normal')
+    const codes = policy.mode === 'normal' ? policy.retryableCodes : []
+    // INCOMPLETE_STREAM is this adapter's own truncated-stream code; the rest
+    // must stay, because they are what recovers a dropped connection.
+    expect(codes).toContain('INCOMPLETE_STREAM')
+    for (const code of ['TIMEOUT', 'TRANSPORT', 'SERVER', 'RATE_LIMIT', 'EMPTY_RESPONSE']) {
+      expect(codes).toContain(code)
+    }
+  })
+
   it('keeps a conservative fallback for an unlisted model', async () => {
     const adapter = new CodeBuddyAdapter({ store: () => undefined })
     const info = await adapter.resolveModel('codebuddy', 'not-in-the-catalogue')

@@ -237,6 +237,55 @@ describe('codebuddy chat transport', () => {
     expect(chunks.at(-1)).toEqual({ type: 'finish', reason: { kind: 'stop' } })
   })
 
+  it('aborts a stream that stops producing frames and reports TIMEOUT', async () => {
+    let aborted = false
+    vi.stubGlobal('fetch', async (_url: string, init: { signal?: AbortSignal }) => {
+      init.signal?.addEventListener('abort', () => { aborted = true })
+      // A body that never produces a frame and never closes: the reader stays
+      // pending until the idle guard settles the wait.
+      return new Response(new ReadableStream({ start() { /* stalled */ } }), { status: 200 })
+    })
+    await expect((async () => {
+      for await (const _chunk of streamChat({
+        profile: cnProfile,
+        model: 'chat-a',
+        payload: { model: 'chat-a', messages: [], stream: true },
+        access: 'token',
+        idleTimeoutMs: 20,
+      })) { /* drain */ }
+    })()).rejects.toMatchObject({ code: 'TIMEOUT' })
+    expect(aborted).toBe(true)
+  })
+
+  it('re-arms the idle budget while frames keep arriving', async () => {
+    const encoder = new TextEncoder()
+    const frames = [
+      'data: ' + JSON.stringify({ choices: [{ delta: { content: 'He' } }] }) + '\n\n',
+      'data: ' + JSON.stringify({ choices: [{ delta: { content: 'llo' }, finish_reason: 'stop' }] }) + '\n\n',
+    ]
+    vi.stubGlobal('fetch', async () => new Response(new ReadableStream({
+      async start(controller) {
+        for (const frame of frames) {
+          await new Promise(resolve => setTimeout(resolve, 200))
+          controller.enqueue(encoder.encode(frame))
+        }
+        controller.close()
+      },
+    }), { status: 200 }))
+    const chunks: StreamChunk[] = []
+    // Two 200ms gaps exceed the 300ms budget in total but never in one gap, so
+    // this only completes when every frame re-arms the deadline.
+    for await (const chunk of streamChat({
+      profile: cnProfile,
+      model: 'chat-a',
+      payload: { model: 'chat-a', messages: [], stream: true },
+      access: 'token',
+      idleTimeoutMs: 300,
+    })) chunks.push(chunk)
+    expect(chunks).toContainEqual({ type: 'text-delta', index: 0, text: 'llo' })
+    expect(chunks.at(-1)).toEqual({ type: 'finish', reason: { kind: 'stop' } })
+  })
+
   it('classifies a rejected request without a retry callback', async () => {
     vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ code: 11133 }), { status: 400 }))
     await expect((async () => {

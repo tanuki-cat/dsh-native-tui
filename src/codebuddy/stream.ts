@@ -12,7 +12,7 @@
 import { LlmError, ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { FinishReason, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
 import { classifyFailure, gatewayCodeOf, hintForGatewayError, redact } from './errors.js'
-import type { CodeBuddyProfile } from './profiles.js'
+import { DEFAULT_STREAM_IDLE_TIMEOUT_MS, type CodeBuddyProfile } from './profiles.js'
 import type { SseFrame } from './sse.js'
 import { decodeSse } from './sse.js'
 
@@ -36,6 +36,8 @@ export interface ChatStreamOptions {
    * the supplied one. Called at most once per request.
    */
   readonly reauthorize?: () => Promise<string>
+  /** Idle budget override; defaults to {@link DEFAULT_STREAM_IDLE_TIMEOUT_MS}. */
+  readonly idleTimeoutMs?: number
 }
 
 /** Harness failure code for one classified upstream failure. */
@@ -131,6 +133,92 @@ async function postChat(
 }
 
 /**
+ * Resolve one awaited step, or fail with `TIMEOUT` once it outlasts the idle
+ * budget. The abort fires after the rejection so the abandoned step still
+ * releases its socket, and so this call's outcome cannot be mistaken for the
+ * transport error the abort produces.
+ * @param step - the pending request or frame read.
+ * @param timeoutMs - idle budget for this step.
+ * @param idle - controller aborted when the budget expires.
+ * @param label - error text naming the route and budget.
+ * @returns the step's value.
+ * @throws {LlmError} with code `TIMEOUT` when the budget expires.
+ */
+async function withIdleDeadline<T>(step: Promise<T>, timeoutMs: number, idle: AbortController, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const expired = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(new LlmError(label, 'TIMEOUT'))
+      idle.abort()
+    }, timeoutMs)
+  })
+  try {
+    return await Promise.race([step, expired])
+  }
+  finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * Re-arm the idle budget around every frame wait, so a stream that keeps
+ * producing frames is never abandoned while it makes progress.
+ * @param frames - decoded frames of one response body.
+ * @param timeoutMs - idle budget between two frames.
+ * @param idle - controller aborted when the budget expires.
+ * @param label - error text naming the route and budget.
+ * @returns the same frames, in order.
+ * @throws {LlmError} with code `TIMEOUT` when no frame arrives in time.
+ */
+async function* framesWithIdleDeadline(
+  frames: AsyncGenerator<SseFrame>,
+  timeoutMs: number,
+  idle: AbortController,
+  label: string,
+): AsyncGenerator<SseFrame> {
+  const iterator = frames[Symbol.asyncIterator]()
+  try {
+    for (;;) {
+      const step = await withIdleDeadline(iterator.next(), timeoutMs, idle, label)
+      if (step.done === true) return
+      yield step.value
+    }
+  }
+  finally {
+    // Release the abandoned demand; the read settles once the abort lands.
+    const abandoned = iterator.return?.(undefined)
+    void abandoned?.catch(() => {})
+  }
+}
+
+/**
+ * Classify one failed chat call. The idle guard aborts the socket without a
+ * transport error of its own, so its signal explains the failure first; caller
+ * cancellation is only reported when the caller's own signal is aborted.
+ * @param profile - deployment being called.
+ * @param error - the failure to translate.
+ * @param idle - the idle guard's controller.
+ * @param idleLabel - the failure text the guard already raised for an idle wait.
+ * @param signal - the caller's cancellation signal.
+ * @returns the harness failure to throw.
+ */
+function transportFailure(
+  profile: CodeBuddyProfile,
+  error: unknown,
+  idle: AbortController,
+  idleLabel: string,
+  signal: AbortSignal | undefined,
+): LlmError {
+  if (idle.signal.aborted) return new LlmError(idleLabel, 'TIMEOUT', { cause: error })
+  if (signal?.aborted === true) return new LlmError(profile.id + ' request aborted by caller', 'ABORTED', { cause: error })
+  return new LlmError(
+    profile.id + ' unreachable: ' + redact(error instanceof Error ? error.message : String(error)),
+    'TRANSPORT',
+    { cause: error },
+  )
+}
+
+/**
  * Stream one chat completion, translating upstream frames into harness chunks.
  * @param options - the request, its credential and its cancellation.
  * @returns raw chunks in stream order.
@@ -138,10 +226,17 @@ async function postChat(
  */
 export async function* streamChat(options: ChatStreamOptions): AsyncGenerator<StreamChunk> {
   const { profile, signal } = options
+  // A connection cut without a FIN leaves the body read pending forever. The
+  // idle guard settles that wait as TIMEOUT, which the provider retry policy
+  // replays, and aborts the socket so the request is not left open.
+  const idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS
+  const idle = new AbortController()
+  const requestSignal = signal === undefined ? idle.signal : AbortSignal.any([signal, idle.signal])
+  const idleLabel = profile.id + ': no frame for ' + String(idleTimeoutMs) + 'ms; request aborted'
   let access = options.access
   let response: Response
   try {
-    response = await postChat(profile, access, options.payload, signal)
+    response = await withIdleDeadline(postChat(profile, access, options.payload, requestSignal), idleTimeoutMs, idle, idleLabel)
     if ((response.status === 401 || response.status === 403) && options.reauthorize !== undefined) {
       try {
         await response.body?.cancel()
@@ -150,17 +245,12 @@ export async function* streamChat(options: ChatStreamOptions): AsyncGenerator<St
         // Best effort; the retry below is what matters.
       }
       access = await options.reauthorize()
-      response = await postChat(profile, access, options.payload, signal)
+      response = await withIdleDeadline(postChat(profile, access, options.payload, requestSignal), idleTimeoutMs, idle, idleLabel)
     }
   }
   catch (error) {
     if (error instanceof LlmError) throw error
-    if (signal?.aborted === true) throw new LlmError(profile.id + ' request aborted by caller', 'ABORTED', { cause: error })
-    throw new LlmError(
-      profile.id + ' unreachable: ' + redact(error instanceof Error ? error.message : String(error)),
-      'TRANSPORT',
-      { cause: error },
-    )
+    throw transportFailure(profile, error, idle, idleLabel, signal)
   }
 
   if (!response.ok) {
@@ -168,7 +258,13 @@ export async function* streamChat(options: ChatStreamOptions): AsyncGenerator<St
     throw upstreamError(profile.id, response.status, text)
   }
   if (response.body === null) throw new LlmError(profile.id + ' returned no response body', 'MALFORMED_RESPONSE')
-  yield* toStreamChunks(decodeSse(response.body), options.model, signal)
+  try {
+    yield* toStreamChunks(framesWithIdleDeadline(decodeSse(response.body), idleTimeoutMs, idle, idleLabel), options.model, signal)
+  }
+  catch (error) {
+    if (error instanceof LlmError) throw error
+    throw transportFailure(profile, error, idle, idleLabel, signal)
+  }
 }
 
 /** One content block open while deltas arrive. */
