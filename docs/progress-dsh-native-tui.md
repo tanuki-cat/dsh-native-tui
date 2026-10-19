@@ -36,9 +36,9 @@ dsh --profile tui
 | --- | --- |
 | Session | 新建、恢复、列表、状态、清屏、导出、安全退出 |
 | 对话 | 流式 assistant/reasoning、Markdown、steer、cancel、失败 turn 展示、等待 API 响应提示行（含自动重试状态） |
-| 工具 | 工具卡片、write/edit diff 行、`/tools`、`/tool <index>` 分页、`/diff [index]` |
+| 工具 | 工具卡片、write/edit diff 行（PTC `run_code` 内嵌与 native 顶层调用）、`/tools`、`/tool <index>` 分页、`/diff [index]` |
 | 审批/问答 | approval waterfall、question 面板、单选/多选、Other 自由文本、单题跳过 |
-| 模型/命令 | 模型选择、第三方 provider 引导、权限预设、Host commands、jobs、subagents（仅 `/agents` 只读列举直接子级） |
+| 模型/命令 | 模型选择、第三方 provider 引导、模型输入类型编辑（`/provider input`）、权限预设、Host commands、jobs、subagents（仅 `/agents` 只读列举直接子级） |
 | Preset | 首个 turn 前切换当前 Session；开始后锁定，改用 /new |
 | Presets | standard / ptc / minimal / cordis |
 | Workspace | list/create/use/pin/unpin/archive/unarchive |
@@ -132,7 +132,7 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - 会话级附件管理器未实现；当前 `/attachments` 管理 staged 附件。
 - 真实凭据的模型流式回合仍未验收；审批 waterfall 已用 mock 模型 E2E 覆盖 allow/reject/cancel（`scripts/fake-tty-approval.mjs`）。
 - Deliverables panel 的真实 present 事件路径未验收。
-- `/provider add` 支持 DSH credential store（粘贴一次 key，写入 0600 credential 文件）或 UPPERCASE env 引用；API key 在输入时可见。自动发现依赖 endpoint 的 `/models` 列表，失败时回退手动输入；模型能力显式写入 `input`，已有旧 profile 需重配或手动补。
+- `/provider add` 支持 DSH credential store（粘贴一次 key，写入 0600 credential 文件）或 UPPERCASE env 引用；API key 在输入时可见。自动发现依赖 endpoint 的 `/models` 列表，失败时回退手动输入；模型能力显式写入 `input`，已有旧 profile 需重配或手动补；也可用 `/provider input` 编辑单个模型的输入类型。
 - 旧版本可能已把误填的 key 写入 `apiKeyEnv`：需 `/provider remove <route>` 并轮换 key。
 - 第三方模型引导已用 dummy key 验证配置、写入和 `/model` 选择，未发起真实推理请求。
 - 使用本地 HTTP `/v1/models` 验证自动发现：列出 auto-model/auto-small，选中后写入 64000/8192 容量并直接选中模型。
@@ -148,7 +148,7 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - 已验证本地命令输出按事件顺序插入：`/provider list`、`/model`、`/reasoning`、`/status` 的 notice 位于随后 prompt 的 context/AI 输出之前。
 - 已验证 Store API key 模式：粘贴 key → credential store（0600）→ 自动发现 stored-model → 保存并选中，`/provider list` 显示 `(stored)`。
 - 已验证裸 `quit` 退出 TUI，退出码 0。
-- 已验证输入 `/provider` 时补全列表显示 `/provider add/list/remove`；输入 `/provider re` 只显示 remove。
+- 已验证输入 `/provider` 时补全列表显示 `/provider add/list/edit/models/input/remove`；输入 `/provider re` 只显示 remove。
 - 已验证 `/preset minimal` 写入 `agent-preset-registry.selectedDefault: minimal`；重启后状态栏和 `/status` 仍显示 minimal。
 - 已验证默认 bundle 加载 computer-use、Cua Driver native、mcp-client、mcp-resources、mcp-manager、session-stats；profile 启动无激活错误。
 - 状态栏常驻三行：`● idle  model <provider>/<model>` + preset/effort/快捷键 + `↳ turns/steps/tok/s/tokens/cache/ctx`；header 第二行只显示 cwd，避免长会话滚动后还需要 `/status` 确认模型。ctx 段与 Web 端同口径（token meter `contextPressure` 的 projected 值），渲染为 `ctx 42%  (~420K / 1M · compact at 80%)`。
@@ -193,7 +193,7 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 | 14–20 | Plugin remove/market、剪贴板图片、图片预览、alt-screen、`@@session` |
 | 21–25 | 附件预览、ZIP/HTML 导出、Deliverables reveal、工具结果 pager、Markdown |
 | 26–30 | 独立 Diff、附件管理器、Settings 数组、Deliverables panel、收尾验证 |
-| 后续 | 第三方模型 `/provider add|list|edit|models|remove` 引导与自动模型发现，23 个测试文件 / 86 个测试 |
+| 后续 | 第三方模型 `/provider add|list|edit|models|input|remove` 引导与自动模型发现，23 个测试文件 / 86 个测试 |
 
 ## 9. 剩余事项（2026-10-17 审查记录）
 
