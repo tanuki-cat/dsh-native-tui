@@ -10,10 +10,10 @@ DeepSeek Harness 的 host-native 终端前端，基于 pi-tui。
 ## 特性
 
 - 新建/恢复 Session，owned root Agent。
-- 流式文本、Markdown、reasoning、工具卡片（write/edit 结果渲染 ± diff 行）、turn 失败提示。
-- 本地命令与宿主命令执行（compact/feedback/goal/permission/plan）；slash 命令支持子命令补全，例如 `/provider` 显示 add/list/remove。
+- 流式文本、Markdown、reasoning（含网关只在完成时回传整块时的本地逐帧展开）、工具卡片（write/edit 结果渲染 ± diff 行）、turn 失败提示。
+- 本地命令与宿主命令执行（compact/feedback/goal/permission/plan）；slash 命令支持子命令补全，例如 `/provider` 显示 add/list/remove，`/reasoning` 后输入空格显示 map；子命令已完整输入或从补全中选中时回车直接执行。
 - 审批与问答 waterfall；所有独立 overlay（Choice/TextInput/Approval、Markdown/Text Pager、Image）统一使用带边框和全宽背景的 opaque dialog frame，长内容自动换行/补齐。问答面板支持单选与多选：多选用 Space 勾选、Enter 提交，Other 提供自由文本（多选时会与已勾选项一并返回）；每题统一提供 `Skip this question` 行（无选项文本题为 `Answer… / Skip this question` 菜单），跳过只返回 `{ id, selected: [] }` 并继续批次；Esc 或请求 signal 中止则以 `UserQuestionError(ASK_ABORTED)` 取消整个批次。
-- 模型选择器（LLM catalog 为空时明确提示）、reasoning effort 切换、权限预设、后台任务、子代理列表。
+- 模型选择器（LLM catalog 为空时明确提示）、reasoning effort 切换与映射编辑、权限预设、后台任务、子代理列表。
 - 模型与 reasoning effort 通过 Host `agentDefaultModel.saveSelection` 持久化；重启或 `/new` 沿用，不再回落默认。
 - 第三方模型：`/provider add` 引导配置 pi-ai gateway/catalog route，`/provider list|edit|models|remove` 管理。
 - 默认集成官方 `@deepseek-ai/dsh-computer-use`、`@deepseek-ai/dsh-experimental-computer-use-cua-driver-native`、`@deepseek-ai/dsh-mcp-client`（以及 mcp-resources）。
@@ -21,11 +21,12 @@ DeepSeek Harness 的 host-native 终端前端，基于 pi-tui。
 - Agent Presets：standard / ptc / minimal / cordis；/preset 可在首个 turn 前切换当前 Session，已开始的 Session 锁定并用于下一次 /new；选择同时写入 `agent-preset-registry.selectedDefault`，重启后继续使用。
 - Workspace 列表/创建/切换/pin/unpin/archive/unarchive；Schedule 列表/创建/删除；Settings 顶层/嵌套对象/数组字段编辑与 JSON 写入；Plugins 列表/官方市场/检查/安装/移除/启停（带确认，实时应用）。
 - 可选 `fullscreen`：TuiAltScreen + ScrollView，header/status/editor 固定，鼠标滚轮滚动、文本选择复制。
-- Transcript 层次：参考 pi agent 使用全宽背景带（用户消息、reasoning、tool 输出）、assistant/context 标签、notice 图标、turn 分隔线；本地命令输出按 durable event sequence 插入，不会一律堆在 transcript 末尾。
+- Transcript 层次：参考 pi agent 使用全宽背景带（用户消息、reasoning、tool 输出）、assistant/context 标签、notice 图标、turn 分隔线；本地命令输出按 durable event sequence 插入，不会一律堆在 transcript 末尾。reasoning 块按 live chunk 增量刷新；若网关只在完成时回传整块 reasoning（Responses 路径常见），TUI 会按帧展开该块，避免整块突然出现；若展开完成前 durable `assistant/message` 已到达，展开会在 durable 块上按原 block-end 时间继续，而不是突然补全；展开期间后续 tool/step 行会暂缓到 thinking 完成（单块展开上限约 600ms），避免 `run_code` 先于 thinking 出现；若期间出现新的 user 消息或 notice，则优先显示该边界及其后续行。
+- 等待行 `⟳ waiting for API response · Ns` 在请求超过 1 秒后出现，首个可渲染的 text/reasoning chunk 或 durable assistant/tool 事件到达时消失；裸 `block-start` 不会提前清除，避免等待行先消失但内容尚未出现。
 - 运行中 `Esc` / `Ctrl+C` 取消 turn；长文本和 tool 输出按行保持左侧色条。
 - 上下文压缩：默认 preset 启用 `compaction-basic` 自动压力压缩与 context-overflow 恢复，以及 tool-result pruner；TUI 渲染 compaction start/summary/end 和 prune 通知，`/compact` 作为 Host command 可手动触发。
 - 显示密度可配置：`thinkingDisplay` 与 `runCodeDisplay` 均支持 `hidden | compact | detailed`；后者覆盖 `run_code`、`bash`、`pwsh` 等代码执行工具卡。
-- 状态栏常驻当前模型和会话指标：`● idle  model provider/model`、preset/effort/快捷键、turns/steps、tok/s、累计 token、cache hit、context 占用；header 只保留 Session id 和 cwd。context 与 Web 端同口径：读 token meter 的 `contextPressure` 投影（最近一次 provider 采样 + 此后 surface 增减，compaction 的影响已含在内），渲染为 `ctx 42%  (~420K / 1M · compact at 80%)`，其中 `compact at` 是按 `compaction-basic` 的 `thresholdRatio`、`headroomTokens` 与该请求预留输出复算出的自动压缩触发点；首次 provider 采样之前显示 `ctx —`，不猜占用（与 Web ContextMeter 一致）。token 用量与 cache 命中率同样按 Web 口径：总量取四桶之和、部分命中不会显示成 100%，数字格式与 Web 统计 pill 一致。
+- 状态栏常驻当前模型和会话指标：`● idle  model provider/model`、preset/effort/快捷键、turns/steps、tok/s、累计 token、cache hit、context 占用；header 只保留 Session id 和 cwd。context 与 Web 端同口径：读 token meter 的 `contextPressure` 投影（最近一次 provider 采样 + 此后 surface 增减，compaction 的影响已含在内），渲染为 `ctx 42%  (~420K / 1M · compact at 80%)`，其中 `compact at` 是按 `compaction-basic` 的 `thresholdRatio`、`headroomTokens` 与该请求预留输出复算出的自动压缩触发点；首次 provider 采样之前显示 `ctx —`，不猜占用（与 Web ContextMeter 一致）。token 用量与 cache 命中率同样按 Web 口径：总量取四桶之和、部分命中不会显示成 100%，数字格式与 Web 统计 pill 一致。tok/s 为整段 Session 的累计 decode 速率（Host `sessionStats` 的 `decodeTokens / (decodeMs / 1000)`，与 Web 统计 pill 同式），不是瞬时速率；低于 10 时保留一位小数。未挂载 `sessionStats` 投影时，从 `assistant/message` 的 stream 首 token 与 output tokens 回退计算。
 - `@@<query>` 自动补全其他 Session 的 canonical mention；发送时 Host session-reference 自动注入快照。
 - `/export [path]` 导出 Session JSONL；`/export zip [path]` 导出含 manifest、attachments、deliverables 的 ZIP bundle；`/export html [path]` 导出静态 HTML transcript；`/open` 预览文本文件，Markdown 以 pi-tui Markdown 样式分页渲染；`/preview` 渲染 PNG/JPEG/GIF/WebP 图片；`/files` 浏览目录并预览；`/attach` 暂存文件/图片或剪贴板图片并随下一条 prompt 发送（8 MiB 上限），`/attach preview <i>` 可内联预览暂存项，`/attachments` 打开暂存附件管理器（预览/移除）；`/deliverables` 可列出、打开 panel、预览或用系统文件管理器定位 present 交付文件；`/tools` 列出工具调用，`/tool <index>` 分页查看完整参数/结果，`/diff [index]` 查看 write/edit 的独立 diff。
 - 问答/审批在 preset Agent 上仍可用（question probe 已通过）。
@@ -65,7 +66,7 @@ DSH Host 包由当前 dsh 安装提供；插件运行时还依赖 pi-tui、schem
 | /clear | 仅清空终端视图 |
 | /cancel | 取消当前 turn |
 | /model [provider/model] | 打开可搜索的模型列表或直接切换；选择同时保存为默认模型 |
-| /reasoning [effort|default] | 列出或切换当前模型的思考强度并保存；default 清除显式 effort |
+| /reasoning [effort|default|map] | 列出或切换当前模型的思考强度并保存；default 清除显式 effort；map 引导编辑当前模型的 level → wire 映射 |
 | /provider [add|list|edit [route]|models <route>|remove <route>] | 配置/查看 provider；打开配置获取可用模型；刷新或删除 route |
 | /mcp [add|list|remove <name>] | 配置、查看或删除 MCP 服务 |
 | /permissions [preset] | 列出或切换权限预设 |
@@ -131,7 +132,7 @@ Enter 发送；运行中 Enter 作为 steer；Ctrl+C 取消/退出；Ctrl+D 退�
 3. custom gateway 会调用 Host `discoverModels` 请求 `GET {baseURL}/models` 并列出模型（5 秒超时）；catalog route 直接使用 provider 内置模型列表。
 4. 从内置/自动发现的模型中选择，或回退到手动输入 model id/context window/max tokens。**发现列表中的其他模型也会写入该 route**，之后可在 `/model` 中直接切换；选中模型会带上本次选择的 input/reasoning，其他模型使用 discovery 返回的容量/模态，并写入默认 `reasoningEfforts`（`low/medium/high` 同名映射）。
 5. 选择 Input modalities：`Text + image`（vision）或 `Text only`。生成的模型配置会显式写入 `input`；未知能力的自定义网关默认先选 `Text + image`。
-6. 输入 Reasoning levels（逗号分隔，默认 `low,medium,high`；留空表示不支持 reasoning）。生成的模型配置会写入 `reasoningEfforts`，之后可用 `/reasoning` 切换。
+6. 输入 Reasoning levels（逗号分隔，默认 `low,medium,high`；留空表示不支持 reasoning）。生成的模型配置会写入 `reasoningEfforts`，之后可用 `/reasoning` 切换，或运行 `/reasoning map` 引导修改 level → wire 映射。
 
 `apiKeyEnv` 保存的是 credential reference（环境变量名或 DSH credential 名称），不是 key 明文。env 模式下若变量未设置会拒绝保存；store 模式直接写 credential store。
 
@@ -158,6 +159,21 @@ reasoningEfforts:
 ```
 
 运行中切换会在下一 step 生效；状态栏会显示 `effort high`。
+
+编辑当前模型的思考强度映射：
+
+```text
+/reasoning map
+```
+
+`/reasoning` 的 effort 选择菜单里也有 **Edit reasoning map…** 入口；输入 `/reasoning` 后跟空格时补全会提示 `map` 子命令，而精确输入 `/reasoning` 时第一项仍是命令本身，回车打开 effort 选择器；从 `/reasoning ` 的补全中选择 map，或完整输入 `/reasoning map` 后回车，都会一次执行，不再需要第二次补全确认。向导会对当前 `provider/model` 提供：
+
+- **Add or update a level**：从 `off/minimal/low/medium/high/xhigh/max` 中选择 level，再输入该网关实际接收的 wire spelling；`off` 留空表示不下发字段（`null`）。
+- **Remove a level**：从当前映射中移除一个 level；至少保留一个非 `off` level。
+- **Use same-name defaults**：重置为 `low/medium/high` 同名映射。
+- 修改先暂存在内存，选择 **Save and apply** 才写入 `llm-pi-ai` 设置；Esc / Cancel 不落盘。
+
+写入位置取决于 route：显式 `models` 列表中的模型更新该条目的 `reasoningEfforts`；catalog route 没有显式 `models` 时写入 `modelOverrides.<model>.reasoningEfforts`，不复制整个模型目录。若模型还没有存储映射（包括显式 `models` 条目省略 `reasoningEfforts`，以及 `modelOverrides` 未设置映射），向导会从 catalog 报告的 level 生成同名的暂存映射，并将其视为待保存修改；提示核对 wire spelling 后再 **Save and apply**。若 `models` 数组来自其他配置层，保存前会确认将合并后的完整数组写入 profile patch，避免静默遮蔽 base 层配置。如果当前显式 effort 在保存后已不存在，会自动回到 provider default。该向导只编辑由 `llm-pi-ai` 提供的模型；CodeBuddy 等适配器自己管理 level，不能用它修改。
 
 env 模式示例：
 
