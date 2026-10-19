@@ -12,6 +12,7 @@ import { buildChatPayload } from '../src/codebuddy/wire.js'
 import {
   contextWindowOf,
   discoverModels,
+  inputModalitiesOf,
   maxOutputTokensOf,
   parseCatalogue,
   seedCatalogue,
@@ -40,8 +41,8 @@ describe('codebuddy profiles', () => {
     expect(enProfile.chatExtraHeaders?.Accept).toContain('text/event-stream')
   })
 
-  it('always leads with a system message, the gateways require one', () => {
-    const bare = buildChatPayload({
+  it('always leads with a system message, the gateways require one', async () => {
+    const bare = await buildChatPayload({
       provider: 'codebuddy-en',
       model: 'deepseek-v4.1-flash',
       messages: [{ role: 'user', content: [{ type: 'text', text: 'Say OK' }] }],
@@ -50,7 +51,7 @@ describe('codebuddy profiles', () => {
     expect(messages[0]).toEqual({ role: 'system', content: '' })
     expect(messages[1]).toMatchObject({ role: 'user' })
 
-    const withSystem = buildChatPayload({
+    const withSystem = await buildChatPayload({
       provider: 'codebuddy-en',
       model: 'deepseek-v4.1-flash',
       system: 'You answer in one line.',
@@ -104,6 +105,17 @@ describe('codebuddy catalogue mapping', () => {
     expect(maxOutputTokensOf(0)).toBe(DEFAULT_MAX_OUTPUT_TOKENS)
   })
 
+  it('declares image input only when the gateway states it', () => {
+    // Measured 2026-10-19: true is trustworthy, false only means unclaimed.
+    expect(inputModalitiesOf({ supportsImages: true })).toEqual(['text', 'image'])
+    expect(inputModalitiesOf({ supportsImages: false })).toEqual(['text'])
+    expect(inputModalitiesOf({})).toEqual(['text'])
+    expect(inputModalitiesOf({ supportsImages: 'true' })).toEqual(['text'])
+    // disabledMultimodal wins when the two fields disagree.
+    expect(inputModalitiesOf({ supportsImages: true, disabledMultimodal: true })).toEqual(['text'])
+    expect(inputModalitiesOf({ supportsImages: false, disabledMultimodal: false })).toEqual(['text'])
+  })
+
   it('filters media models, maps reasoning and deduplicates', () => {
     const body = JSON.stringify({
       code: 0,
@@ -128,6 +140,7 @@ describe('codebuddy catalogue mapping', () => {
         name: 'chat-a',
         contextWindow: 5000,
         maxTokens: 1000,
+        inputModalities: ['text'],
         reasoningEfforts: ['low', 'max'],
         canDisableThinking: false,
       },
@@ -136,10 +149,12 @@ describe('codebuddy catalogue mapping', () => {
     expect(parseCatalogue('not json')).toEqual([])
   })
 
-  it('offers the seed list before the first discovery', () => {
+  it('offers a text-only seed list before the first discovery', () => {
     const seeds = seedCatalogue(cnProfile)
     expect(seeds.length).toBe(cnProfile.seedModels.length)
     expect(seeds[0]?.id).toBe('deepseek-v4-pro')
+    // A seed is an id, not a capability claim: the catalogue is the authority.
+    expect(seeds.every(seed => seed.inputModalities.includes('image') === false)).toBe(true)
   })
 
   it('reports discovery failures without throwing', async () => {

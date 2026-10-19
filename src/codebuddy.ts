@@ -9,8 +9,16 @@
  * @module dsh-native-tui/codebuddy
  */
 
+import z from '@deepseek-ai/schemastery'
 import type { Context } from '@deepseek-ai/cordis'
-import { CodeBuddyAdapter, type ProfileStatus, type RefreshOutcome } from './codebuddy/adapter.js'
+import {
+  CodeBuddyAdapter,
+  type AttachmentImageService,
+  type ModelOverride,
+  type ModelSummary,
+  type ProfileStatus,
+  type RefreshOutcome,
+} from './codebuddy/adapter.js'
 import { credentialKeyFor, login, type CredentialStoreLike, type LoginSession } from './codebuddy/auth.js'
 import { PROFILES, type CodeBuddyProfile } from './codebuddy/profiles.js'
 
@@ -20,12 +28,38 @@ export const name = 'codebuddy'
 /** The LLM seam is the only service required to register the routes. */
 export const inject = ['llm']
 
+/** Plugin configuration. */
+export interface Config {
+  /**
+   * Per-model modality overrides for models the catalogue describes
+   * conservatively. Measured 2026-10-19: `default` and `glm-5.0` declare no
+   * image input and still read one.
+   */
+  models?: Record<string, ModelOverride>
+}
+
+/**
+ * Loader schema for the codebuddy row.
+ *
+ * `input` is optional because the map itself is optional: an entry may exist
+ * only to be filled in later. A written but empty list is repaired to the
+ * catalogue's own claim instead of declaring a model that accepts nothing —
+ * see `CodeBuddyAdapter.modalitiesOf`.
+ */
+export const Config = z.object({
+  models: z.dict(z.object({
+    input: z.array(z.union(['text', 'image'] as const)),
+  })).default({}),
+}) as unknown as z<Config>
+
 /** The command and diagnostics surface the terminal reads from `host.get('codebuddy')`. */
 export interface CodeBuddyService {
   /** Advertised state of both routes. */
   status(): readonly ProfileStatus[]
   /** Refresh one route, or both when no id is given. */
   refresh(profileId?: string): Promise<readonly RefreshOutcome[]>
+  /** Every model of one route with the modalities it declares. */
+  models(profileId: string): readonly ModelSummary[]
   /** A request-ready access token for one route. */
   accessTokenFor(profileId: string, signal?: AbortSignal): Promise<string>
   /** Delete the stored grant for one route. */
@@ -76,10 +110,15 @@ function registerFlows(authorization: AuthorizationLike, profiles: readonly Code
  * Mount both CodeBuddy routes, their sign-in flows and the terminal-facing
  * service.
  * @param ctx - Host plugin context.
+ * @param config - per-model modality overrides from the Loader row.
  */
-export function apply(ctx: Context): void {
+export function apply(ctx: Context, config: Config = {}): void {
   const adapter = new CodeBuddyAdapter({
     store: () => ctx.get('credentials') as CredentialStoreLike | undefined,
+    // Images reach this adapter as bytes only through the attachment service;
+    // a composition without it stays text-only and says so in the catalogue.
+    resolveAttachments: () => ctx.get('attachments') as AttachmentImageService | undefined,
+    ...(config.models === undefined ? {} : { models: config.models }),
     onDiagnostic: message => ctx.logger?.warn?.(message),
   })
   ctx.llm.registerAdapter(PROFILES.map(profile => profile.id), adapter)

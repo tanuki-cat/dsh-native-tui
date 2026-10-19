@@ -203,6 +203,248 @@ describe('codebuddy adapter', () => {
     const info = await adapter.resolveModel('codebuddy', 'not-in-the-catalogue')
     expect(info.context?.contextWindow).toBe(200_000)
     expect(info.reasoning).toBeUndefined()
+    // An id outside the catalogue makes no capability claim.
+    expect(info.inputModalities).toEqual(['text'])
+  })
+
+  it('reads the catalogue before answering a capability question on a cold route', async () => {
+    // A selected effort is validated against these levels before the first
+    // turn; answering from the seed list would report none and reject it.
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({
+      code: 0,
+      data: {
+        models: [{
+          id: 'reasoning-model',
+          supportsReasoning: true,
+          reasoning: { supportedEfforts: ['low', 'high', 'max'], canDisableThinking: false },
+        }],
+      },
+    })))
+    const adapter = new CodeBuddyAdapter({ store: () => storeOf(freshRecord) })
+    const info = await adapter.resolveModel('codebuddy', 'reasoning-model')
+    expect(info.reasoning?.efforts.map(effort => String(effort.id))).toEqual(['low', 'high', 'max'])
+    // prepareCall is the path a dispatched turn takes, and needs the same answer.
+    const prepared = await adapter.prepareCall('codebuddy', 'reasoning-model')
+    expect(prepared.model.reasoning?.efforts.map(effort => String(effort.id))).toEqual(['low', 'high', 'max'])
+  })
+
+  it('spends at most one catalogue request while the refresh stays fresh', async () => {
+    let fetches = 0
+    vi.stubGlobal('fetch', async () => {
+      fetches += 1
+      return new Response(catalogue)
+    })
+    const adapter = new CodeBuddyAdapter({ store: () => storeOf(freshRecord) })
+    await adapter.resolveModel('codebuddy', 'chat-a')
+    await adapter.resolveModel('codebuddy', 'chat-a')
+    await adapter.prepareCall('codebuddy', 'chat-a')
+    await adapter.listModels('codebuddy')
+    expect(fetches).toBe(1)
+  })
+
+  it('still answers a capability question when the catalogue cannot be read', async () => {
+    vi.stubGlobal('fetch', async () => { throw new Error('socket closed') })
+    const diagnostics: string[] = []
+    const adapter = new CodeBuddyAdapter({
+      store: () => storeOf(freshRecord),
+      onDiagnostic: message => { diagnostics.push(message) },
+    })
+    // The seed list is the only answer left; the turn fails on capability
+    // rather than on a transport error the user cannot act on.
+    const info = await adapter.resolveModel('codebuddy', 'chat-a')
+    expect(info.inputModalities).toEqual(['text'])
+    expect(diagnostics.some(message => message.includes('socket closed'))).toBe(true)
+  })
+
+  it('declares the modalities the catalogue states, once an attachment service is mounted', async () => {
+    const seen: string[] = []
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({
+      code: 0,
+      data: {
+        models: [
+          { id: 'vision', supportsImages: true },
+          { id: 'textual', supportsImages: false },
+          { id: 'switched-off', supportsImages: true, disabledMultimodal: true },
+        ],
+      },
+    })))
+    const adapter = new CodeBuddyAdapter({
+      store: () => storeOf(freshRecord),
+      resolveAttachments: () => ({
+        async readImageRequest() { seen.push('read'); return { data: new Uint8Array(), mediaType: 'image/png' } },
+      }),
+    })
+    await adapter.refresh('codebuddy')
+    const modalities = new Map((await adapter.listModels('codebuddy')).map(model => [model.id, model.inputModalities]))
+    expect(modalities.get('vision')).toEqual(['text', 'image'])
+    expect(modalities.get('textual')).toEqual(['text'])
+    expect(modalities.get('switched-off')).toEqual(['text'])
+    expect((await adapter.resolveModel('codebuddy', 'vision')).inputModalities).toEqual(['text', 'image'])
+    expect(seen).toEqual([])
+  })
+
+  it('stays text-only without an attachment service, even when the catalogue declares images', async () => {
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({
+      code: 0,
+      data: { models: [{ id: 'vision', supportsImages: true }] },
+    })))
+    const adapter = new CodeBuddyAdapter({ store: () => storeOf(freshRecord) })
+    await adapter.refresh('codebuddy')
+    // Bytes cannot be produced, so declaring images would only fail the turn later.
+    expect((await adapter.listModels('codebuddy'))[0]?.inputModalities).toEqual(['text'])
+    expect((await adapter.resolveModel('codebuddy', 'vision')).inputModalities).toEqual(['text'])
+  })
+
+  it('reports which declarations the missing attachment service narrowed', async () => {
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({
+      code: 0,
+      data: { models: [{ id: 'vision', supportsImages: true }, { id: 'textual', supportsImages: false }] },
+    })))
+    const adapter = new CodeBuddyAdapter({
+      store: () => storeOf(freshRecord),
+      // The operator says this model reads images; the catalogue disagrees.
+      models: { textual: { input: ['text', 'image'] } },
+    })
+    await adapter.refresh('codebuddy')
+    const byId = new Map(adapter.models('codebuddy').map(model => [model.id, model]))
+    // Both wanted images and both were narrowed, whichever layer asked.
+    expect(byId.get('vision')?.degraded).toBe('no-attachment-service')
+    expect(byId.get('textual')?.degraded).toBe('no-attachment-service')
+    expect(byId.get('textual')?.source).toBe('override')
+    // The declaration in force before the narrowing is what makes the report
+    // honest: the operator override is named even though the catalogue said no.
+    expect(byId.get('textual')?.declaredModalities).toEqual(['text', 'image'])
+    expect(byId.get('textual')?.statedModalities).toEqual(['text'])
+    expect(byId.get('textual')?.inputModalities).toEqual(['text'])
+  })
+
+  it('leaves a text-only declaration undegraded', async () => {
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({
+      code: 0,
+      data: { models: [{ id: 'textual', supportsImages: false }] },
+    })))
+    const adapter = new CodeBuddyAdapter({ store: () => storeOf(freshRecord) })
+    await adapter.refresh('codebuddy')
+    const summary = adapter.models('codebuddy')[0]
+    // Nothing asked for images, so no attachment service is being missed.
+    expect(summary?.degraded).toBeUndefined()
+    expect(summary?.declaredModalities).toEqual(['text'])
+  })
+
+  it('leaves an override undegraded once an attachment service is mounted', async () => {
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({
+      code: 0,
+      data: { models: [{ id: 'textual', supportsImages: false }] },
+    })))
+    const adapter = new CodeBuddyAdapter({
+      store: () => storeOf(freshRecord),
+      models: { textual: { input: ['text', 'image'] } },
+      resolveAttachments: () => ({ async readImageRequest() { return { data: new Uint8Array(), mediaType: 'image/png' } } }),
+    })
+    await adapter.refresh('codebuddy')
+    const summary = adapter.models('codebuddy')[0]
+    expect(summary?.degraded).toBeUndefined()
+    expect(summary?.inputModalities).toEqual(['text', 'image'])
+  })
+
+  it('lets a per-model override correct the catalogue', async () => {
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({
+      code: 0,
+      data: { models: [{ id: 'default', supportsImages: false }, { id: 'vision', supportsImages: true }] },
+    })))
+    const adapter = new CodeBuddyAdapter({
+      store: () => storeOf(freshRecord),
+      resolveAttachments: () => ({ async readImageRequest() { return { data: new Uint8Array(), mediaType: 'image/png' } } }),
+      // Measured: this model declares no images and still reads them.
+      models: { default: { input: ['text', 'image'] }, vision: { input: ['text'] } },
+    })
+    await adapter.refresh('codebuddy')
+    const byId = new Map((await adapter.listModels('codebuddy')).map(model => [model.id, model.inputModalities]))
+    expect(byId.get('default')).toEqual(['text', 'image'])
+    expect(byId.get('vision')).toEqual(['text'])
+    expect((await adapter.resolveModel('codebuddy', 'default')).inputModalities).toEqual(['text', 'image'])
+  })
+
+  it('treats an empty override as no override', async () => {
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({
+      code: 0,
+      data: { models: [{ id: 'vision', supportsImages: true }, { id: 'textual', supportsImages: false }] },
+    })))
+    const adapter = new CodeBuddyAdapter({
+      store: () => storeOf(freshRecord),
+      resolveAttachments: () => ({ async readImageRequest() { return { data: new Uint8Array(), mediaType: 'image/png' } } }),
+      // The schema fills a written but empty input with [], which must not be
+      // read as "this model accepts nothing".
+      models: { vision: { input: [] }, textual: { input: [] } },
+    })
+    await adapter.refresh('codebuddy')
+    const byId = new Map(adapter.models('codebuddy').map(model => [model.id, model]))
+    expect(byId.get('vision')?.inputModalities).toEqual(['text', 'image'])
+    expect(byId.get('textual')?.inputModalities).toEqual(['text'])
+    // An empty override is not a claim, so the catalogue stays the source.
+    expect(byId.get('vision')?.source).toBe('catalogue')
+  })
+
+  it('keeps listing models when the attachment resolver throws', async () => {
+    const diagnostics: string[] = []
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({
+      code: 0,
+      data: { models: [{ id: 'vision', supportsImages: true }] },
+    })))
+    const adapter = new CodeBuddyAdapter({
+      store: () => storeOf(freshRecord),
+      resolveAttachments: () => { throw new Error('service store is closed') },
+      onDiagnostic: message => { diagnostics.push(message) },
+    })
+    await adapter.refresh('codebuddy')
+    expect((await adapter.listModels('codebuddy'))[0]?.inputModalities).toEqual(['text'])
+    expect((await adapter.resolveModel('codebuddy', 'vision')).inputModalities).toEqual(['text'])
+    expect(adapter.models('codebuddy')[0]?.inputModalities).toEqual(['text'])
+    expect(diagnostics.some(message => message.includes('service store is closed'))).toBe(true)
+  })
+
+  it('looks the attachment service up once per listing', async () => {
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({
+      code: 0,
+      data: {
+        models: [
+          { id: 'a', supportsImages: true },
+          { id: 'b', supportsImages: true },
+          { id: 'c', supportsImages: true },
+          { id: 'd', supportsImages: true },
+        ],
+      },
+    })))
+    let calls = 0
+    const adapter = new CodeBuddyAdapter({
+      store: () => storeOf(freshRecord),
+      resolveAttachments: () => { calls += 1; return { async readImageRequest() { return { data: new Uint8Array(), mediaType: 'image/png' } } } },
+    })
+    await adapter.refresh('codebuddy')
+    calls = 0
+    await adapter.listModels('codebuddy')
+    expect(calls).toBe(1)
+    calls = 0
+    adapter.models('codebuddy')
+    expect(calls).toBe(1)
+  })
+
+  it('projects image request targets the same way the payload does', () => {
+    const adapter = new CodeBuddyAdapter({ store: () => undefined })
+    const ref = { attachmentId: 'sha256:aa', mediaType: 'image/png', bytes: 10, width: 100, height: 50 }
+    expect(adapter.imageRequestTarget('codebuddy', 'chat-a', ref as never))
+      .toEqual({ width: 100, height: 50, maxBytes: 1024 * 1024 })
+  })
+
+  it('never projects a malformed size to an unreadable thumbnail', () => {
+    const adapter = new CodeBuddyAdapter({ store: () => undefined })
+    const ref = { attachmentId: 'sha256:aa', mediaType: 'image/png', bytes: 10, width: 0, height: 0 }
+    const target = adapter.imageRequestTarget('codebuddy', 'chat-a', ref as never)
+    // A 1x1 request image would be encoded and sent without any diagnosis;
+    // asking for the full budget keeps the image usable instead.
+    expect(target.width).toBeGreaterThan(1)
+    expect(target.height).toBeGreaterThan(1)
+    expect(target.width * target.height).toBeLessThanOrEqual(2048 * 2048)
   })
 
   it('streams a chat call through the stored credential', async () => {

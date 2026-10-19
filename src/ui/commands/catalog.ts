@@ -24,7 +24,7 @@ export const HELP_LINES: readonly string[] = [
   '/files [path] · /changes [diff <index>] · /deliverables [panel|open|reveal <index>]',
   '/tools · /tool <index> · /diff [index] · /exit',
   '/attach <path>|paste|preview <i>|list|clear · /attachments · /exit',
-  '/codebuddy [status|login|logout|models refresh|quota|checkin|doctor]',
+  '/codebuddy [status|login|logout|models [refresh]|quota|checkin|doctor]',
   '@@<query> references another session · /exit',
 ]
 
@@ -79,11 +79,11 @@ export const LOCAL_COMMANDS: readonly CommandSuggestion[] = [
     { name: 'list', description: 'list configured MCP servers' },
     { name: 'remove', description: 'remove an MCP server', hint: '<name>' },
   ] },
-  { name: 'codebuddy', description: 'CodeBuddy / WorkBuddy sign-in, models and credits', input: { hint: '[status|login|logout|models refresh|quota|checkin|doctor]' }, subcommands: [
+  { name: 'codebuddy', description: 'CodeBuddy / WorkBuddy sign-in, models and credits', input: { hint: '[status|login|logout|models [refresh]|quota|checkin|doctor]' }, subcommands: [
     { name: 'status', description: 'sign-in state, token rotation, catalogue' },
     { name: 'login', description: 'open the browser sign-in', hint: '[cn|en|all]' },
     { name: 'logout', description: 'remove the stored credential', hint: '[cn|en|all]' },
-    { name: 'models', description: 'force a catalogue refresh', hint: 'refresh [cn|en]' },
+    { name: 'models', description: 'list models and the input modalities they declare', hint: '[refresh] [cn|en]' },
     { name: 'quota', description: 'remaining credits', hint: '[cn|en]' },
     { name: 'checkin', description: 'claim today credits', hint: '[cn|en]' },
     { name: 'doctor', description: 'endpoint and catalogue probe' },

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { buildChatPayload } from '../src/codebuddy/wire.js'
 import { decodeSse, type SseFrame } from '../src/codebuddy/sse.js'
 import { streamChat, toStreamChunks } from '../src/codebuddy/stream.js'
@@ -11,6 +11,15 @@ afterEach(() => { vi.unstubAllGlobals() })
 function optionsOf(overrides: Record<string, unknown>): GenerateOptions {
   return { provider: 'codebuddy', model: 'chat-a', messages: [], ...overrides } as unknown as GenerateOptions
 }
+
+/** One normalized image reference: 4096x2048, so the pixel budget must shrink it. */
+const imageRef = {
+  attachmentId: 'sha256:0123456789abcdef',
+  mediaType: 'image/png',
+  bytes: 4096,
+  width: 4096,
+  height: 2048,
+} as unknown as Extract<ContentBlock, { type: 'image' }>['attachment']
 
 /** Encode text chunks as one byte stream. */
 function streamOf(chunks: readonly string[]): ReadableStream<Uint8Array> {
@@ -43,8 +52,8 @@ async function chunksOf(payloads: readonly string[]): Promise<StreamChunk[]> {
 }
 
 describe('codebuddy wire serialization', () => {
-  it('sends the verified request shape', () => {
-    const body = buildChatPayload(optionsOf({
+  it('sends the verified request shape', async () => {
+    const body = await buildChatPayload(optionsOf({
       system: 'be brief',
       maxTokens: 128,
       temperature: 0.2,
@@ -71,8 +80,8 @@ describe('codebuddy wire serialization', () => {
     expect(body).not.toHaveProperty('stream_options')
   })
 
-  it('serializes tool calls and their results', () => {
-    const body = buildChatPayload(optionsOf({
+  it('serializes tool calls and their results', async () => {
+    const body = await buildChatPayload(optionsOf({
       messages: [
         {
           role: 'assistant',
@@ -96,19 +105,296 @@ describe('codebuddy wire serialization', () => {
     ])
   })
 
-  it('pairs reasoning_effort with reasoning_summary and refuses images', () => {
-    const on = buildChatPayload(optionsOf({ reasoningEffort: 'high' }), cnProfile)
+  it('pairs reasoning_effort with reasoning_summary', async () => {
+    const on = await buildChatPayload(optionsOf({ reasoningEffort: 'high' }), cnProfile)
     expect(on.reasoning_effort).toBe('high')
     expect(on.reasoning_summary).toBe('auto')
-    expect(buildChatPayload(optionsOf({ reasoningEffort: 'off' }), cnProfile)).not.toHaveProperty('reasoning_effort')
-    expect(() => buildChatPayload(optionsOf({
+    expect(await buildChatPayload(optionsOf({ reasoningEffort: 'off' }), cnProfile)).not.toHaveProperty('reasoning_effort')
+  })
+
+  it('sends a user image as a base64 image_url part', async () => {
+    const seen: string[] = []
+    const body = await buildChatPayload(optionsOf({
       messages: [{
         role: 'user',
-        content: [{ type: 'image', attachment: { name: 'a.png' } }],
+        content: [
+          { type: 'text', text: 'what color?' },
+          { type: 'image', attachment: imageRef },
+        ],
         source: { kind: 'user' },
         id: 'u',
       }],
-    }), cnProfile)).toThrowError(/text-only/u)
+    }), cnProfile, undefined, {
+      reader: {
+        async readImageRequest(ref: unknown, target: { width: number; height: number; maxBytes: number }) {
+          seen.push(JSON.stringify(target))
+          return { data: new Uint8Array([1, 2, 3]), mediaType: 'image/png' }
+        },
+      },
+    })
+    const messages = body.messages as { role: string; content: unknown }[]
+    expect(messages[1]).toEqual({
+      role: 'user',
+      content: [
+        { type: 'text', text: 'what color?' },
+        { type: 'image_url', image_url: { url: 'data:image/png;base64,' + Buffer.from([1, 2, 3]).toString('base64') } },
+      ],
+    })
+    // The reader is asked for a projected target, not the source dimensions:
+    // 4096x2048 shrinks inside the 2048² pixel budget, aspect preserved.
+    expect(seen[0]).toBe(JSON.stringify({ width: 2896, height: 1448, maxBytes: 1024 * 1024 }))
+  })
+
+  it('sends a tool-result image and keeps text-only content a string', async () => {
+    const body = await buildChatPayload(optionsOf({
+      messages: [
+        {
+          role: 'assistant',
+          content: [{ type: 'tool-call', id: 'call_1', name: 'shot', arguments: '{}' }],
+          source: { kind: 'model', provider: 'codebuddy', model: 'chat-a' },
+          id: 'a',
+        },
+        {
+          role: 'tool',
+          toolCallId: 'call_1',
+          content: [{ type: 'text', text: 'captured' }, { type: 'image', attachment: imageRef }],
+          source: { kind: 'tool', callId: 'call_1' },
+          id: 't',
+        },
+      ],
+    }), cnProfile, undefined, {
+      reader: { async readImageRequest() { return { data: new Uint8Array([9]), mediaType: 'image/jpeg' } } },
+    })
+    const messages = body.messages as { role: string; content: unknown }[]
+    expect(messages[2]).toEqual({
+      role: 'tool',
+      tool_call_id: 'call_1',
+      content: [
+        { type: 'text', text: 'captured' },
+        { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,' + Buffer.from([9]).toString('base64') } },
+      ],
+    })
+  })
+
+  it('degrades an unreadable image to placeholder text and reports it', async () => {
+    const diagnostics: string[] = []
+    const body = await buildChatPayload(optionsOf({
+      messages: [{
+        role: 'user',
+        content: [{ type: 'image', attachment: imageRef }],
+        source: { kind: 'user' },
+        id: 'u',
+      }],
+    }), cnProfile, undefined, {
+      reader: { async readImageRequest() { throw new Error('store offline') } },
+      onDiagnostic: message => { diagnostics.push(message) },
+    })
+    const messages = body.messages as { role: string; content: unknown }[]
+    const content = messages[1]?.content as { type: string; text?: string }[]
+    expect(content[0]?.type).toBe('text')
+    expect(content[0]?.text).toContain('image unavailable')
+    expect(diagnostics).toHaveLength(1)
+    expect(diagnostics[0]).toContain('store offline')
+  })
+
+  it('names an image the endpoint cannot carry in that role', async () => {
+    await expect(buildChatPayload(optionsOf({
+      messages: [{
+        role: 'system',
+        content: [{ type: 'image', attachment: imageRef }],
+        source: { kind: 'system-prompt' },
+        id: 's',
+      }],
+    }), cnProfile)).rejects.toThrowError(/user messages and tool results/u)
+  })
+
+  it('drops a developer message instead of failing on its image', async () => {
+    // The developer message never reaches this endpoint, so its image is not a
+    // capability problem and must not fail the turn.
+    const body = await buildChatPayload(optionsOf({
+      messages: [
+        { role: 'developer', content: [{ type: 'image', attachment: imageRef }], source: { kind: 'user' }, id: 'd' },
+        { role: 'user', content: [{ type: 'text', text: 'hello' }], source: { kind: 'user' }, id: 'u' },
+      ],
+    }), cnProfile, undefined, {
+      reader: { async readImageRequest() { throw new Error('must not read a dropped message') } },
+    })
+    const messages = body.messages as { role: string }[]
+    expect(messages.map(message => message.role)).toEqual(['system', 'user'])
+  })
+
+  it('does not send bytes for an image the host marked offloaded', async () => {
+    const reads: string[] = []
+    const body = await buildChatPayload(optionsOf({
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: 'older image' },
+          { type: 'image', attachment: imageRef, offloaded: true },
+        ],
+        source: { kind: 'user' },
+        id: 'u',
+      }],
+    }), cnProfile, undefined, {
+      reader: {
+        async readImageRequest(ref: { attachmentId: string }) {
+          reads.push(ref.attachmentId)
+          return { data: new Uint8Array([1]), mediaType: 'image/png' }
+        },
+      },
+    })
+    expect(reads).toEqual([])
+    const messages = body.messages as { role: string; content: unknown }[]
+    const content = messages[1]?.content as { type: string; text?: string }[]
+    expect(content.map(part => part.type)).toEqual(['text', 'text'])
+    expect(content[0]?.text).toBe('older image')
+    // The host's own placeholder, not this route's "unavailable" wording.
+    expect(content[1]?.text).toContain('sha256:')
+    expect(JSON.stringify(body)).not.toContain('image_url')
+  })
+
+  it('reads one attachment once however many messages cite it', async () => {
+    const reads: string[] = []
+    const reader = {
+      async readImageRequest(ref: { attachmentId: string }) {
+        reads.push(ref.attachmentId)
+        return { data: new Uint8Array([1]), mediaType: 'image/png' }
+      },
+    }
+    const body = await buildChatPayload(optionsOf({
+      messages: [
+        { role: 'user', content: [{ type: 'image', attachment: imageRef }], source: { kind: 'user' }, id: 'u1' },
+        { role: 'user', content: [{ type: 'text', text: 'again' }, { type: 'image', attachment: imageRef }], source: { kind: 'user' }, id: 'u2' },
+      ],
+    }), cnProfile, undefined, { reader })
+    expect(reads).toEqual([imageRef.attachmentId])
+    const messages = body.messages as { role: string; content: unknown }[]
+    expect(JSON.stringify(messages[1])).toContain('image_url')
+    expect(JSON.stringify(messages[2])).toContain('image_url')
+  })
+
+  it('pairs each prepared image with its own attachment', async () => {
+    // Two distinct attachments read concurrently. If the reads were zipped by
+    // position instead of by reference, each message would carry the other
+    // image's bytes — a wrong answer with nothing to point at in the body.
+    const first = { ...imageRef, attachmentId: 'sha256:' + '1'.repeat(56) }
+    const second = { ...imageRef, attachmentId: 'sha256:' + '2'.repeat(56) }
+    const body = await buildChatPayload(optionsOf({
+      messages: [
+        { role: 'user', content: [{ type: 'image', attachment: first }], source: { kind: 'user' }, id: 'u1' },
+        { role: 'user', content: [{ type: 'image', attachment: second }], source: { kind: 'user' }, id: 'u2' },
+      ],
+    }), cnProfile, undefined, {
+      reader: {
+        async readImageRequest(ref: { attachmentId: string }) {
+          // The later reference resolves first, so completion order differs from
+          // request order: only identity, not position, can pair them correctly.
+          if (ref.attachmentId === first.attachmentId) await new Promise(resolve => setTimeout(resolve, 5))
+          // Distinct lengths, so the two data URIs cannot be confused by a
+          // substring match: three bytes versus one.
+          const data = ref.attachmentId === first.attachmentId ? new Uint8Array([0x11, 0x11, 0x11]) : new Uint8Array([0x22])
+          return { data, mediaType: 'image/png' }
+        },
+      },
+    })
+    const messages = body.messages as { content: { image_url?: { url: string } }[] }[]
+    expect(messages[1]?.content[0]?.image_url?.url).toContain(Buffer.from([0x11, 0x11, 0x11]).toString('base64'))
+    expect(messages[2]?.content[0]?.image_url?.url).toContain(Buffer.from([0x22]).toString('base64'))
+    expect(messages[2]?.content[0]?.image_url?.url).not.toContain(Buffer.from([0x11, 0x11, 0x11]).toString('base64'))
+  })
+
+  it('fails with IMAGE_OFFLOAD_REQUIRED when retained images exceed the inline budget', async () => {
+    // Two images at 12 MiB encoded each clear the 20 MiB inline budget only by
+    // offloading the oldest occurrence first.
+    const big = { ...imageRef, bytes: 12 * 1024 * 1024 }
+    const body = () => buildChatPayload(optionsOf({
+      messages: [
+        { role: 'user', content: [{ type: 'image', attachment: { ...big, attachmentId: 'sha256:first' } }], source: { kind: 'user' }, id: 'u1' },
+        { role: 'user', content: [{ type: 'image', attachment: { ...big, attachmentId: 'sha256:second' } }], source: { kind: 'user' }, id: 'u2' },
+      ],
+    }), cnProfile, undefined, {
+      reader: {
+        async readImageRequest(ref: { attachmentId: string }) {
+          return { data: new Uint8Array(big.bytes), mediaType: 'image/png' }
+        },
+      },
+    })
+    await expect(body()).rejects.toMatchObject({
+      code: 'IMAGE_OFFLOAD_REQUIRED',
+      failure: { offloadImages: 1 },
+    })
+
+    // Offloading the oldest occurrence brings the same request back in budget.
+    const fits = await buildChatPayload(optionsOf({
+      messages: [
+        { role: 'user', content: [{ type: 'image', attachment: { ...big, attachmentId: 'sha256:first' }, offloaded: true }], source: { kind: 'user' }, id: 'u1' },
+        { role: 'user', content: [{ type: 'image', attachment: { ...big, attachmentId: 'sha256:second' } }], source: { kind: 'user' }, id: 'u2' },
+      ],
+    }), cnProfile, undefined, {
+      reader: { async readImageRequest() { return { data: new Uint8Array(big.bytes), mediaType: 'image/png' } } },
+    })
+    const fitsMessages = fits.messages as { content: { type: string }[] }[]
+    // One image part survives; the offloaded occurrence is placeholder text.
+    expect(fitsMessages[1]?.content.map(part => part.type)).toEqual(['text'])
+    expect(fitsMessages[2]?.content.map(part => part.type)).toEqual(['image_url'])
+  })
+
+  it('prices only the messages it actually sends', async () => {
+    const big = { ...imageRef, bytes: 12 * 1024 * 1024 }
+    const reader = { async readImageRequest() { return { data: new Uint8Array(big.bytes), mediaType: 'image/png' } } }
+    // A dropped developer image must not consume the inline budget: only one
+    // image is posted, so the request fits.
+    const body = await buildChatPayload(optionsOf({
+      messages: [
+        { role: 'developer', content: [{ type: 'image', attachment: { ...big, attachmentId: 'sha256:dev' } }], source: { kind: 'user' }, id: 'd' },
+        { role: 'user', content: [{ type: 'image', attachment: { ...big, attachmentId: 'sha256:user' } }], source: { kind: 'user' }, id: 'u' },
+      ],
+    }), cnProfile, undefined, { reader })
+    const messages = body.messages as { role: string; content: { type: string }[] }[]
+    expect(messages.map(message => message.role)).toEqual(['system', 'user'])
+    expect(messages[1]?.content.map(part => part.type)).toEqual(['image_url'])
+  })
+
+  it('reports an unsupported image role before pricing it', async () => {
+    const big = { ...imageRef, bytes: 12 * 1024 * 1024 }
+    // Two assistant images would blow the budget, but the role is unsendable:
+    // naming that is the actionable failure, not an offload request.
+    await expect(buildChatPayload(optionsOf({
+      messages: [
+        { role: 'assistant', content: [{ type: 'image', attachment: { ...big, attachmentId: 'sha256:a1' } }], source: { kind: 'model', provider: 'codebuddy', model: 'chat-a' }, id: 'a1' },
+        { role: 'assistant', content: [{ type: 'image', attachment: { ...big, attachmentId: 'sha256:a2' } }], source: { kind: 'model', provider: 'codebuddy', model: 'chat-a' }, id: 'a2' },
+      ],
+    }), cnProfile, undefined, { reader: { async readImageRequest() { return { data: new Uint8Array(big.bytes), mediaType: 'image/png' } } } }))
+      .rejects.toMatchObject({ code: 'UNSUPPORTED_CONTENT' })
+  })
+
+  it('overlaps the reads of distinct images', async () => {
+    let concurrent = 0
+    let peak = 0
+    const attachments = ['sha256:a', 'sha256:b', 'sha256:c', 'sha256:d'].map(attachmentId => ({
+      ...imageRef,
+      attachmentId,
+    }))
+    const body = await buildChatPayload(optionsOf({
+      messages: attachments.map((attachment, index) => ({
+        role: 'user' as const,
+        content: [{ type: 'image' as const, attachment }],
+        source: { kind: 'user' as const },
+        id: 'u' + String(index),
+      })),
+    }), cnProfile, undefined, {
+      reader: {
+        async readImageRequest() {
+          concurrent += 1
+          peak = Math.max(peak, concurrent)
+          await new Promise(resolve => setTimeout(resolve, 10))
+          concurrent -= 1
+          return { data: new Uint8Array([1]), mediaType: 'image/png' }
+        },
+      },
+    })
+    expect(peak).toBeGreaterThan(1)
+    expect(body.messages).toHaveLength(5)
   })
 })
 

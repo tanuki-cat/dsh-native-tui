@@ -15,7 +15,34 @@ import {
 import { sanitizeTerminalText } from '../../runtime/files.js'
 import { showImagePreview } from '../dialogs.js'
 import type { CommandContext } from './context.js'
+import type { LLM } from './services.js'
 import { NL, errorMessage } from './shared.js'
+
+/**
+ * Warn when the current model declares no image input.
+ *
+ * The terminal submits prompts straight to the agent, so it never passes the
+ * session controller's admission check; without this the image would silently
+ * become placeholder text at request time instead of reaching the model.
+ * @param ctx - command context carrying the routed model and the LLM catalog.
+ */
+async function warnIfModelTextOnly(ctx: CommandContext): Promise<void> {
+  const current = ctx.modelSelection.current
+  if (current === undefined) return
+  const llm = ctx.host.get('llm') as LLM | undefined
+  if (llm === undefined) return
+  try {
+    const info = await llm.resolveModelInfo(current.provider, current.model)
+    if (info.inputModalities === undefined) return
+    if (info.inputModalities.includes('image')) return
+    ctx.notice('warning', 'The current model (' + current.provider + '/' + current.model
+      + ') declares no image input; the image will reach it as placeholder text. Switch models to send it.')
+  }
+  catch {
+    // A catalogue that cannot answer leaves the staged attachment usable: the
+    // request itself still projects the image, so this is advice, not a gate.
+  }
+}
 
 /** The attachment service, or the notice that says it is missing. */
 function requireAttachments(ctx: CommandContext): AttachmentsService | undefined {
@@ -64,6 +91,7 @@ async function attachPaste(ctx: CommandContext, attachments: AttachmentsService)
       block: { type: 'image', attachment: ref },
     })
     ctx.notice('info', 'Attached clipboard image: ' + name + ' (sent with the next prompt)')
+    await warnIfModelTextOnly(ctx)
     ctx.renderStatus()
   }
   catch (error) {
@@ -156,6 +184,7 @@ export async function attachCommand(ctx: CommandContext, args: string): Promise<
     const pending = await loadAttachment(args, ctx.config.cwd, attachments)
     ctx.attachments.pending.push(pending)
     ctx.notice('info', 'Attached ' + pending.kind + ': ' + pending.label + ' (sent with the next prompt)')
+    if (pending.kind === 'image') await warnIfModelTextOnly(ctx)
     ctx.renderStatus()
   }
   catch (error) {

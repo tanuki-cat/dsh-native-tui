@@ -11,6 +11,7 @@
 
 import { LlmAdapter, LlmError, ReasoningEffortId, resolveRetryPolicy } from '@deepseek-ai/dsh-llm'
 import type {
+  ContentBlock,
   GenerateOptions,
   LlmModelInfo,
   LlmProviderInfo,
@@ -20,9 +21,9 @@ import type {
   StreamChunk,
 } from '@deepseek-ai/dsh-llm'
 import { accessToken, logout, readGrant, type CredentialStoreLike } from './auth.js'
-import { discoverModels, seedCatalogue, type CatalogueModel } from './models.js'
+import { discoverModels, seedCatalogue, TEXT_ONLY, type CatalogueModel, type InputModality } from './models.js'
 import { DEFAULT_CONTEXT_WINDOW, PROFILES, getProfile, type CodeBuddyProfile } from './profiles.js'
-import { buildChatPayload } from './wire.js'
+import { buildChatPayload, imageTargetOf, type WireImageReader } from './wire.js'
 import { streamChat } from './stream.js'
 
 /** Catalogue freshness window: a picker open after this refreshes once. */
@@ -73,12 +74,69 @@ export interface RefreshOutcome {
   readonly error?: string
 }
 
+/** Where one model's declared modalities came from. */
+export type ModalitySource = 'catalogue' | 'override' | 'seed'
+
+/**
+ * Why a declaration the route wanted was narrowed before the harness read it.
+ *
+ * The only narrowing this route performs is the attachment fallback: a model
+ * declared with images by the catalogue or by an operator override is still
+ * declared text-only when this composition cannot produce image bytes. Naming
+ * the cause is what lets a reader tell a working override from an inactive one.
+ */
+export type ModalityDegradation = 'no-attachment-service'
+
+/** One model as the /codebuddy models surface reports it. */
+export interface ModelSummary {
+  readonly id: string
+  /** What the harness gate will read for this model right now. */
+  readonly inputModalities: readonly InputModality[]
+  /** What the catalogue states, before any override or attachment fallback. */
+  readonly statedModalities: readonly InputModality[]
+  /** The declaration in force before the attachment fallback, override included. */
+  readonly declaredModalities: readonly InputModality[]
+  readonly source: ModalitySource
+  /** Set when {@link declaredModalities} asked for images this composition cannot send. */
+  readonly degraded?: ModalityDegradation
+}
+
+/** One image the harness hands an adapter: normalized bytes plus display size. */
+type ImageRef = Extract<ContentBlock, { type: 'image' }>['attachment']
+
+/** Attachment capability this adapter reads request-size images from. */
+export interface AttachmentImageService {
+  readImageRequest(
+    ref: ImageRef,
+    target: { width: number; height: number; maxBytes: number },
+    signal?: AbortSignal,
+  ): Promise<{ data: Uint8Array; mediaType: string }>
+}
+
+/** One operator claim about a model the catalogue cannot answer for. */
+export interface ModelOverride {
+  /** Modalities to declare instead of the catalogue's. */
+  readonly input?: readonly InputModality[]
+}
+
 /** Constructor dependencies of {@link CodeBuddyAdapter}. */
 export interface CodeBuddyAdapterOptions {
   /** The credential seam, or undefined in a composition without one. */
   store: () => CredentialStoreLike | undefined
   /** Host projection for durable file references, when the runtime offers one. */
   resolveFileText?: (ref: unknown) => string
+  /**
+   * Attachment service, when this composition mounts one. Without it an image
+   * cannot be turned into bytes, so every model stays text-only regardless of
+   * what the catalogue states.
+   */
+  resolveAttachments?: () => AttachmentImageService | undefined
+  /**
+   * Per-model modality overrides, keyed by model id. The catalogue decides by
+   * default; this exists for the models it describes conservatively — measured
+   * 2026-10-19, `default` and `glm-5.0` declare no images and still read them.
+   */
+  models?: Readonly<Record<string, ModelOverride>>
   /** Observe a contained catalogue or credential failure. */
   onDiagnostic?: (message: string) => void
 }
@@ -135,33 +193,127 @@ export class CodeBuddyAdapter extends LlmAdapter {
       const profile = this.profileOf(provider)
       const state = this.stateOf(profile)
       await this.refreshCatalogue(profile, state, false)
+      // One capability lookup per listing, not one per model.
+      const imageService = this.attachmentService() !== undefined
       return state.models.map(model => ({
         provider,
         id: model.id,
         name: model.name,
-        inputModalities: ['text'] as const,
+        inputModalities: this.modalitiesOf(model, imageService),
       }))
     })
   }
 
+  /**
+   * The attachment service, or undefined when this composition cannot send
+   * image bytes.
+   *
+   * The host resolves a missing service to undefined; a resolver that throws
+   * is a broken composition, not an image capability, so it reads as "no
+   * service" instead of failing every model listing or the turn that hit it.
+   * @returns the service, or undefined.
+   */
+  private attachmentService(): AttachmentImageService | undefined {
+    try {
+      return this.config.resolveAttachments?.()
+    }
+    catch (error) {
+      this.config.onDiagnostic?.('attachment service unavailable: '
+        + (error instanceof Error ? error.message : String(error)))
+      return undefined
+    }
+  }
+
+  /**
+   * The operator's modality claim for one model, when there is one.
+   *
+   * The schema fills a written but empty `input` with `[]`; a model that
+   * accepts nothing is neither a state this route can send nor one an operator
+   * could have meant, so an empty list is treated as no claim at all.
+   * @param modelId - catalogue model id.
+   * @returns the declared modalities, or undefined.
+   */
+  private overrideOf(modelId: string): readonly InputModality[] | undefined {
+    const input = this.config.models?.[modelId]?.input
+    return input !== undefined && input.length > 0 ? input : undefined
+  }
+
+  /**
+   * The modalities this route wants for one catalogue entry, before any
+   * composition limit applies. An override wins when it states something;
+   * otherwise the catalogue answers.
+   * @param model - catalogue entry.
+   * @returns the declared modalities.
+   */
+  private declaredModalitiesOf(model: CatalogueModel): readonly InputModality[] {
+    return this.overrideOf(model.id) ?? model.inputModalities
+  }
+
+  /**
+   * Modalities to declare for one catalogue entry.
+   *
+   * A composition without an attachment service cannot produce image bytes at
+   * all, so declaring images there would only fail the turn later. That the
+   * narrowing happened is reported by {@link CodeBuddyAdapter.models}, not
+   * swallowed here.
+   * @param model - catalogue entry.
+   * @param imageService - whether this composition can read image bytes.
+   * @returns the modalities the harness gate reads.
+   */
+  private modalitiesOf(model: CatalogueModel, imageService: boolean): readonly InputModality[] {
+    const declared = this.declaredModalitiesOf(model)
+    if (!declared.includes('image')) return declared
+    return imageService ? declared : TEXT_ONLY
+  }
+
+  /** The request-image projection this route actually sends. */
+  override imageRequestTarget(_provider: string, _model: string, image: ImageRef): { width: number; height: number; maxBytes: number } {
+    return imageTargetOf(image)
+  }
+
   override resolveModel(provider: string, model: string, _signal?: AbortSignal): Promise<LlmResolvedModelInfo> {
-    return Promise.resolve().then(() => {
+    return Promise.resolve().then(async () => {
       const profile = this.profileOf(provider)
-      return this.modelInfo(profile, model)
+      return this.modelInfo(profile, model, await this.catalogueOf(profile))
     })
   }
 
+  /**
+   * The route's catalogue, refreshed when stale.
+   *
+   * A capability lookup must not answer from the seed list: a seed is an id,
+   * not a capability claim, so a cold route would report no reasoning levels
+   * for a model that has them — and the host rejects the effort the session
+   * had already selected with UNSUPPORTED_REASONING_EFFORT before the first
+   * picker ever refreshed the catalogue. The refresh is the same TTL-bounded
+   * one a listing performs, so a warm route costs no request.
+   * @param profile - route to read.
+   * @returns the models capability questions are answered from.
+   */
+  private async catalogueOf(profile: CodeBuddyProfile): Promise<readonly CatalogueModel[]> {
+    const state = this.stateOf(profile)
+    await this.refreshCatalogue(profile, state, false)
+    return state.models
+  }
+
   /** Exact model metadata, with a conservative fallback for an unlisted id. */
-  private modelInfo(profile: CodeBuddyProfile, model: string): LlmResolvedModelInfo {
-    const known = this.stateOf(profile).models.find(entry => entry.id === model)
+  private modelInfo(
+    profile: CodeBuddyProfile,
+    model: string,
+    models: readonly CatalogueModel[],
+  ): LlmResolvedModelInfo {
+    const imageService = this.attachmentService() !== undefined
+    const known = models.find(entry => entry.id === model)
     if (known === undefined) {
       // Core routing accepts unlisted model ids; a catalogue that is stale or
-      // account-restricted must not make a hand-typed model unroutable.
+      // account-restricted must not make a hand-typed model unroutable. An
+      // unlisted id carries no capability claim, so it stays text-only even
+      // when an override names it — the model is not in the catalogue yet.
       return {
         provider: profile.id,
         id: model,
         name: model,
-        inputModalities: ['text'],
+        inputModalities: TEXT_ONLY,
         context: { contextWindow: DEFAULT_CONTEXT_WINDOW },
       }
     }
@@ -175,7 +327,7 @@ export class CodeBuddyAdapter extends LlmAdapter {
       provider: profile.id,
       id: known.id,
       name: known.name,
-      inputModalities: ['text'],
+      inputModalities: this.modalitiesOf(known, imageService),
       context: { contextWindow: known.contextWindow },
       defaultMaxTokens: known.maxTokens,
       ...(efforts.length === 0 ? {} : { reasoning: { efforts } }),
@@ -183,11 +335,13 @@ export class CodeBuddyAdapter extends LlmAdapter {
   }
 
   override prepareCall(provider: string, model: string, _signal?: AbortSignal): Promise<PreparedAdapterCall> {
-    const profile = this.profileOf(provider)
-    const info = this.modelInfo(profile, model)
-    return Promise.resolve({
-      model: info,
-      stream: options => this.streamWithProfile(options, profile),
+    return Promise.resolve().then(async () => {
+      const profile = this.profileOf(provider)
+      const info = this.modelInfo(profile, model, await this.catalogueOf(profile))
+      return {
+        model: info,
+        stream: (options: GenerateOptions) => this.streamWithProfile(options, profile),
+      }
     })
   }
 
@@ -200,7 +354,11 @@ export class CodeBuddyAdapter extends LlmAdapter {
     const store = requireStore(this.config.store())
     const signal = options.signal
     const access = await accessToken(store, profile, signal)
-    const payload = buildChatPayload(options, profile, this.config.resolveFileText)
+    const attachments = this.attachmentService()
+    const payload = await buildChatPayload(options, profile, this.config.resolveFileText, {
+      ...(attachments === undefined ? {} : { reader: attachments as WireImageReader }),
+      onDiagnostic: message => this.config.onDiagnostic?.(profile.id + ': ' + message),
+    })
     yield* streamChat({
       profile,
       model: options.model,
@@ -255,6 +413,37 @@ export class CodeBuddyAdapter extends LlmAdapter {
     finally {
       state.refreshing = undefined
     }
+  }
+
+  /**
+   * Every model of one route with the modalities it will actually declare.
+   *
+   * Reports the override and the attachment fallback separately from the
+   * catalogue's own claim, because a model can say `image` and still be
+   * declared text-only when this composition cannot read attachment bytes. An
+   * operator override that is narrowed the same way is marked `degraded`, so
+   * the surface can say the override is inactive instead of reporting it as
+   * applied.
+   * @param profileId - route to report.
+   * @returns one entry per model, in catalogue order.
+   */
+  models(profileId: string): readonly ModelSummary[] {
+    const state = this.stateOf(this.profileOf(profileId))
+    const imageService = this.attachmentService() !== undefined
+    return state.models.map((model) => {
+      const declared = this.declaredModalitiesOf(model)
+      const degraded = declared.includes('image') && !imageService
+      return {
+        id: model.id,
+        inputModalities: this.modalitiesOf(model, imageService),
+        statedModalities: model.inputModalities,
+        declaredModalities: declared,
+        source: this.overrideOf(model.id) !== undefined
+          ? 'override'
+          : state.lastRefresh === undefined ? 'seed' : 'catalogue',
+        ...(degraded ? { degraded: 'no-attachment-service' as const } : {}),
+      }
+    })
   }
 
   /** Advertised state of both routes, for /codebuddy status. */

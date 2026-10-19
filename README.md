@@ -209,22 +209,53 @@ dsh --profile tui
 /codebuddy status            # 登录态、token 轮换时间、模型目录与最近错误
 /codebuddy login [cn|en|all] # 打开浏览器授权并轮询（最多 5 分钟）
 /codebuddy logout [cn|en|all]
+/codebuddy models [cn|en]    # 列出模型及其声明的输入模态与来源
 /codebuddy models refresh    # 拉取 GET /v3/config 目录
 /codebuddy quota [cn|en]     # 剩余额度（只读，显式执行）
 /codebuddy checkin [cn|en]   # 显式签到（调用厂商自有端点，请自行确认条款）
 /codebuddy doctor            # 端点、请求形态与目录连通性探测，不含凭据
 ```
 
-登录前 `/model` 已能看到两条路由与 seed 模型（CN 8 个 / EN 6 个，未经真实账号验证）；登录后 `models refresh` 会用账号目录替换。模型声明为 text-only，携带图片的消息会被拒绝并提示换模型。
+登录前 `/model` 已能看到两条路由与 seed 模型（CN 8 个 / EN 6 个，未经真实账号验证）；登录后 `models refresh` 会用账号目录替换。
+
+### 输入模态与图片
+
+输入模态按模型取自网关目录的 `supportsImages` / `disabledMultimodal`（2026-10-19 实测：CN 34 个模型、EN 27 个模型都带该字段）：
+
+- `supportsImages: true` → 声明 `text` + `image`，图片以 OpenAI `image_url`（base64 data URI）随 user 消息或 tool 结果发出，两个角色均已实测可读图。
+- `supportsImages: false` 或缺失 → 保持 text-only；Host 会把图片块投影为占位文本，不会把无法识别的图发给上游。
+- `disabledMultimodal: true` 优先于 `supportsImages`。
+- 登录前（seed 列表）与手填未命中目录的模型 id 一律 text-only。
+- 未挂载 attachment 服务时全部声明 text-only：拿不到图片字节，声明图片只会在中途失败。
+
+`supportsImages: false` 不等于不能看图（实测 `default`、`glm-5.0` 声明 false 但仍能读图）。这类模型用插件配置按模型覆盖：
+
+~~~yaml
+- id: codebuddy
+  name: dsh-native-tui/codebuddy
+  config:
+    models:
+      default:
+        input: [text, image]
+~~~
+
+`/codebuddy models` 会打印每个模型实际声明的模态与来源（`catalogue` / `override` / `seed`）。当某个声明要求图片、但当前组合拿不到图片字节时，该行会追加 `(... asks for images; no attachment service mounted, so text only)`——覆盖同样适用，所以这里能区分「覆盖生效」与「覆盖被降级」。
+
+图片请求会按 2048² 像素 / 1 MiB 的预算投影（与 `llm-pi-ai` 默认值一致）；读图失败降级为占位文本并写诊断，不让整轮失败。同一附件在一个请求里只读取一次，多张图并发读取；已标记 `offloaded` 的图片直接发占位文本，不重读字节。
+
+整段会话的内联图片总量超过 20 MiB 时，请求以 `IMAGE_OFFLOAD_REQUIRED` 失败并携带需要卸载的数量，由 base bundle 的 `compaction-image-offload` 把最旧的图片换成占位文本后重试——这样长会话的请求体不会无上限增长。
 
 已知限制：
 
-- 未使用真实账号做端到端验收：OAuth、模型授权、真实思考档位与额度字段均为协议转写（来源 `CARVIN94/dsh-router-codebuddy`，MIT）。
+- OAuth、模型授权、真实思考档位与额度字段仍为协议转写（来源 `CARVIN94/dsh-router-codebuddy`，MIT），未用真实账号验收；模态字段与图片收发已用真实账号实测（见 `scripts/codebuddy-image-e2e.mjs`）。
+- 图片计费（visual tokens）未接入 token meter，用量面板会低估图片请求成本。
+- 图片只允许出现在 user 消息与 tool 结果；system/assistant 携带图片会以 `UNSUPPORTED_CONTENT` 拒绝，developer 消息整条丢弃。
+- `/attach` 给 text-only 模型贴图会提示，但终端不拦截：prompt 直接进 agent，不经过 session-controller 的图片准入检查。
 - 上游请求不带 `stream_options`，不返回 `usage`；此时不显示 token 用量，也不伪造 0。
 - 路由名 `codebuddy` / `codebuddy-en` 由本插件独占。若此前在 `llm-pi-ai` 设置里手工配置过同名 route，请先 `/provider remove codebuddy`（及 `codebuddy-en`），否则 llm-pi-ai 注册同名路由会失败并输出诊断。
 - 登录入口只在终端内（`/codebuddy login`），Web Models 页不提供这两个 provider 的 OAuth。
 
-真实 Host 冒烟（离线即可，不需要账号）：
+真实 Host 冒烟（离线即可，不需要账号；需用一个没有存储凭据的 DSH_HOME，否则断言「未登录」的用例会失败）：
 
 ~~~sh
 pnpm build
@@ -296,6 +327,19 @@ DSH_HOME=/tmp/dsh-native-tui-catalog-home node scripts/fake-tty-provider-catalog
 
 ~~~sh
 DSH_HOME=/tmp/dsh-native-tui-codebuddy-home node scripts/fake-tty-codebuddy.mjs
+~~~
+
+CodeBuddy 输入模态与图片收发用真实 Gateway 验证（有凭据时跑真实对话，无凭据时跳过联网检查）：
+
+~~~sh
+pnpm build
+node scripts/codebuddy-image-e2e.mjs
+~~~
+
+`/codebuddy models` 的渲染用真实 Host 冒烟（脚本自建仅本人可读的假凭据，拒绝覆盖真实凭据）：
+
+~~~sh
+DSH_HOME=/tmp/dsh-native-tui-cb-models-home node scripts/fake-tty-codebuddy-models.mjs
 ~~~
 
 手动调用技能（`/` 菜单列出技能、`/skill-name` 注入技能正文）用真实 Host 冒烟（脚本自建 fixture skill）：

@@ -14,6 +14,21 @@ import { redact } from './errors.js'
 import type { CodeBuddyProfile } from './profiles.js'
 import { DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_OUTPUT_TOKENS } from './profiles.js'
 
+/** Input modalities this route can declare; the harness gate reads exactly this list. */
+export type InputModality = 'text' | 'image'
+
+/**
+ * What every route sends.
+ *
+ * Frozen: this one array is handed to the harness and shared by every model
+ * entry that declares nothing, so an accidental in-place write by one consumer
+ * would silently change every other model's declaration.
+ */
+export const TEXT_ONLY: readonly InputModality[] = Object.freeze(['text'])
+
+/** What a route that accepts images sends. Frozen for the reason given on {@link TEXT_ONLY}. */
+export const TEXT_AND_IMAGE: readonly InputModality[] = Object.freeze(['text', 'image'])
+
 /** One catalogue entry in this plugin's own shape. */
 export interface CatalogueModel {
   readonly id: string
@@ -22,6 +37,8 @@ export interface CatalogueModel {
   readonly contextWindow: number
   /** Output cap the gateway states, or the conservative default. */
   readonly maxTokens: number
+  /** What the gateway states this model accepts; text-only when it states nothing. */
+  readonly inputModalities: readonly InputModality[]
   /** Selectable reasoning efforts the gateway reports, when it reports any. */
   readonly reasoningEfforts?: readonly string[]
   /** False when the model cannot turn thinking off. */
@@ -38,6 +55,10 @@ interface RawModel {
   maxOutputTokens?: unknown
   tags?: unknown
   supportsReasoning?: unknown
+  /** Measured: a boolean on every entry of both deployments. */
+  supportsImages?: unknown
+  /** Measured: present on a few entries; true means images are switched off. */
+  disabledMultimodal?: unknown
   reasoning?: unknown
 }
 
@@ -95,6 +116,26 @@ export function reasoningEffortsOf(raw: unknown): { efforts: string[]; canDisabl
 }
 
 /**
+ * Input modalities one catalogue entry states.
+ *
+ * Measured 2026-10-19: `supportsImages === true` is trustworthy — every model
+ * declaring it read a two-tone test image correctly. `false` is only "the
+ * gateway does not promise it": `default` and `glm-5.0` declare false and still
+ * read the same image. An untrusted declaration is not a capability, so the
+ * default stays text-only and a wrong `false` is corrected through the plugin's
+ * per-model override rather than guessed here.
+ *
+ * `disabledMultimodal` wins over `supportsImages`: when the two disagree, the
+ * entry is claiming images are off, and sending bytes would fail the turn.
+ * @param raw - gateway entry.
+ * @returns the modalities to declare.
+ */
+export function inputModalitiesOf(raw: Pick<RawModel, 'supportsImages' | 'disabledMultimodal'>): readonly InputModality[] {
+  if (raw.disabledMultimodal === true) return TEXT_ONLY
+  return raw.supportsImages === true ? TEXT_AND_IMAGE : TEXT_ONLY
+}
+
+/**
  * Catalogue entry to one model.
  * @param raw - gateway entry.
  * @returns the model, or undefined for an entry with no usable id.
@@ -109,6 +150,7 @@ export function toCatalogueModel(raw: RawModel): CatalogueModel | undefined {
     name: id,
     contextWindow: contextWindowOf(raw.maxInputTokens),
     maxTokens: maxOutputTokensOf(raw.maxOutputTokens),
+    inputModalities: inputModalitiesOf(raw),
     ...(reasoning === undefined ? {} : { reasoningEfforts: reasoning.efforts }),
     ...(reasoning?.canDisableThinking === false ? { canDisableThinking: false } : {}),
   }
@@ -140,13 +182,21 @@ export function parseCatalogue(text: string): CatalogueModel[] {
   return models
 }
 
-/** The unverified list offered before the first successful discovery. */
+/**
+ * The unverified list offered before the first successful discovery.
+ *
+ * Seeds are ids, not capability claims: a seed that really accepts images would
+ * otherwise be refused before the first catalogue read, and one that does not
+ * would fail mid-turn. Every seed is therefore text-only until the gateway
+ * states otherwise.
+ */
 export function seedCatalogue(profile: CodeBuddyProfile): CatalogueModel[] {
   return profile.seedModels.map(seed => ({
     id: seed.id,
     name: seed.id,
     contextWindow: seed.contextWindow,
     maxTokens: DEFAULT_MAX_OUTPUT_TOKENS,
+    inputModalities: TEXT_ONLY,
   }))
 }
 

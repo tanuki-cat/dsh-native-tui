@@ -34,6 +34,99 @@ function depsOf(overrides: Partial<CodeBuddyCommandDeps> = {}): CodeBuddyCommand
   }
 }
 
+/** A service that reports a fixed model list per route. */
+function serviceOf(models: readonly {
+  id: string
+  inputModalities: string[]
+  statedModalities: string[]
+  declaredModalities?: string[]
+  source: string
+  degraded?: string
+}[]) {
+  return {
+    models: () => models,
+    status: () => [],
+    refresh: async () => [],
+    accessTokenFor: async () => '',
+    logout: async () => {},
+    credentialKey: () => '',
+  }
+}
+
+describe('runCodebuddyCommand models', () => {
+  it('lists each model with its declared modalities and source', async () => {
+    const deps = depsOf({
+      service: serviceOf([
+        { id: 'deepseek-v4.1-flash', inputModalities: ['text', 'image'], statedModalities: ['text', 'image'], source: 'catalogue' },
+        { id: 'hunyuan-chat', inputModalities: ['text'], statedModalities: ['text'], source: 'catalogue' },
+        { id: 'default', inputModalities: ['text', 'image'], statedModalities: ['text'], source: 'override' },
+      ]) as never,
+    })
+    await runCodebuddyCommand('models cn', deps)
+    const text = deps.notices.join('\n')
+    expect(text).toContain('deepseek-v4.1-flash')
+    expect(text).toContain('text+image')
+    expect(text).toContain('[override]')
+    expect(text).toContain('text only')
+  })
+
+  it('names a catalogue claim the composition cannot honour', async () => {
+    const deps = depsOf({
+      service: serviceOf([
+        {
+          id: 'vision',
+          inputModalities: ['text'],
+          statedModalities: ['text', 'image'],
+          declaredModalities: ['text', 'image'],
+          source: 'catalogue',
+          degraded: 'no-attachment-service',
+        },
+      ]) as never,
+    })
+    await runCodebuddyCommand('models en', deps)
+    expect(deps.notices.join('\n')).toContain('no attachment service mounted')
+  })
+
+  it('does not blame the attachment service for a model that never declared images', async () => {
+    // A text-only catalogue entry is not a narrowed declaration: naming the
+    // attachment service here would report a limit that never applied.
+    const deps = depsOf({
+      service: serviceOf([
+        { id: 'textual', inputModalities: ['text'], statedModalities: ['text'], declaredModalities: ['text'], source: 'catalogue' },
+      ]) as never,
+    })
+    await runCodebuddyCommand('models en', deps)
+    expect(deps.notices.join('\n')).not.toContain('no attachment service mounted')
+  })
+
+  it('says an operator override is inactive rather than reporting it as applied', async () => {
+    // The override asked for images and the composition narrowed it back, so
+    // the printed source must not read as a working override.
+    const deps = depsOf({
+      service: serviceOf([
+        {
+          id: 'default',
+          inputModalities: ['text'],
+          statedModalities: ['text'],
+          declaredModalities: ['text', 'image'],
+          source: 'override',
+          degraded: 'no-attachment-service',
+        },
+      ]) as never,
+    })
+    await runCodebuddyCommand('models cn', deps)
+    const text = deps.notices.join('\n')
+    expect(text).toContain('override asks for images')
+    expect(text).toContain('no attachment service mounted')
+  })
+
+  it('rejects an unknown models action', async () => {
+    const deps = depsOf({ service: serviceOf([]) as never })
+    await runCodebuddyCommand('models bogus', deps)
+    expect(deps.notices.join('\n')).toContain('expected "/codebuddy models')
+  })
+})
+
 describe('runCodebuddyCommand login', () => {
   it('opens the authorization URL once and keeps it in the notice', async () => {
     const opened: string[] = []

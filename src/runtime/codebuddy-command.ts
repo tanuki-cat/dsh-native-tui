@@ -74,6 +74,7 @@ export const CODEBUDDY_USAGE = [
   '  status                  sign-in state, token rotation, model catalogue',
   '  login [cn|en|all]       open the browser sign-in for a deployment',
   '  logout [cn|en|all]      remove the stored credential',
+  '  models [cn|en]          list models with the input modalities they declare',
   '  models refresh [cn|en]  force a catalogue refresh (default: both)',
   '  quota [cn|en]           remaining credits reported by the gateway',
   '  checkin [cn|en]         claim today credits (one request, no schedule)',
@@ -244,6 +245,36 @@ async function refresh(deps: CodeBuddyCommandDeps, target: string): Promise<void
   report(deps, lines, failed ? 'warning' : 'info')
 }
 
+/** models list sub-command: what each model declares, and where that came from. */
+function listModels(deps: CodeBuddyCommandDeps, target: string): void {
+  const selected = selectProfiles(target)
+  if (selected === undefined) {
+    report(deps, ['unknown target ' + JSON.stringify(target) + '; expected cn, en or all'], 'warning')
+    return
+  }
+  if (deps.service === undefined) {
+    report(deps, ['codebuddy adapter is not mounted in this profile'], 'warning')
+    return
+  }
+  const service = deps.service
+  const lines: string[] = []
+  for (const profile of selected) {
+    const models = service.models(profile.id)
+    lines.push(profile.id + ': ' + String(models.length) + ' models')
+    for (const model of models) {
+      const images = model.inputModalities.includes('image')
+      // A declaration that asked for images and was narrowed is the one state
+      // worth naming: it is the only case where the printed source (catalogue,
+      // or an operator override) is not what the harness actually reads.
+      const note = model.degraded === 'no-attachment-service'
+        ? ' (' + model.source + ' asks for images; no attachment service mounted, so text only)'
+        : ''
+      lines.push('  ' + model.id.padEnd(26) + (images ? 'text+image' : 'text only') + '  [' + model.source + ']' + note)
+    }
+  }
+  report(deps, lines)
+}
+
 /** Resolve a request-ready token for one target, or the reason it is unavailable. */
 async function accessFor(
   deps: CodeBuddyCommandDeps,
@@ -386,11 +417,15 @@ export async function runCodebuddyCommand(args: string, deps: CodeBuddyCommandDe
   if (sub === 'doctor') { await doctor(deps); return }
   if (sub === 'models') {
     const [action = '', target = ''] = rest
-    if (action !== 'refresh') {
-      report(deps, ['expected "/codebuddy models refresh [cn|en]"', '', CODEBUDDY_USAGE], 'warning')
+    if (action === 'refresh') {
+      await refresh(deps, target)
       return
     }
-    await refresh(deps, target)
+    if (action === '' || action === 'cn' || action === 'en' || action === 'all') {
+      listModels(deps, action)
+      return
+    }
+    report(deps, ['expected "/codebuddy models [cn|en|all]" or "/codebuddy models refresh [cn|en]"', '', CODEBUDDY_USAGE], 'warning')
     return
   }
   report(deps, ['unknown subcommand ' + JSON.stringify(sub), '', CODEBUDDY_USAGE], 'warning')

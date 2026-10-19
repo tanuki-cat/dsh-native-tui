@@ -41,6 +41,8 @@ export interface LLM {
   resolveModelInfo(provider: string, model: string): Promise<{
     readonly context?: { readonly contextWindow?: number }
     readonly defaultMaxTokens?: number
+    /** What the routed adapter declares the model accepts; absent when it claims nothing. */
+    readonly inputModalities?: readonly ('text' | 'image')[]
     readonly reasoning?: {
       readonly efforts: readonly { readonly id: string; readonly name: string; readonly description?: string }[]
       readonly defaultEffort?: string
