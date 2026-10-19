@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { subscribeSessionEvents, type SessionEventsHost } from '../src/ui/session-events.js'
-import type { TranscriptEntry, WaitRetry } from '../src/ui/transcript.js'
+import type { TranscriptEntry } from '../src/ui/transcript.js'
+import type { WaitRetry } from '../src/ui/waiting.js'
 
 /** What one subscribed app observed, in call order. */
 interface Recorded {

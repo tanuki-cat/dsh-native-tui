@@ -17,7 +17,7 @@
  * the reuse window by block identity moved those to 0.6 ms and 2.0 ms.
  */
 import { createPalette, markdownTheme } from '../src/ui/theme.js'
-import { TranscriptRenderer, type TranscriptEntry } from '../src/ui/transcript.js'
+import { reduceTranscriptWindow, TranscriptRenderer, type TranscriptEntry } from '../src/ui/transcript.js'
 
 const palette = createPalette('dark')
 const options = { showReasoning: true, maxEntries: 2000, palette, markdown: markdownTheme(palette) } as never
@@ -45,6 +45,15 @@ function live(seq: number, turn: number): TranscriptEntry {
   return { type: 'live', event: {
     type: 'assistant/live-chunk', seq, time: 0,
     data: { attemptId: 'a', turn, step: 0, chunk: { type: 'text-delta', text: 'streamed token ' } },
+  } } as never
+}
+
+function liveReasoning(seq: number, turn: number, time: number): TranscriptEntry {
+  return { type: 'live', event: {
+    type: 'assistant/live-chunk', seq, time,
+    data: { attemptId: 'a', turn, step: 0, chunk: {
+      type: 'block-end', index: 0, block: { type: 'reasoning', text: 'thought '.repeat(375) },
+    } },
   } } as never
 }
 
@@ -119,4 +128,16 @@ for (const cap of [200, 2000]) {
     renderer.set(entries, [])
     renderer.container.render(120)
   })
+}
+
+console.log('')
+console.log('=== D. large completed-reasoning reveal frame (reduce only) ===')
+{
+  const entries = [...makeEntries(600), liveReasoning(900000, 600, 1_000)]
+  const revealOptions = { ...(options as object), revealProgress: new Map() } as never
+  let now = 1_000
+  measure('600 turns + 3000-grapheme reveal', () => {
+    reduceTranscriptWindow(entries, revealOptions, now)
+    now += 33
+  }, 9)
 }

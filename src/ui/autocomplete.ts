@@ -152,18 +152,20 @@ export class TuiAutocompleteProvider implements AutocompleteProvider {
       // A fully typed subcommand should submit on this Enter instead of
       // re-applying itself as a completion and requiring a second one.
       if (query !== '' && command.subcommands.some(subcommand => subcommand.name.toLowerCase() === query)) return null
-      const items: AutocompleteItem[] = command.subcommands
-        .filter(subcommand => subcommand.name.toLowerCase().startsWith(query))
+      const matches = command.subcommands.filter(subcommand => subcommand.name.toLowerCase().startsWith(query))
+      // If the current query leaves only leaf subcommands, selecting one can
+      // submit the whole line. A mixed list stays insert-only because the editor
+      // has one prefix for the entire suggestion list, not per item.
+      const submit = matches.length > 0 && matches.every(subcommand => subcommand.hint === undefined)
+      const items: AutocompleteItem[] = matches
         .map(subcommand => ({
-          // Replace the whole command line so the editor sees a slash prefix
-          // and submits this completion on Enter instead of only inserting it.
-          value: '/' + command.name + ' ' + subcommand.name,
+          value: submit ? '/' + command.name + ' ' + subcommand.name : subcommand.name,
           label: subcommand.name + (subcommand.hint === undefined ? '' : ' ' + subcommand.hint),
           ...(subcommand.description === undefined
             ? {}
             : { description: subcommand.description }),
         }))
-      return items.length === 0 ? null : { items, prefix: beforeCursor }
+      return items.length === 0 ? null : { items, prefix: submit ? beforeCursor : argument }
     }
 
     const sessionToken = activeSessionToken(line, cursorCol)

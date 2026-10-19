@@ -30,7 +30,8 @@ import type { AgentDefaultModelService, LLM, SessionProjectionsService, SkillsCa
 import { openTuiSettings, showHostSettings } from './commands/settings.js'
 import { errorMessage } from './commands/shared.js'
 import { subscribeSessionEvents } from './session-events.js'
-import { liveChunkHasOutput, nextStreamInterval, STREAM_MIN_INTERVAL_MS, STREAM_MS_PER_CHAR, TranscriptRenderer, WAIT_ROW_DELAY_MS, waitingText, waitingVisible, type TranscriptBlock, type TranscriptEntry, type WaitRetry } from './transcript.js'
+import { liveChunkHasOutput, nextStreamInterval, STREAM_MIN_INTERVAL_MS, STREAM_MS_PER_CHAR, TranscriptRenderer, type TranscriptBlock, type TranscriptEntry } from './transcript.js'
+import { WAIT_ROW_DELAY_MS, waitingText, waitingVisible, type WaitRetry } from './waiting.js'
 import { Rule } from './rule.js'
 
 
@@ -202,10 +203,13 @@ export async function startTerminalApp(
     if (renderer.retainedFrom > 0) entries = entries.slice(renderer.retainedFrom)
     const frameMs = performance.now() - started + renderer.liveContentLength * STREAM_MS_PER_CHAR
     transcriptInterval = nextStreamInterval(transcriptInterval, frameMs)
-    // A completed reasoning block can arrive without deltas. Keep repainting at
-    // the streaming floor until its local reveal finishes.
+    // A completed reasoning block can arrive without deltas. Keep repainting
+    // on the current adaptive interval until its local reveal finishes.
     if (renderer.liveRevealPending) {
-      transcriptInterval = STREAM_MIN_INTERVAL_MS
+      if (transcriptTimer !== undefined) {
+        clearTimeout(transcriptTimer)
+        transcriptTimer = undefined
+      }
       scheduleTranscript()
     }
     tui.requestRender()
@@ -309,11 +313,20 @@ export async function startTerminalApp(
       host,
       sessionId: () => active.id,
       appendEntry: entry => {
+        const chunk = entry.type === 'live' ? entry.event.data.chunk : undefined
         // A bare block-start creates an empty live row; keep the wait row until
         // the chunk produces something the reader can actually see.
-        if (entry.type === 'live' && waitSince !== undefined
-          && liveChunkHasOutput(entry.event.data.chunk, thinkingDisplayMode !== 'hidden')) clearWait()
+        if (chunk !== undefined && waitSince !== undefined
+          && liveChunkHasOutput(chunk, thinkingDisplayMode !== 'hidden')) clearWait()
         entries.push(entry)
+        // Start the placeholder or first revealed chunk without waiting for the
+        // current transcript timer, which may be up to 100ms away.
+        if (chunk?.type === 'block-start' && chunk.blockType === 'reasoning' && thinkingDisplayMode !== 'hidden') {
+          scheduleTranscript(true)
+        }
+        else if (chunk?.type === 'block-end' && (chunk.block.type === 'text' || chunk.block.type === 'reasoning')) {
+          scheduleTranscript(true)
+        }
       },
       replaceEntries: update => { entries = update(entries) },
       notice: text => pushNotice('info', text),

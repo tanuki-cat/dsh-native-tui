@@ -13,7 +13,8 @@ import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { ChangesSummaryView } from '../runtime/changes.js'
 import { formatChangesSummary } from '../runtime/changes.js'
 import { formatDeliverables, type PresentedFileView } from '../runtime/deliverables.js'
-import type { TranscriptEntry, WaitRetry } from './transcript.js'
+import type { TranscriptEntry } from './transcript.js'
+import type { WaitRetry } from './waiting.js'
 
 /** The workspace-changes service slice the live listener reads. */
 interface ChangesService {

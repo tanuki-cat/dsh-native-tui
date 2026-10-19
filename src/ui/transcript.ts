@@ -26,20 +26,9 @@ export type TranscriptEntry =
 import type { Palette } from './theme.js'
 import type { DisplayMode } from '../config.js'
 import { asFileDiffs, diffLines, type FileDiff } from './diff.js'
+import { clip, compactCodeExecutionPreview, formatToolArguments } from './tool-preview.js'
+import { clipGraphemes, REASONING_PREVIEW, REASONING_REVEAL_RECENT_MS, reasoningRevealFrom, revealCompletedReasoning, revealDurableReasoning, type RevealProgress } from './reasoning-reveal.js'
 
-/** Maximum characters retained in one tool preview. */
-const TOOL_PREVIEW = 1200
-/** Maximum characters retained in one reasoning preview. */
-const REASONING_PREVIEW = 3000
-/**
- * Reveal rate for a completed reasoning block that arrived without deltas.
- * Responses-compatible gateways can send the whole reasoning item in the
- * terminal `block-end`; revealing it over frames keeps the thinking area from
- * popping in as one block while the rest of the step is still streaming.
- */
-const REASONING_REVEAL_CHARS_PER_MS = 4
-/** Upper bound on one local reasoning reveal, so later rows are not held too long. */
-const REASONING_REVEAL_MAX_MS = 600
 /** Streaming frame interval bounds, in milliseconds. */
 export const STREAM_MIN_INTERVAL_MS = 33
 const STREAM_MAX_INTERVAL_MS = 100
@@ -79,6 +68,8 @@ export type TranscriptBlock = ({
   readonly text: string
   readonly reasoning?: string
   readonly live: boolean
+  /** True while the reasoning block is open but has no content yet. */
+  readonly starting?: boolean
   /** True while this block's completed reasoning is still being revealed. */
   readonly revealing?: boolean
 } | {
@@ -91,6 +82,8 @@ export type TranscriptBlock = ({
   readonly result?: string
   readonly isError?: boolean
   readonly pending: boolean
+  /** Tool output was pruned from the model-visible surface. */
+  readonly pruned?: boolean
   readonly diffs?: readonly FileDiff[]
 } | {
   readonly kind: 'notice'; readonly tone: 'info' | 'warning' | 'error'; readonly text: string
@@ -116,6 +109,18 @@ export type TranscriptBlock = ({
   readonly afterSeq?: number
 }
 
+/** Session-level tool identities that must survive transcript window slicing. */
+export interface ToolCallMemory {
+  /** Calls that already produced their one durable result. */
+  readonly settled: Set<string>
+  /** Calls whose output was pruned from the model-visible surface. */
+  readonly pruned: Set<string>
+  /** Event sequences whose result/call was pruned. */
+  readonly prunedSeqs: Set<number>
+  /** Event sequence to call identity for calls and results. */
+  readonly callBySeq: Map<number, string>
+}
+
 /** Options controlling transcript reduction. */
 export interface TranscriptOptions {
   readonly showReasoning: boolean
@@ -124,6 +129,18 @@ export interface TranscriptOptions {
   readonly maxEntries: number
   readonly palette: Palette
   readonly markdown: MarkdownTheme
+  /**
+   * Per-step reveal clocks for the interactive renderer. Direct reducers omit
+   * it and use the block-end timestamp as before; the renderer supplies it so
+   * a delayed first frame starts at one grapheme instead of skipping ahead.
+   */
+  readonly revealProgress?: Map<string, RevealProgress>
+  /**
+   * Session-level tool dedupe/prune memory. The renderer supplies it so a late
+   * duplicate result cannot revive a call whose original events were sliced out
+   * of the retained transcript window.
+   */
+  readonly toolMemory?: ToolCallMemory
 }
 
 /** Read visible assistant/user text from content blocks. */
@@ -167,177 +184,16 @@ function attemptContent(stream: readonly AssistantStreamRecord[] | undefined): r
   }
 }
 
-/**
- * Start time of a completed reasoning block in one durable compact stream.
- * A stream with reasoning-chunks was already rendered as deltas, so it keeps
- * the plain full-text path. This is the same Responses-gateway case the live
- * reveal handles, continued after the durable settlement replaces the live row.
- * @param stream - compact records from an assistant settlement.
- * @returns the block-end timestamp to reveal from, or undefined.
- */
-/** Visible character count for a completed block, capped at a bounded duration. */
-function revealedCharacters(total: number, elapsed: number): number {
-  if (total <= 0) return 0
-  const rate = Math.max(REASONING_REVEAL_CHARS_PER_MS, total / REASONING_REVEAL_MAX_MS)
-  return Math.min(total, Math.max(1, Math.floor(Math.max(0, elapsed) * rate)))
-}
-
-function reasoningRevealFrom(stream: readonly AssistantStreamRecord[] | undefined): number | undefined {
-  if (!Array.isArray(stream)) return undefined
-  let sawDeltas = false
-  let completedAt: number | undefined
-  for (const record of stream) {
-    if (record.type === 'reasoning-chunks') sawDeltas = true
-    else if (record.type === 'chunk'
-      && record.chunk.type === 'block-end'
-      && record.chunk.block.type === 'reasoning'
-      && completedAt === undefined) {
-      completedAt = record.time
-    }
-  }
-  return sawDeltas ? undefined : completedAt
-}
-
-/**
- * Reveal a completed reasoning block carried by a durable settlement.
- * @param text - full reasoning text from the message content.
- * @param stream - compact settlement stream carrying the block-end timestamp.
- * @param now - current wall clock.
- * @param showReasoning - false when the thinking display is hidden.
- * @returns the visible prefix and whether more remains.
- */
-function revealDurableReasoning(
-  text: string,
-  stream: readonly AssistantStreamRecord[] | undefined,
-  now: number,
-  showReasoning: boolean,
-): { readonly text: string; readonly pending: boolean } {
-  if (!showReasoning || text.trim() === '') return { text, pending: false }
-  const from = reasoningRevealFrom(stream)
-  if (from === undefined) return { text, pending: false }
-  const visible = revealedCharacters(text.length, now - from)
-  return { text: text.slice(0, visible), pending: visible < text.length }
-}
-
-/** Clip one line-oriented preview without changing its content. */
-export function clip(text: string, limit = TOOL_PREVIEW): string {
-  if (text.length <= limit) return text
-  return `${text.slice(0, limit)}\n… [${String(text.length - limit)} chars omitted]`
-}
-
-/**
- * Format a model-produced JSON argument string for a readable tool call.
- * Known fields keep their names; long string values such as code are split
- * into indented rows instead of one wrapped JSON line.
- * @param raw - raw JSON arguments from the tool call.
- * @returns a bounded, multi-line display value.
- */
-export function formatToolArguments(raw: string): string {
-  const trimmed = raw.trim()
-  if (trimmed === '') return ''
-  let value: unknown
-  try {
-    value = JSON.parse(trimmed)
-  } catch {
-    return clip(trimmed, TOOL_PREVIEW)
-  }
-  if (value === null || typeof value !== 'object') return clip(String(value), TOOL_PREVIEW)
-  const rows: Array<readonly [string, unknown]> = Array.isArray(value)
-    ? value.map((item, index) => [String(index), item] as const)
-    : Object.entries(value as Record<string, unknown>)
-  const lines: string[] = []
-  for (const [key, item] of rows.slice(0, 12)) {
-    if (typeof item === 'string') {
-      const text = clip(item, 900)
-      if (text.includes('\n')) {
-        lines.push(key + ':')
-        for (const line of text.split('\n')) lines.push('  ' + line)
-      } else {
-        lines.push(key + ': ' + text)
-      }
-    } else {
-      lines.push(key + ': ' + clip(JSON.stringify(item) ?? String(item), 500))
-    }
-  }
-  if (rows.length > 12) lines.push('… ' + String(rows.length - 12) + ' more fields')
-  return clip(lines.join('\n'), 2400)
-}
-
 function toolResultText(message: { readonly content?: readonly ContentBlock[] }): string {
   return contentText(message.content)
-}
-
-/** Extract a one-line description for a compact code-execution row. */
-function compactCodeExecutionPreview(block: { readonly args: string; readonly result?: string }): string {
-  let description: string | undefined
-  try {
-    const parsed: unknown = JSON.parse(block.args)
-    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      const record = parsed as Record<string, unknown>
-      if (typeof record.description === 'string' && record.description.trim() !== '') description = record.description
-      else if (typeof record.command === 'string' && record.command.trim() !== '') description = record.command
-      else if (typeof record.code === 'string' && record.code.trim() !== '') description = record.code
-    }
-  }
-  catch { /* Keep the result preview when arguments are not JSON. */ }
-  const firstLine = (text: string | undefined): string =>
-    text?.split('\n').map(line => line.trim()).find(line => line !== '')?.replace(/\s+/gu, ' ') ?? ''
-  const result = firstLine(block.result)
-  const action = firstLine(description ?? block.args)
-  const parts = action === '' ? [result] : result === '' || result === action ? [action] : [action, result]
-  return clip(parts.filter(part => part !== '').join(' · '), 220)
 }
 
 function stepKey(turn: number, step: number): string {
   return `${String(turn)}:${String(step)}`
 }
 
-/**
- * How long a request may be in flight before the wait row is worth showing.
- * Below it the row would only flash between two frames of a fast model, and
- * the application repaints on this same cadence to make the row appear on time.
- */
-export const WAIT_ROW_DELAY_MS = 1000
-
-/** How one model wait is going, for {@link waitingText}. */
-export interface WaitRetry {
-  /** 1-based retry number the provider is on. */
-  readonly retry: number
-  /** Retries the policy allows; 0 when the host stated none. */
-  readonly maxRetries: number
-  /** Harness failure code that triggered the retry. */
-  readonly code: string
-}
-
-/**
- * Whether one in-flight wait is worth reporting. A scheduled retry is always
- * worth reporting: the reader already sat through the failed attempt, and the
- * row is what tells them the replay is automatic.
- * @param since - epoch ms the wait began.
- * @param retry - retry state, when this wait follows a failed attempt.
- * @param now - current epoch ms.
- * @returns true when the row should be rendered.
- */
-export function waitingVisible(since: number, retry: WaitRetry | undefined, now: number): boolean {
-  return retry !== undefined || now - since >= WAIT_ROW_DELAY_MS
-}
-
-/**
- * Describe one in-flight model wait; {@link waitingVisible} decides whether it
- * is due to be shown at all. The elapsed seconds are the reader's liveness
- * signal for deciding whether to keep waiting or retry by hand, so they keep
- * ticking until the first frame arrives.
- * @param since - epoch ms the wait began.
- * @param retry - retry state, when this wait follows a failed attempt.
- * @param now - current epoch ms.
- * @returns the one-line row text.
- */
-export function waitingText(since: number, retry: WaitRetry | undefined, now: number): string {
-  const seconds = Math.max(0, Math.round((now - since) / 1000))
-  const suffix = retry === undefined
-    ? ''
-    : '  ·  retry ' + String(retry.retry) + '/' + String(retry.maxRetries) + ' after ' + retry.code + ' (automatic)'
-  return 'waiting for API response · ' + String(seconds) + 's' + suffix
+function reasoningKey(turn: number, step: number): string {
+  return 'reasoning:' + stepKey(turn, step)
 }
 
 /**
@@ -409,15 +265,36 @@ export function reduceTranscriptWindow(
   const blocks: TranscriptBlock[] = []
   /** Entry index that created each block, parallel to `blocks`; every event appends at most one. */
   const sources: number[] = []
-  const liveByStep = new Map<string, { index: number; text: string; reasoning: string; revealing: boolean }>()
+  const liveByStep = new Map<string, { index: number; text: string; reasoning: string; revealing: boolean; starting: boolean }>()
   let durableRevealPending = false
   const finalizedSteps = new Set<string>()
   const toolByCall = new Map<string, number>()
   const hiddenCodeExecutionCalls = new Set<string>()
+  /** Event sequence -> call identity, for both tool calls and tool results. */
+  const settledCalls = options.toolMemory?.settled ?? new Set<string>()
+  const callIdBySeq = options.toolMemory?.callBySeq ?? new Map<number, string>()
+  const prunedSeqs = options.toolMemory?.prunedSeqs ?? new Set<number>()
+  const prunedCalls = options.toolMemory?.pruned ?? new Set<string>()
   const thinkingDisplay = options.thinkingDisplay ?? 'detailed'
   const runCodeDisplay = options.runCodeDisplay ?? 'detailed'
   const showReasoning = thinkingDisplay !== 'hidden' && (options.thinkingDisplay !== undefined || options.showReasoning)
   const compactionByCall = new Map<string, number>()
+  const revealDurable = (
+    text: string,
+    stream: readonly AssistantStreamRecord[] | undefined,
+    key: string,
+  ): { readonly text: string; readonly pending: boolean } => {
+    if (!showReasoning || text.trim() === '') return { text, pending: false }
+    const from = reasoningRevealFrom(stream)
+    const progressKey = 'reasoning:' + key
+    let progress = options.revealProgress?.get(progressKey)
+    if (options.revealProgress !== undefined && progress === undefined && from !== undefined
+      && now - from <= REASONING_REVEAL_RECENT_MS) {
+      progress = { start: now, visible: 0 }
+      options.revealProgress.set(progressKey, progress)
+    }
+    return revealDurableReasoning(text, from, now, showReasoning, progress, options.revealProgress !== undefined)
+  }
   const finishOpenCompactions = (seq: number): void => {
     for (const index of compactionByCall.values()) {
       const prior = blocks[index]
@@ -434,15 +311,26 @@ export function reduceTranscriptWindow(
     if (live === undefined) {
       const index = blocks.length
       blocks.push({ kind: 'assistant', text: '', reasoning: '', live: true })
-      live = { index, text: '', reasoning: '', revealing: false }
+      live = { index, text: '', reasoning: '', revealing: false, starting: false }
       liveByStep.set(key, live)
     }
     const chunk: StreamChunk = event.data.chunk
-    if (chunk.type === 'text-delta') live.text += chunk.text
+    if (chunk.type === 'block-start') {
+      // A reasoning block can stay open for a long time before its content
+      // arrives. Keep an empty-but-visible row so the page does not sit blank
+      // and then pop in a whole block.
+      if (chunk.blockType === 'reasoning' && showReasoning) live.starting = true
+    }
+    else if (chunk.type === 'text-delta') {
+      live.starting = false
+      live.text += chunk.text
+    }
     else if (chunk.type === 'reasoning-delta' && showReasoning) {
+      live.starting = false
       live.reasoning += chunk.text
     }
     else if (chunk.type === 'block-end') {
+      live.starting = false
       if (chunk.block.type === 'text' && chunk.block.text.length >= live.text.length) {
         live.text = chunk.block.text
       }
@@ -451,9 +339,15 @@ export function reduceTranscriptWindow(
         if (live.reasoning === '') {
           // Some Responses-compatible gateways send no reasoning deltas, only the
           // terminal block. Reveal that block over frames instead of popping it in.
-          const visible = revealedCharacters(completed.length, now - event.time)
-          live.reasoning = completed.slice(0, visible)
-          live.revealing = visible < completed.length
+          const progressKey = reasoningKey(event.data.turn, event.data.step)
+          let progress = options.revealProgress?.get(progressKey)
+          if (options.revealProgress !== undefined && progress === undefined) {
+            progress = { start: now, visible: 0 }
+            options.revealProgress.set(progressKey, progress)
+          }
+          const reveal = revealCompletedReasoning(completed, now, progress, event.time)
+          live.reasoning = reveal.text
+          live.revealing = reveal.pending
         }
         else {
           if (completed.length >= live.reasoning.length) live.reasoning = completed
@@ -466,6 +360,7 @@ export function reduceTranscriptWindow(
       text: live.text,
       ...(live.reasoning === '' ? {} : { reasoning: live.reasoning }),
       live: true,
+      ...(live.starting ? { starting: true } : {}),
       ...(live.revealing ? { revealing: true } : {}),
     }
   }
@@ -530,7 +425,28 @@ export function reduceTranscriptWindow(
         }
       }
       else if (extensionType === 'compaction/prune') {
-        const count = Array.isArray(data.shadowedSeqs) ? data.shadowedSeqs.length : 0
+        const shadowedSeqs = Array.isArray(data.shadowedSeqs) ? data.shadowedSeqs : []
+        for (const value of shadowedSeqs) {
+          if (typeof value !== 'number' || !Number.isSafeInteger(value)) continue
+          prunedSeqs.add(value)
+          const callId = callIdBySeq.get(value)
+          if (callId === undefined) continue
+          prunedCalls.add(callId)
+          const index = toolByCall.get(callId)
+          if (index !== undefined) {
+            const prior = blocks[index]
+            if (prior?.kind === 'tool') {
+              blocks[index] = {
+                ...prior,
+                result: undefined,
+                diffs: undefined,
+                pending: false,
+                pruned: true,
+              }
+            }
+          }
+        }
+        const count = shadowedSeqs.length
         const tokens = typeof data.shadowedTokenCount === 'number' ? data.shadowedTokenCount : 0
         blocks.push({ kind: 'notice', tone: 'info', text: 'Tool output pruned · ' + String(count) + ' item(s) · ~' + String(tokens) + ' tokens', seq })
       }
@@ -542,7 +458,19 @@ export function reduceTranscriptWindow(
         const source = event.data.source
         if (source.kind === 'user') {
           blocks.push({ kind: 'user', text: contentText(event.data.content), seq })
-        } else {
+        }
+        else if (String(source.kind) === 'compact-checkpoint') {
+          // The Host injects the checkpoint as model context as well as emitting
+          // compaction/summary. The card already shows the summary; keep only a
+          // short context row when the matching card is outside the window.
+          const compactionId = (source as unknown as { readonly compactionId?: unknown }).compactionId
+          if (typeof compactionId === 'string' && compactionByCall.has(compactionId)) break
+          const text = contentText(event.data.content)
+          if (text.trim() !== '') {
+            blocks.push({ kind: 'context', label: 'compact-checkpoint', text: clip(text, 240), seq })
+          }
+        }
+        else {
           const text = contentText(event.data.content)
           if (text.trim() !== '') {
             const label = 'plugin' in source && typeof source.plugin === 'string'
@@ -563,7 +491,7 @@ export function reduceTranscriptWindow(
         }
         const text = contentText(event.data.message.content)
         const fullReasoning = showReasoning ? contentReasoning(event.data.message.content) : ''
-        const reveal = revealDurableReasoning(fullReasoning, event.data.stream, now, showReasoning)
+        const reveal = revealDurable(fullReasoning, event.data.stream, key)
         if (reveal.pending) durableRevealPending = true
         if (text.trim() !== '' || fullReasoning.trim() !== '') {
           blocks.push({
@@ -590,7 +518,7 @@ export function reduceTranscriptWindow(
         const content = attemptContent(event.data.stream)
         const text = contentText(content)
         const fullReasoning = showReasoning ? contentReasoning(content) : ''
-        const reveal = revealDurableReasoning(fullReasoning, event.data.stream, now, showReasoning)
+        const reveal = revealDurable(fullReasoning, event.data.stream, key)
         if (reveal.pending) durableRevealPending = true
         if (text.trim() !== '' || fullReasoning.trim() !== '') {
           blocks.push({
@@ -605,12 +533,24 @@ export function reduceTranscriptWindow(
         break
       }
       case 'tool/call': {
+        const callId = event.data.callId
+        const seenSeq = callIdBySeq.get(seq) === callId
+        callIdBySeq.set(seq, callId)
+        if (prunedSeqs.has(seq) || prunedCalls.has(callId)) {
+          prunedCalls.add(callId)
+          break
+        }
+        // A resumed/replayed call must not add a second card or overwrite the
+        // result mapping of the card that already exists. A normal rebuild sees
+        // its original seq, so persistent settlement must not suppress it.
+        if (toolByCall.has(callId) || hiddenCodeExecutionCalls.has(callId)) break
+        if (!seenSeq && settledCalls.has(callId)) break
         if (runCodeDisplay === 'hidden' && isCodeExecutionTool(event.data.name)) {
-          hiddenCodeExecutionCalls.add(event.data.callId)
+          hiddenCodeExecutionCalls.add(callId)
           break
         }
         const index = blocks.length
-        toolByCall.set(event.data.callId, index)
+        toolByCall.set(callId, index)
         blocks.push({
           kind: 'tool',
           callId: event.data.callId,
@@ -623,8 +563,27 @@ export function reduceTranscriptWindow(
       }
       case 'tool/result': {
         const callId = event.data.message.source.callId
-        if (hiddenCodeExecutionCalls.delete(callId)) break
+        const seenSeq = callIdBySeq.get(seq) === callId
+        callIdBySeq.set(seq, callId)
+        // A duplicate result after a session resume/replay must not revive a
+        // call that was already settled or whose output was pruned.
+        if (hiddenCodeExecutionCalls.has(callId)) {
+          settledCalls.add(callId)
+          break
+        }
+        if (prunedSeqs.has(seq) || prunedCalls.has(callId)) {
+          prunedCalls.add(callId)
+          break
+        }
+        // Rebuilds replay the same seq and must render the original result;
+        // only a new seq for an already settled call is a duplicate.
+        if (!seenSeq && settledCalls.has(callId)) break
         const index = toolByCall.get(callId)
+        const prior = index === undefined ? undefined : blocks[index]
+        if (prior?.kind === 'tool' && prior.pending === false) {
+          settledCalls.add(callId)
+          break
+        }
         const result = toolResultText(event.data.message)
         const isError = event.data.message.isError === true
         const diffs = asFileDiffs(event.data.meta)
@@ -640,19 +599,17 @@ export function reduceTranscriptWindow(
             pending: false,
             seq,
           })
-        } else {
-          const prior = blocks[index]
-          if (prior?.kind === 'tool') {
-            blocks[index] = {
-              ...prior,
-              result,
-              ...(isError ? { isError: true } : {}),
-              ...(diffs === undefined ? {} : { diffs }),
-              pending: false,
-              seq,
-            }
+        } else if (prior?.kind === 'tool') {
+          blocks[index] = {
+            ...prior,
+            result,
+            ...(isError ? { isError: true } : {}),
+            ...(diffs === undefined ? {} : { diffs }),
+            pending: false,
+            seq,
           }
         }
+        settledCalls.add(callId)
         break
       }
       case 'turn/end': {
@@ -693,18 +650,24 @@ export function reduceTranscriptWindow(
   const visible: TranscriptBlock[] = []
   const visibleSources: number[] = []
   let holdAfterReveal = false
-  // A new user turn or an urgent notice outranks the local reveal: showing it
-  // immediately preserves event order and avoids hiding fresh input.
+  // A new user turn or a warning/error notice outranks the local reveal:
+  // showing it immediately preserves event order and avoids hiding fresh input
+  // or a failure. Informational notices stay behind the reveal like tool rows.
   const revealIndex = blocks.findIndex(block => block.kind === 'assistant' && block.revealing === true)
   const boundaryAfterReveal = revealIndex !== -1
-    && blocks.slice(revealIndex + 1).some(block => block.kind === 'user' || block.kind === 'notice')
+    && blocks.slice(revealIndex + 1).some(block =>
+      block.kind === 'user' || (block.kind === 'notice' && block.tone !== 'info'))
   for (let index = 0; index < blocks.length; index += 1) {
     // Do not let the next tool card or step overtake a thinking block that is
     // still revealing locally. The held entries stay in the window and appear
     // on the frame that completes the reveal.
     if (holdAfterReveal && !boundaryAfterReveal) continue
     const block = blocks[index]!
-    if (block.kind === 'assistant' && block.text === '' && (block.reasoning ?? '') === '') continue
+    // A pruned tool row only repeats the prune notice; hiding the whole card
+    // keeps the transcript focused on content that is still model-visible.
+    if (block.kind === 'tool' && block.pruned === true) continue
+    if (block.kind === 'assistant' && block.text === '' && (block.reasoning ?? '') === ''
+      && block.starting !== true) continue
     visible.push(block)
     visibleSources.push(sources[index] ?? 0)
     if (block.kind === 'assistant' && block.revealing === true) holdAfterReveal = true
@@ -807,7 +770,16 @@ export class TranscriptRenderer {
    * @param options - reduction and styling options.
    */
   constructor(options: TranscriptOptions) {
-    this.options = options
+    this.options = {
+      ...options,
+      revealProgress: options.revealProgress ?? new Map(),
+      toolMemory: options.toolMemory ?? {
+        settled: new Set(),
+        pruned: new Set(),
+        prunedSeqs: new Set(),
+        callBySeq: new Map(),
+      },
+    }
   }
 
   /** Switch reasoning/code-execution density and rebuild the existing event window. */
@@ -851,6 +823,11 @@ export class TranscriptRenderer {
     this.entries = []
     this.extra = []
     this.revealPending = false
+    this.options.revealProgress?.clear()
+    this.options.toolMemory?.settled.clear()
+    this.options.toolMemory?.pruned.clear()
+    this.options.toolMemory?.prunedSeqs.clear()
+    this.options.toolMemory?.callBySeq.clear()
     this.cached.clear()
     this.container.clear()
   }
@@ -915,22 +892,34 @@ export class TranscriptRenderer {
         const label = palette.bold(palette.accent('◆ assistant'))
           + (block.live === true ? '  ' + palette.warning('streaming') : '')
         container.addChild(new Text(label, 0, 0))
-        if (block.reasoning !== undefined && block.reasoning.trim() !== '') {
-          const mode = this.options.thinkingDisplay ?? 'detailed'
+        const mode = this.options.thinkingDisplay ?? 'detailed'
+        if (block.starting === true) {
           if (mode === 'compact') {
-            const firstLine = block.reasoning.split('\n').map(line => line.trim()).find(line => line !== '') ?? ''
             container.addChild(new Spacer(1))
-            container.addChild(new Text(palette.dim('thinking · ' + clip(firstLine, 240)), 0, 0))
+            container.addChild(new Text(palette.dim('thinking · …'), 0, 0))
           }
           else if (mode !== 'hidden') {
             const reasoning = new Container()
-            reasoning.addChild(new Text(palette.dim('thinking'), 0, 0))
-            reasoning.addChild(new Text(palette.dim(clip(block.reasoning, REASONING_PREVIEW)), 0, 0))
+            reasoning.addChild(new Text(palette.dim('thinking …'), 0, 0))
             container.addChild(new Spacer(1))
             container.addChild(band(reasoning, palette.thinkingBand))
           }
         }
-        if (block.text.trim() !== '') {
+        else if (block.reasoning !== undefined && block.reasoning.trim() !== '') {
+          if (mode === 'compact') {
+            const firstLine = block.reasoning.split('\n').map(line => line.trim()).find(line => line !== '') ?? ''
+            container.addChild(new Spacer(1))
+            container.addChild(new Text(palette.dim('thinking · ' + clipGraphemes(firstLine, 240)), 0, 0))
+          }
+          else if (mode !== 'hidden') {
+            const reasoning = new Container()
+            reasoning.addChild(new Text(palette.dim('thinking'), 0, 0))
+            reasoning.addChild(new Text(palette.dim(clipGraphemes(block.reasoning, REASONING_PREVIEW)), 0, 0))
+            container.addChild(new Spacer(1))
+            container.addChild(band(reasoning, palette.thinkingBand))
+          }
+        }
+        if (block.text.trim() !== '' && block.revealing !== true) {
           container.addChild(new Spacer(1))
           container.addChild(new Markdown(block.text, 0, 0, this.options.markdown))
         }

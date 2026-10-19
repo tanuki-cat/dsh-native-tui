@@ -281,15 +281,32 @@ export function collectSessionMetrics(
    */
   let settled: { readonly turn: unknown; readonly step: unknown; readonly buckets: UsageBuckets } | undefined
   let latestPromptTokens = 0
+  /** Sequence of the newest provider sample, for deciding what a prune can subtract. */
+  let latestUsageSeq: number | undefined
   /** Event-log decode totals when the sessionStats projection is not mounted. */
   let fallbackDecodeMs = 0
   let fallbackDecodeTokens = 0
   for (const event of events) {
     if (stats === undefined && event.type === 'turn/start') turns += 1
     if (stats === undefined && event.type === 'step/end') steps += 1
-    if ((event.type as string) === 'compaction/summary') {
-      const shadowed = (event.data as { readonly shadowedTokenCount?: unknown }).shadowedTokenCount
-      if (typeof shadowed === 'number' && Number.isFinite(shadowed) && shadowed > 0) {
+    if ((event.type as string) === 'compaction/summary' || (event.type as string) === 'compaction/prune') {
+      // Only shadowed events that were already in the latest provider sample
+      // can be subtracted from that sample. A tool result created after the
+      // sample was never priced there; subtracting it would understate context.
+      const data = event.data as {
+        readonly shadowedTokenCount?: unknown
+        readonly shadowedSeqs?: unknown
+        readonly shadowedRange?: { readonly end?: unknown }
+      }
+      const shadowedSeqs = Array.isArray(data.shadowedSeqs)
+        ? data.shadowedSeqs.filter((seq): seq is number => typeof seq === 'number' && Number.isSafeInteger(seq))
+        : []
+      const shadowedEnd = shadowedSeqs.length > 0
+        ? Math.max(...shadowedSeqs)
+        : typeof data.shadowedRange?.end === 'number' ? data.shadowedRange.end : undefined
+      const shadowed = data.shadowedTokenCount
+      if (latestUsageSeq !== undefined && shadowedEnd !== undefined && shadowedEnd <= latestUsageSeq
+        && typeof shadowed === 'number' && Number.isFinite(shadowed) && shadowed > 0) {
         latestPromptTokens = Math.max(0, latestPromptTokens - shadowed)
       }
       continue
@@ -335,6 +352,8 @@ export function collectSessionMetrics(
     settled = { turn: slot.turn, step: slot.step, buckets: next }
     // The newest sample is the log's stand-in estimate, whatever slot it reports.
     latestPromptTokens = next.input + next.cacheRead + next.cacheWrite
+    const sampleSeq = Number(event.seq)
+    if (Number.isSafeInteger(sampleSeq)) latestUsageSeq = sampleSeq
   }
   const promptTokens = buckets.input + buckets.cacheRead + buckets.cacheWrite
   // The Web usage pill sums the four disjoint buckets, so a provider's own

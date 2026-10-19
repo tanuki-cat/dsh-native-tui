@@ -86,20 +86,45 @@ describe('TuiAutocompleteProvider', () => {
     expect(await provider().getSuggestions(['/provider add'], 0, 13, { signal })).toBeNull()
   })
 
-  it('filters subcommands after a command space', async () => {
+  it('keeps hinted subcommands insert-only after a command space', async () => {
     const suggestions = await provider().getSuggestions(['/provider re'], 0, 12, { signal })
-    expect(suggestions?.prefix).toBe('/provider re')
+    expect(suggestions?.prefix).toBe('re')
     expect(suggestions?.items).toEqual([
-      { value: '/provider remove', label: 'remove <route>', description: 'delete a route' },
+      { value: 'remove', label: 'remove <route>', description: 'delete a route' },
     ])
   })
 
-  it('replaces the whole command line when a subcommand is selected', () => {
+  it('submits a uniquely filtered leaf subcommand in a mixed command', async () => {
+    const suggestions = await provider().getSuggestions(['/provider a'], 0, 11, { signal })
+    expect(suggestions?.prefix).toBe('/provider a')
+    expect(suggestions?.items).toEqual([
+      { value: '/provider add', label: 'add', description: 'add a route' },
+    ])
+  })
+
+  it('keeps a mixed full subcommand list insert-only', async () => {
+    const suggestions = await provider().getSuggestions(['/provider '], 0, 10, { signal })
+    expect(suggestions?.prefix).toBe('')
+    expect(suggestions?.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ value: 'add', label: 'add' }),
+      expect.objectContaining({ value: 'remove', label: 'remove <route>' }),
+    ]))
+  })
+
+  it('inserts a hinted subcommand without submitting the command', () => {
     const applied = provider().applyCompletion(['/provider re'], 0, 12, {
-      value: '/provider remove',
+      value: 'remove',
       label: 'remove <route>',
-    }, '/provider re')
+    }, 're')
     expect(applied).toEqual({ lines: ['/provider remove'], cursorLine: 0, cursorCol: 16 })
+  })
+
+  it('replaces the whole line for a leaf subcommand', () => {
+    const applied = provider([], [], [], LOCAL_COMMANDS).applyCompletion(['/reasoning '], 0, 11, {
+      value: '/reasoning map',
+      label: 'map',
+    }, '/reasoning ')
+    expect(applied).toEqual({ lines: ['/reasoning map'], cursorLine: 0, cursorCol: 14 })
   })
 
   it('lists user-invocable skills after the commands', async () => {

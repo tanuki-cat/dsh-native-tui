@@ -20,7 +20,7 @@ import {
 } from '@deepseek-ai/dsh-user-questions'
 import type { Palette } from './theme.js'
 import { markdownTheme, selectTheme } from './theme.js'
-import { clip } from './transcript.js'
+import { clip } from './tool-preview.js'
 import type { ImagePreview } from '../runtime/images.js'
 
 /** One selectable row in a terminal dialog. */

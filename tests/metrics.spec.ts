@@ -234,11 +234,37 @@ describe('session metrics', () => {
     // sampled tokens less the 600 the compaction replaced.
     const events = [
       usageEvent(100, 20, 800, 0),
-      { type: 'compaction/summary', seq: 2, time: 2, data: { shadowedTokenCount: 600 } },
+      { type: 'compaction/summary', seq: 2, time: 2, data: { shadowedTokenCount: 600, shadowedSeqs: [1] } },
     ] as unknown as SessionEvent[]
     const metrics = collectSessionMetrics(events, undefined, 1_000)
     expect(metrics.contextEstimateTokens).toBe(300)
     expect(metrics.contextPercent).toBe(30)
+  })
+
+  it('reduces the fallback estimate after pruning events in the sample', () => {
+    // 900 sampled prompt tokens less two pruned tool results that were already
+    // part of that sample (seq 5): 200 + 100 pruned tokens.
+    const usage = { ...usageEvent(100, 20, 800, 0), seq: 5 } as SessionEvent
+    const events = [
+      usage,
+      { type: 'compaction/prune', seq: 6, time: 6, data: { shadowedTokenCount: 200, shadowedSeqs: [2] } },
+      { type: 'compaction/prune', seq: 7, time: 7, data: { shadowedTokenCount: 100, shadowedSeqs: [3] } },
+    ] as unknown as SessionEvent[]
+    const metrics = collectSessionMetrics(events, undefined, 1_000)
+    expect(metrics.contextEstimateTokens).toBe(600)
+    expect(metrics.contextPercent).toBe(60)
+  })
+
+  it('does not subtract a prune that happened after the latest provider sample', () => {
+    // The 100-token tool result was created after the seq-1 sample, so it was
+    // never part of latestPromptTokens; subtracting it would understate context.
+    const events = [
+      usageEvent(100, 20, 800, 0),
+      { type: 'compaction/prune', seq: 2, time: 2, data: { shadowedTokenCount: 100, shadowedSeqs: [2] } },
+    ] as unknown as SessionEvent[]
+    const metrics = collectSessionMetrics(events, undefined, 1_000)
+    expect(metrics.contextEstimateTokens).toBe(900)
+    expect(metrics.contextPercent).toBe(90)
   })
 
   it('omits context figures without a window', () => {

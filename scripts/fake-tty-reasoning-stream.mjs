@@ -169,15 +169,14 @@ child.on('exit', (code, signal) => {
   const text = strip(out)
   const streaming = prefixAt !== undefined && endAt !== undefined && endAt - prefixAt >= 100
   const completed = finalAt !== undefined
-  // A short settlement lands before the reveal finishes; the durable block must
-  // keep revealing rather than snap to full at the final answer.
-  const durableContinued = settleDelayMs >= 500
-    || (endAt !== undefined && finalAt !== undefined && endAt - finalAt >= 50)
+  // The answer text is held until the reveal completes, so it must never appear
+  // before the reasoning end marker.
+  const answerOrdered = endAt !== undefined && finalAt !== undefined && finalAt >= endAt
   const waitingCovered = reasoningDelayMs < 1100 || waitingSeen
-  const pass = streaming && completed && durableContinued && waitingCovered
+  const pass = streaming && completed && answerOrdered && waitingCovered
     && text.includes(mark) && text.includes(endMark)
   console.log('EXIT', code, signal, 'phase', phase)
-  console.log('settleDelayMs', settleDelayMs, 'reasoningDelayMs', reasoningDelayMs, 'waitingSeen', waitingSeen)
+  console.log('settleDelayMs', settleDelayMs, 'reasoningDelayMs', reasoningDelayMs, 'waitingSeen', waitingSeen, 'answerOrdered', answerOrdered)
   console.log('prefixAt', prefixAt, 'endAt', endAt, 'finalAt', finalAt)
   console.log('reasoning rendered', text.includes(mark), text.includes(endMark))
   console.log('RESULT', pass ? 'PASS' : 'FAIL')
