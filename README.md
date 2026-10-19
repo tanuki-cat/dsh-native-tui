@@ -37,10 +37,15 @@ DeepSeek Harness 的 host-native 终端前端，基于 pi-tui。
 ## 安装
 
 ~~~sh
+# 一键安装到默认 tui profile（link 当前 checkout；--pack 改为安装 .tmp 下的 tgz）
+./scripts/install.sh
+
+# 指定 profile
+./scripts/install.sh --profile work
+
+# 等价手动步骤
 pnpm install
 pnpm build
-
-# 在全新或已有的 DSH profile 中安装；dsh 会启用 bundle
 dsh plugin --profile tui add /absolute/path/to/dsh-native-tui
 
 # 启动
@@ -50,7 +55,7 @@ dsh --profile tui
 dsh --profile tui --resume <session-id>
 ~~~
 
-DSH Host 包由当前 dsh 安装提供；插件运行时还依赖 pi-tui、schemastery、fflate，以及官方 computer-use / mcp / session-stats rc.2 包。
+`scripts/install.sh` 默认执行 `pnpm install --frozen-lockfile` 与 `pnpm build`，再通过 `dsh plugin --profile tui add` 安装；`--no-build` 跳过前置步骤，`--pack` 先打包，再移除旧安装并安装独立副本（版本号未变也会安装新内容）。DSH Host 包由当前 dsh 安装提供；插件运行时还依赖 pi-tui、schemastery、fflate，以及官方 computer-use / mcp / session-stats rc.2 包。
 安装路径使用 link: 时，修改源码后重新 pnpm build 即可生效。
 
 ## 命令
