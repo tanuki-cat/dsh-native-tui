@@ -13,7 +13,7 @@ import type { CommandSuggestion } from '../autocomplete.js'
 export const HELP_LINES: readonly string[] = [
   '/help · /new · /init · /sessions · /resume [id] · /status · /clear',
   '/exit · /quit (or bare exit/quit)',
-  '/cancel · /model [provider/model] · /reasoning [effort] · /provider [add|list|edit|models|remove <route>]',
+  '/cancel · /model [provider/model] · /reasoning [effort|default|map] · /provider [add|list|edit|models|remove <route>]',
   '/mcp [add|list|remove <name>]',
   '/permissions [preset]',
   '/jobs [kill <id>] · /agents · /preset [id]',
@@ -39,7 +39,9 @@ export const LOCAL_COMMANDS: readonly CommandSuggestion[] = [
   { name: 'clear', description: 'clear the terminal view only' },
   { name: 'cancel', description: 'cancel the running turn' },
   { name: 'model', description: 'select a model', input: { hint: 'provider/model' } },
-  { name: 'reasoning', description: 'select the model reasoning effort', input: { hint: 'effort' } },
+  { name: 'reasoning', description: 'select the reasoning effort or edit its mapping', input: { hint: '[effort|default|map]' }, keepExactSubmit: true, subcommands: [
+    { name: 'map', description: 'guide an edit of the current model reasoning map' },
+  ] },
   { name: 'permissions', description: 'select a permission preset', input: { hint: 'preset' } },
   { name: 'preset', description: 'select the preset for the current or next session', input: { hint: 'id' } },
   { name: 'workspaces', description: 'list/create/use/pin/archive workspaces', subcommands: [

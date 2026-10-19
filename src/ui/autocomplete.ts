@@ -16,6 +16,13 @@ export interface CommandSuggestion {
   readonly name: string
   readonly description?: string
   readonly input?: { readonly hint?: string }
+  /**
+   * Keep the bare command in the exact-match suggestion list alongside its
+   * subcommands. Without this, Enter on the command name applies the first
+   * subcommand and submits it; set it when the bare command has its own
+   * interactive behavior.
+   */
+  readonly keepExactSubmit?: boolean
   readonly subcommands?: readonly {
     readonly name: string
     readonly description?: string
@@ -86,13 +93,23 @@ export class TuiAutocompleteProvider implements AutocompleteProvider {
         const query = body.toLowerCase()
         const exact = commands.find(command => command.name.toLowerCase() === query)
         if (exact?.subcommands !== undefined && exact.subcommands.length > 0) {
-          const items: AutocompleteItem[] = exact.subcommands.map(subcommand => ({
-            value: '/' + exact.name + ' ' + subcommand.name,
-            label: '/' + exact.name + ' ' + subcommand.name + (subcommand.hint === undefined ? '' : ' ' + subcommand.hint),
-            ...(subcommand.description === undefined && subcommand.hint === undefined
-              ? {}
-              : { description: subcommand.description ?? subcommand.hint ?? '' }),
-          }))
+          const items: AutocompleteItem[] = []
+          if (exact.keepExactSubmit === true) {
+            items.push({
+              value: '/' + exact.name,
+              label: '/' + exact.name,
+              ...(exact.description === undefined ? {} : { description: exact.description }),
+            })
+          }
+          for (const subcommand of exact.subcommands) {
+            items.push({
+              value: '/' + exact.name + ' ' + subcommand.name,
+              label: '/' + exact.name + ' ' + subcommand.name + (subcommand.hint === undefined ? '' : ' ' + subcommand.hint),
+              ...(subcommand.description === undefined && subcommand.hint === undefined
+                ? {}
+                : { description: subcommand.description ?? subcommand.hint ?? '' }),
+            })
+          }
           return items.length === 0 ? null : { items, prefix: beforeCursor }
         }
         const commandItems: AutocompleteItem[] = commands
@@ -132,16 +149,21 @@ export class TuiAutocompleteProvider implements AutocompleteProvider {
         return null
       }
       const query = argument.toLowerCase()
+      // A fully typed subcommand should submit on this Enter instead of
+      // re-applying itself as a completion and requiring a second one.
+      if (query !== '' && command.subcommands.some(subcommand => subcommand.name.toLowerCase() === query)) return null
       const items: AutocompleteItem[] = command.subcommands
         .filter(subcommand => subcommand.name.toLowerCase().startsWith(query))
         .map(subcommand => ({
-          value: subcommand.name,
+          // Replace the whole command line so the editor sees a slash prefix
+          // and submits this completion on Enter instead of only inserting it.
+          value: '/' + command.name + ' ' + subcommand.name,
           label: subcommand.name + (subcommand.hint === undefined ? '' : ' ' + subcommand.hint),
           ...(subcommand.description === undefined
             ? {}
             : { description: subcommand.description }),
         }))
-      return items.length === 0 ? null : { items, prefix: argument }
+      return items.length === 0 ? null : { items, prefix: beforeCursor }
     }
 
     const sessionToken = activeSessionToken(line, cursorCol)

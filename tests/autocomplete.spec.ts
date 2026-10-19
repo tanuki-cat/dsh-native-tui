@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { FileReferenceService } from '@deepseek-ai/dsh-file-reference'
-import { TuiAutocompleteProvider, type SessionReferenceCandidateView, type SkillSuggestion } from '../src/ui/autocomplete.js'
+import { TuiAutocompleteProvider, type CommandSuggestion, type SessionReferenceCandidateView, type SkillSuggestion } from '../src/ui/autocomplete.js'
+import { LOCAL_COMMANDS } from '../src/ui/commands/catalog.js'
 
 const agent = { id: 'agent-1' } as unknown as Agent
 const signal = new AbortController().signal
@@ -10,6 +11,7 @@ function provider(
   files: readonly { path: string; kind: 'file' | 'directory' }[] = [],
   sessions: readonly SessionReferenceCandidateView[] = [],
   skills: readonly SkillSuggestion[] = [],
+  commands?: readonly CommandSuggestion[],
 ) {
   const service = {
     list: async () => files,
@@ -19,7 +21,7 @@ function provider(
   }
   return new TuiAutocompleteProvider({
     getAgent: () => agent,
-    getCommands: () => [
+    getCommands: () => commands ?? [
       { name: 'help', description: 'show help' },
       { name: 'model', input: { hint: 'provider/model' } },
       {
@@ -57,12 +59,47 @@ describe('TuiAutocompleteProvider', () => {
     ])
   })
 
+  it('lists reasoning map while keeping bare reasoning submittable', async () => {
+    const exact = await provider([], [], [], LOCAL_COMMANDS).getSuggestions(['/reasoning'], 0, 10, { signal })
+    expect(exact?.prefix).toBe('/reasoning')
+    expect(exact?.items[0]).toEqual({
+      value: '/reasoning',
+      label: '/reasoning',
+      description: 'select the reasoning effort or edit its mapping',
+    })
+    expect(exact?.items).toContainEqual({
+      value: '/reasoning map',
+      label: '/reasoning map',
+      description: 'guide an edit of the current model reasoning map',
+    })
+
+    const spaced = await provider([], [], [], LOCAL_COMMANDS).getSuggestions(['/reasoning '], 0, 11, { signal })
+    expect(spaced?.prefix).toBe('/reasoning ')
+    expect(spaced?.items).toEqual([{
+      value: '/reasoning map',
+      label: 'map',
+      description: 'guide an edit of the current model reasoning map',
+    }])
+
+    // Fully typed subcommands submit directly; no second Enter for completion.
+    expect(await provider([], [], [], LOCAL_COMMANDS).getSuggestions(['/reasoning map'], 0, 14, { signal })).toBeNull()
+    expect(await provider().getSuggestions(['/provider add'], 0, 13, { signal })).toBeNull()
+  })
+
   it('filters subcommands after a command space', async () => {
     const suggestions = await provider().getSuggestions(['/provider re'], 0, 12, { signal })
-    expect(suggestions?.prefix).toBe('re')
+    expect(suggestions?.prefix).toBe('/provider re')
     expect(suggestions?.items).toEqual([
-      { value: 'remove', label: 'remove <route>', description: 'delete a route' },
+      { value: '/provider remove', label: 'remove <route>', description: 'delete a route' },
     ])
+  })
+
+  it('replaces the whole command line when a subcommand is selected', () => {
+    const applied = provider().applyCompletion(['/provider re'], 0, 12, {
+      value: '/provider remove',
+      label: 'remove <route>',
+    }, '/provider re')
+    expect(applied).toEqual({ lines: ['/provider remove'], cursorLine: 0, cursorCol: 16 })
   })
 
   it('lists user-invocable skills after the commands', async () => {
