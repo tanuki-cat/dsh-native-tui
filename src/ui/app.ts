@@ -558,8 +558,16 @@ export async function startTerminalApp(
 
   editor.onSubmit = handleSubmit
   tui.addInputListener(data => {
-    const shortcut = globalShortcut(data, active.agent.status === 'running')
+    const shortcut = globalShortcut(data, {
+      running: active.agent.status === 'running',
+      editorFocused: tui.getFocusedComponent() === editor,
+      editorHasText: editor.getText() !== '',
+    })
     if (shortcut === undefined) return undefined
+    if (shortcut === 'clear-input') {
+      editor.setText('')
+      return { consume: true }
+    }
     if (shortcut === 'cancel-turn') {
       if (tui.hasOverlay()) return undefined
       active.agent.cancel({ kind: 'user' })
