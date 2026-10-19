@@ -4,6 +4,7 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import type { Session } from '@deepseek-ai/dsh-session'
 import { randomUUID } from 'node:crypto'
 import type { ResolvedConfig } from '../config.js'
+import { contextWindowTokens, projectedContextTokens, type ContextMeterReading, type ContextPressureState } from './metrics.js'
 import { NATIVE_TUI_SESSION_ID_PREFIX } from './session-list.js'
 
 /** One live Host Agent and its owned handle. */
@@ -74,6 +75,60 @@ export function sessionAgentPreset(session: Session): string | undefined {
     .at(-1)
   const selectedId = (selected?.data as { readonly agentPreset?: unknown } | undefined)?.agentPreset
   return typeof selectedId === 'string' ? selectedId : session.header.agentPreset
+}
+
+/** Projection reads narrowed to the one key the context segment needs. */
+export interface ContextPressureReader {
+  stateOf(session: Session, key: string): unknown
+}
+
+/**
+ * Read the token meter's context state through its projections. The automatic
+ * compactor prices the same surface, so the status bar must report this number
+ * to stay aligned with it. `projectedContextTokens` anchors the last provider
+ * sample and adds the surface movement since it, which is the occupancy the
+ * NEXT request will pay.
+ *
+ * State presence separates the two silences: an unregistered projection reads
+ * as `undefined` and leaves the log's last prompt standing in, while a mounted
+ * unit publishes its state from the first fold (`surfaceTokens: 0`) and has no
+ * sample to price yet — the reading is then empty, and the status row says so
+ * instead of reporting an occupancy nobody measured.
+ * @param projections - live Session projections, or undefined when unmounted.
+ * @param session - session whose meter state and newest request header are read.
+ * @param fallbackReservedTokens - adapter default used when no envelope declared a cap.
+ * @returns the routed capacity and the reading, either possibly undefined.
+ */
+export function readContextMeter(
+  projections: ContextPressureReader | undefined,
+  session: Session,
+  fallbackReservedTokens: number | undefined,
+): { readonly window: number | undefined; readonly reading: ContextMeterReading | undefined } {
+  const state = projections?.stateOf(session, 'contextPressure') as ContextPressureState | undefined
+  if (state === undefined || state === null || typeof state !== 'object') return { window: undefined, reading: undefined }
+  const tokens = projectedContextTokens(state)
+  const reserved = sessionReservedCompletionTokens(session) ?? fallbackReservedTokens
+  return {
+    window: contextWindowTokens(state),
+    reading: {
+      ...(tokens === undefined ? {} : { tokens }),
+      ...(reserved === undefined ? {} : { reservedTokens: reserved }),
+    },
+  }
+}
+
+/**
+ * Output tokens the newest routed request envelope reserves, as the automatic
+ * compactor deducts them: an envelope's own cap wins over the adapter's
+ * per-request default, which only stands in when the envelope omitted one. The
+ * header fold is incremental, so this costs only the events appended since the
+ * last read.
+ * @param session - Session whose latest request header is read.
+ * @returns the cap in tokens, or undefined when no envelope declared one.
+ */
+export function sessionReservedCompletionTokens(session: Session): number | undefined {
+  const cap = session.requestHeader()?.config.maxTokens
+  return typeof cap === 'number' && Number.isFinite(cap) && cap > 0 ? Math.floor(cap) : undefined
 }
 
 function defaultSelection(ctx: Context): ModelSelection {

@@ -25,7 +25,7 @@ DeepSeek Harness 的 host-native 终端前端，基于 pi-tui。
 - 运行中 `Esc` / `Ctrl+C` 取消 turn；长文本和 tool 输出按行保持左侧色条。
 - 上下文压缩：默认 preset 启用 `compaction-basic` 自动压力压缩与 context-overflow 恢复，以及 tool-result pruner；TUI 渲染 compaction start/summary/end 和 prune 通知，`/compact` 作为 Host command 可手动触发。
 - 显示密度可配置：`thinkingDisplay` 与 `runCodeDisplay` 均支持 `hidden | compact | detailed`；后者覆盖 `run_code`、`bash`、`pwsh` 等代码执行工具卡。
-- 状态栏常驻当前模型和会话指标：`● idle  model provider/model`、preset/effort/快捷键、turns/steps、tok/s、累计 token、cache hit、context 使用率；header 只保留 Session id 和 cwd。
+- 状态栏常驻当前模型和会话指标：`● idle  model provider/model`、preset/effort/快捷键、turns/steps、tok/s、累计 token、cache hit、context 占用；header 只保留 Session id 和 cwd。context 与 Web 端同口径：读 token meter 的 `contextPressure` 投影（最近一次 provider 采样 + 此后 surface 增减，compaction 的影响已含在内），渲染为 `ctx 42%  (~420K / 1M · compact at 80%)`，其中 `compact at` 是按 `compaction-basic` 的 `thresholdRatio`、`headroomTokens` 与该请求预留输出复算出的自动压缩触发点；首次 provider 采样之前显示 `ctx —`，不猜占用（与 Web ContextMeter 一致）。token 用量与 cache 命中率同样按 Web 口径：总量取四桶之和、部分命中不会显示成 100%，数字格式与 Web 统计 pill 一致。
 - `@@<query>` 自动补全其他 Session 的 canonical mention；发送时 Host session-reference 自动注入快照。
 - `/export [path]` 导出 Session JSONL；`/export zip [path]` 导出含 manifest、attachments、deliverables 的 ZIP bundle；`/export html [path]` 导出静态 HTML transcript；`/open` 预览文本文件，Markdown 以 pi-tui Markdown 样式分页渲染；`/preview` 渲染 PNG/JPEG/GIF/WebP 图片；`/files` 浏览目录并预览；`/attach` 暂存文件/图片或剪贴板图片并随下一条 prompt 发送（8 MiB 上限），`/attach preview <i>` 可内联预览暂存项，`/attachments` 打开暂存附件管理器（预览/移除）；`/deliverables` 可列出、打开 panel、预览或用系统文件管理器定位 present 交付文件；`/tools` 列出工具调用，`/tool <index>` 分页查看完整参数/结果，`/diff [index]` 查看 write/edit 的独立 diff。
 - 问答/审批在 preset Agent 上仍可用（question probe 已通过）。

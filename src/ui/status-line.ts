@@ -9,7 +9,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { AgentPresetService } from '../runtime/agent.js'
-import type { SessionStats } from '../runtime/metrics.js'
+import type { ContextMeterReading, SessionStats } from '../runtime/metrics.js'
 import { collectSessionMetrics, formatSessionMetrics } from '../runtime/metrics.js'
 import type { Palette } from './theme.js'
 
@@ -31,6 +31,11 @@ export interface StatusInput {
   readonly preset: string | undefined
   readonly attachmentCount: number
   readonly contextWindow: number | undefined
+  /**
+   * Token meter reading when that service is mounted; absent in compositions
+   * without it, where the durable log's last prompt stands in.
+   */
+  readonly contextMeter: ContextMeterReading | undefined
   readonly stats: SessionStats | undefined
   readonly events: readonly unknown[]
 }
@@ -56,7 +61,7 @@ export function renderStatusRows(rows: StatusRows, palette: Palette, input: Stat
   const hint = input.running
     ? 'enter steer · esc cancel · ctrl+c cancel · ctrl+d exit'
     : 'enter send · /help · ctrl+d exit'
-  const metrics = collectSessionMetrics(input.events as never, input.stats, input.contextWindow)
+  const metrics = collectSessionMetrics(input.events as never, input.stats, input.contextWindow, input.contextMeter)
   const modelLine = state + '  ' + palette.bold(palette.accent('model ' + input.provider + '/' + input.model))
   const metaLine = [...metaBits, palette.dim(hint)].join('   ')
   rows.status.setText(modelLine + '\n' + metaLine + '\n'

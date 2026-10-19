@@ -61,11 +61,11 @@ pnpm check
   vitest run
   tsc -p tsconfig.build.json
 
-Test Files  32 passed (32)
-Tests      237 passed (237)
+Test Files  33 passed (33)
+Tests      275 passed (275)
 ```
 
-> 2026-10-19 复核：测试规模从最初的 17/86 增长到 32/237，覆盖 transcript 渲染、session 事件接线、provider 默认值、CodeBuddy 流与重试策略。
+> 2026-10-19 复核：测试规模从最初的 17/86 增长到 33/275，覆盖 transcript 渲染、session 事件接线、provider 默认值、CodeBuddy 流与重试策略；本轮新增 context meter 投影用例与 `tests/router.spec.ts`。
 
 ### 安装与启动
 
@@ -108,8 +108,8 @@ presets/standard|ptc|minimal|cordis.patch.yml
 src/index.ts                 Cordis 入口、TTY 守卫
 src/config.ts                schemastery 配置、fullscreen
 src/runtime/                 agent/session、attachments、bundle、html、images、open、providers、settings、tool-log
-src/ui/                      app、autocomplete、dialogs、transcript、diff、theme
-tests/                       23 个测试文件，86 个测试
+src/ui/                      app（wiring）、commands/（每命令族一模块 + router.ts 分发器）、autocomplete、dialogs、transcript、diff、theme
+tests/                       33 个测试文件，275 个测试
 scripts/fake-tty-*.mjs       fake-TTY 验证脚本
 README.md
 docs/design-task-feature-dsh-native-tui-host-native.md
@@ -151,7 +151,7 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - 已验证输入 `/provider` 时补全列表显示 `/provider add/list/remove`；输入 `/provider re` 只显示 remove。
 - 已验证 `/preset minimal` 写入 `agent-preset-registry.selectedDefault: minimal`；重启后状态栏和 `/status` 仍显示 minimal。
 - 已验证默认 bundle 加载 computer-use、Cua Driver native、mcp-client、mcp-resources、mcp-manager、session-stats；profile 启动无激活错误。
-- 状态栏常驻三行：`● idle  model <provider>/<model>` + preset/effort/快捷键 + `↳ turns/steps/tok/s/tokens/cache/ctx`；header 第二行只显示 cwd，避免长会话滚动后还需要 `/status` 确认模型。
+- 状态栏常驻三行：`● idle  model <provider>/<model>` + preset/effort/快捷键 + `↳ turns/steps/tok/s/tokens/cache/ctx`；header 第二行只显示 cwd，避免长会话滚动后还需要 `/status` 确认模型。ctx 段与 Web 端同口径（token meter `contextPressure` 的 projected 值），渲染为 `ctx 42%  (~420K / 1M · compact at 80%)`。
 - 参考 pi agent 增加用户消息、reasoning、tool 输出的全宽背景带；dark/light theme 使用不同底色，plain 保持无样式。
 - Choice/TextInput/Approval、Markdown/Text Pager、Image 弹窗统一使用全宽 opaque dialogFrame；标题按行 wrap、长 reason 限制、每行补齐背景，避免底层 transcript 透出和串行。
 - 已验证 `/mcp add` 写入 `mcp-manager.servers.demo`；mcp-manager 等待 mcp-client fiber 激活并通过 `mcpManagerStatus` 暴露状态。
@@ -173,7 +173,7 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - 修复 MCP fiber 激活失败后 Loader row 未清理的问题，并新增对应单测。
 - compact run_code 现在同时显示 description/action 与 result 首行。
 - 新增 approval 弹窗选择测试：Allow once / Reject / Esc cancel，并验证 reason 渲染。
-- compaction 后 context 估算会减去 shadowedTokenCount；新的 compaction start / assistant / turn end 会把未结束的旧 compaction 标记为 error。
+- 未挂载 token meter 的组合里，日志回退估算会在 compaction 后减去 shadowedTokenCount；装 meter 时以 `contextPressure` 投影为准（compaction 引起的缩减通过 surface 变化自然反映）。新的 compaction start / assistant / turn end 会把未结束的旧 compaction 标记为 error。
 
 ## 7. 建议验收步骤
 
@@ -197,7 +197,7 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 
 ## 9. 剩余事项（2026-10-17 审查记录）
 
-当前代码与 237 个测试通过（32 个测试文件）；以下按优先级保留，不再混入已完成项。
+当前代码与 275 个测试通过（33 个测试文件）；以下按优先级保留，不再混入已完成项。
 
 ### P1
 
@@ -207,7 +207,6 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 ### P2
 
 - [ ] **Compaction 中断恢复**：已能在新 start/assistant/turn end 时把未结束 compaction 标 error；若 Session 恢复时最后一个事件就是未结束的 start，仍会显示 running。需要 resume 时处理 orphan start 或加 stale 标记。
-- [ ] **Context 百分比精确性**：compaction 后只按 `shadowedTokenCount` 做近似扣减，未计 summary 本身 token；需要结合 token meter/下一次 usage 修正。
 - [ ] **真实 PTY**：fullscreen 鼠标滚动、选择复制、Ctrl+D 恢复尚未在普通终端验收。
 - [ ] **Settings wizard 自动化测试**：覆盖打开弹窗、修改 mode/entries、settings 持久化、theme/fullscreen restart 提示。
 
@@ -250,5 +249,9 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - [x] 长会话流式渲染三项优化（2026-10-19）：① 组件复用从「下标对齐」改为按 block 身份（`seq`/`callId`/`compactionId`）缓存——`maxEntries` 截断会让整表左移，旧实现每次新增行都重排全部 Markdown；② `reduceTranscriptWindow` 返回 `retainedFrom`，调用方丢弃无引用前缀，并删掉 `/clear` 后每帧的 `entries.filter`；③ 帧间隔按帧成本自适应（33 ms 起，超预算最多退到 100 ms）。基准 `scripts/bench-transcript.ts`（新增饱和窗口用例）：cap 2000 饱和位移帧 64.9 ms → 2.0 ms；10 万事件窗口 19.1 ms → 3.9 ms。
 - [x] provider 默认 `maxTokens` 对齐 Web（2026-10-19）：模型列表返回的 `maxTokens` 优先，列表未返回时不再写死 16k，改为 32k（与 pi-ai 的 `DEFAULT_MAX_TOKENS` / Web 端一致），并按 `contextWindow` 收窄，避免 `max_tokens` 超过模型窗口被接口拒绝。CodeBuddy 目录兜底值同步 32k。
 - [x] CodeBuddy 流空闲看门狗与截断流重试（2026-10-19）：此前该路径没有 idle 守卫，连接被无声切断时 `reader.read()` 永远挂起；且「无 finish 帧即关流」抛出的 `INCOMPLETE_STREAM` 不在 Host 默认可重试码里，直接失败。现补 5 分钟可重臂空闲预算（每收到一帧重新计时，超时先抛 `TIMEOUT` 再 abort socket，保证结果不会被 abort 产生的 transport 错误顶掉），并由适配器 `providerRetryPolicy` 在 Host 默认码集合上追加 `INCOMPLETE_STREAM`（默认值 `resolveRetryPolicy(undefined, …)` 读取后追加，不复制列表）。至此两条 provider 路径对「休眠断网 / 流被截断」的处理一致。
+- [x] 状态栏 token / tok-s / 缓存口径对齐 Web（2026-10-19）：① 用量折叠补齐 `assistant/attempt` 流里的 usage（与宿主 token meter 的 `usageOf` 同源），并按 token meter 的槽位语义处理替换——同一步的后续结算替换前一笔，`llm/retry-started` 关闭槽位让重试重新累加；未结算的中断 attempt 现在计入总量与缓存命中（218 个新鲜投影会话中此前有 2 个漏计，共 174,193 tokens）。② 缓存命中率改用 Web 的 `formatCacheHitPercent`：整命中才显示 100%，部分命中不再四舍五入到 100（此前 12/237 个会话显示 100%，Web 显示 99.5–99.8%）。③ 总量改为四桶求和（不再优先 provider 的 `totalTokens`），`formatTokenCount` 对齐 Web `formatTokens`（≥100 单位取整、<100 一位小数、不设 B 单位；此前 36/237 个会话显示不同，如 177.2M vs 177M）。验证：`pnpm check` 33 files / 275 tests；对 218 个新鲜投影缓存会话逐一比对宿主 `tokenUsage` 投影与 Web 的格式化函数，总量 / 缓存 / 格式三项差异均为 0（修复前 2 / 12 / 36）；真实会话恢复渲染 `56 turns · 1059 steps · 263 tok/s · 515M tok · cache 99% · ctx 69% (~725K / 1M · compact at 69%)`。
+
 - [x] 等待 API 响应提示（2026-10-19）：`agent/assistant-stream` 的 start 帧起、任意流式 chunk 或 `turn/end` 止，在转录末尾显示 `⟳ waiting for API response · Ns`，1 秒 ticker 仅在该行可见时运行；`llm/retry` 事件追加 `· retry 1/5 after SERVER (automatic)`，用来区分「系统正自动重试」与「需要手动重发」。为防止快模型下每步闪一下，行在等待超过 `WAIT_ROW_DELAY_MS`(1 s) 后才出现，但已排定的重试立即显示。mock SSE provider + 真实 Host + 真实 TUI 抓取验证（逐秒递增、首帧到达即消失、500 后显示 automatic 重试并在重放成功后清除）。
 - [x] 手动调用技能对齐 Web 端（2026-10-18）：`/` 补全在命令后列出 Host `ctx.skills` 的用户可调用技能（过滤 `userInvocable`，仅用户可调用的标注 `user-only`），选中插入 `/skill-name`；`runCommand` 的未知命令分支先尝试 Host 命令，再匹配技能并以普通 prompt 发送（`dsh-tool-skill` 的 `SKILL_GESTURE` 在 pre-step 注入技能正文）；`/help` 增加 `Skills:` 行。`tests/autocomplete.spec.ts` 补技能补全/命令遮蔽用例（140 tests）；真实 Host 冒烟 `scripts/fake-tty-skill.mjs` 通过（菜单列出、非未知命令、正文注入）。
+- [x] context 占用对齐 Web 端（2026-10-19，关闭 P2「Context 百分比精确性」）：状态栏 `ctx` 改为读 Host `contextPressure` 投影——`projectedTokens`（最近一次 provider 采样 + 此后 surface 增减，compaction 的影子通过 surface 自然反映）除以投影记录的路由容量（无则回退模型 catalog），百分比与 Web ContextMeter 同式 `min(100, round(used/window*100))`；并按 `dsh-compaction-basic` 的 `thresholdRatio`(0.8)、`headroomTokens`(65536) 与预留输出复算自动压缩触发点；预留输出与会话最新 `request/header` 的 `config.maxTokens` 同源，没有才回退模型 catalog 的 `defaultMaxTokens`（与压缩器的 `reservedCompletionTokens` 一致；2026-10-19 修正，此前只读 catalog 值），渲染为 `ctx 42%  (~420K / 1M · compact at 80%)`。meter 已挂载、尚无 provider 采样时显示 `ctx —`（与 Web 一致，不再用日志里的 0 冒充占用）；只有未挂载 meter 的组合才回退到日志最后一次 prompt（compaction 后减 `shadowedTokenCount`，该扣减已补回单测）。`tests/metrics.spec.ts` 覆盖投影公式、headroom 收窄、meter 优先、无采样静默与回退扣减；真实 Host 冒烟 `scripts/fake-tty-smoke.mjs` 空会话输出 `ctx —`。
+- [x] `app.ts` 按职责拆分（2026-10-19）：`runCommand` 的 34 分支分发移到 `src/ui/commands/router.ts` → `runCommandLine(line, deps)`，只注入七名协作者（context/switchTo/sendPrompt/clearTranscript/exit/preset/skills），`ctx()` 惰性构建，分支集合与顺序和拆分前逐一对齐；app.ts 里 21 个 Host service 接口中 17 个已无引用（删除）、其余 4 个改从 `commands/services.ts` 导入，本地 `errorMessage` 复用 `commands/shared.ts`，`listSessions` 包装与死常量 `MAX_LISTED_SESSIONS`/`NL` 删除。`app.ts` 990 → 610 行；新增 `tests/router.spec.ts` 7 个用例（exit/clear/init/new/未知命令/host 命令吞掉/技能回落）；`pnpm check` 33 files / 260 tests 通过，真实 Host 冒烟 `scripts/fake-tty-command-sweep.mjs` 中 `/jobs`、`/agents` 输出正常。

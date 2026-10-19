@@ -2,9 +2,10 @@
  * Shared surface the command handlers run against.
  *
  * `app.ts` owns the terminal, the active session and the transcript state; the
- * handlers in `src/ui/commands/` own the semantics of one command family each.
- * This file is the contract between them: a handler receives one context and
- * calls back through it, so a split moves code without changing behaviour.
+ * handlers in `src/ui/commands/` own the semantics of one command family each,
+ * and `router.ts` dispatches a submitted line onto them. This file is the
+ * contract between them: a handler receives one context and calls back through
+ * it, so a split moves code without changing behaviour.
  *
  * @module dsh-native-tui/ui/commands/context
  */
@@ -62,7 +63,11 @@ export interface CommandContext {
   /** The writable model selection for the current session. */
   readonly modelSelection: ModelSelectionState
   /** Set the context window the status row reports, or clear it. */
-  readonly setContextWindow: (tokens: number | undefined) => void
+  /**
+   * Record the routed model's context capacity and the output it reserves, so
+   * the status row can price context against the compaction threshold.
+   */
+  readonly setContextWindow: (tokens: number | undefined, reservedTokens?: number) => void
   /** Persist the current model selection for future sessions. */
   readonly persistSelection: () => Promise<void>
 }

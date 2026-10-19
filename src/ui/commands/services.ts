@@ -1,5 +1,6 @@
 /**
- * Structural views of the Host services the command handlers read.
+ * Structural views of the Host services the command handlers and the terminal
+ * wiring read.
  *
  * These are local interfaces rather than imports from the Host packages: the
  * plugin reaches services through `ctx.get(name)` and only depends on the slice
@@ -39,6 +40,7 @@ export interface LLM {
   }[]>
   resolveModelInfo(provider: string, model: string): Promise<{
     readonly context?: { readonly contextWindow?: number }
+    readonly defaultMaxTokens?: number
     readonly reasoning?: {
       readonly efforts: readonly { readonly id: string; readonly name: string; readonly description?: string }[]
       readonly defaultEffort?: string

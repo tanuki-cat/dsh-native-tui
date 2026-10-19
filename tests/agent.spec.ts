@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import type { AgentHandle } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { createHostSession, resumeHostSession, sessionAgentPreset, sessionModelSelection } from '../src/runtime/agent.js'
+import { createHostSession, readContextMeter, resumeHostSession, sessionAgentPreset, sessionModelSelection, sessionReservedCompletionTokens } from '../src/runtime/agent.js'
 import type { ResolvedConfig } from '../src/config.js'
 
 const config: ResolvedConfig = {
@@ -46,6 +46,60 @@ describe('session selection restore', () => {
     }
     expect(sessionModelSelection(session as never)).toEqual({ provider: 'p2', model: 'm2', reasoningEffort: 'high' })
     expect(sessionAgentPreset(session as never)).toBe('ptc')
+  })
+})
+
+describe('context meter reading', () => {
+  const state = { pressureTokens: 300_000, surfaceTokens: 400_000, sampledSurfaceTokens: 280_000, contextWindow: 1_000_000 }
+  const projections = { stateOf: () => state }
+
+  it('prefers the request envelope cap over the adapter default', () => {
+    const session = { requestHeader: () => ({ config: { provider: 'p', model: 'm', maxTokens: 100_000 } }) }
+    expect(readContextMeter(projections, session as never, 32_768))
+      .toEqual({ window: 1_000_000, reading: { tokens: 420_000, reservedTokens: 100_000 } })
+  })
+
+  it('falls back to the adapter default when the envelope declared no cap', () => {
+    const session = { requestHeader: () => ({ config: { provider: 'p', model: 'm' } }) }
+    expect(readContextMeter(projections, session as never, 32_768).reading)
+      .toEqual({ tokens: 420_000, reservedTokens: 32_768 })
+  })
+
+  it('leaves the figure to the log when the projection is unregistered', () => {
+    const session = { requestHeader: () => undefined }
+    expect(readContextMeter({ stateOf: () => undefined }, session as never, 32_768))
+      .toEqual({ window: undefined, reading: undefined })
+    expect(readContextMeter(undefined, session as never, undefined))
+      .toEqual({ window: undefined, reading: undefined })
+  })
+
+  it('keeps the reserved figure while the meter has no sample yet', () => {
+    const session = { requestHeader: () => ({ config: { provider: 'p', model: 'm', maxTokens: 100_000 } }) }
+    expect(readContextMeter({ stateOf: () => ({ surfaceTokens: 0 }) }, session as never, undefined).reading)
+      .toEqual({ reservedTokens: 100_000 })
+  })
+})
+
+describe('reserved completion tokens', () => {
+  it('prefers the newest request envelope cap', () => {
+    const session = { requestHeader: () => ({ config: { provider: 'p', model: 'm', maxTokens: 65_536 } }) }
+    expect(sessionReservedCompletionTokens(session as never)).toBe(65_536)
+  })
+
+  it('reports nothing when the envelope declared no cap', () => {
+    const session = { requestHeader: () => ({ config: { provider: 'p', model: 'm' } }) }
+    expect(sessionReservedCompletionTokens(session as never)).toBeUndefined()
+  })
+
+  it('reports nothing before the first request header', () => {
+    expect(sessionReservedCompletionTokens({ requestHeader: () => undefined } as never)).toBeUndefined()
+  })
+
+  it('ignores a cap that cannot bound output', () => {
+    for (const maxTokens of [0, -1, Number.NaN]) {
+      const session = { requestHeader: () => ({ config: { provider: 'p', model: 'm', maxTokens } }) }
+      expect(sessionReservedCompletionTokens(session as never)).toBeUndefined()
+    }
   })
 })
 

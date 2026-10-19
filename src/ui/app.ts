@@ -9,47 +9,29 @@ import {
   VStack,
 } from '@earendil-works/pi-tui'
 import type { Context } from '@deepseek-ai/cordis'
-import { installModelSelection, type ModelSelection, type ModelSelectionRef } from '@deepseek-ai/dsh-agent'
+import { installModelSelection, type ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-commands'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm/types'
-import type { Session } from '@deepseek-ai/dsh-session'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { DisplayMode, ResolvedConfig } from '../config.js'
-import { createHostSession, resumeHostSession, sessionAgentPreset, sessionModelSelection, type AgentPresetService, type HostSession } from '../runtime/agent.js'
+import { createHostSession, readContextMeter, resumeHostSession, sessionAgentPreset, sessionModelSelection, type AgentPresetService, type HostSession } from '../runtime/agent.js'
 import type { SessionStats } from '../runtime/metrics.js'
-import { openUrlInBrowser } from '../runtime/open.js'
-import { ownStoredSessions, selectListedSessions } from '../runtime/session-list.js'
-import { INIT_AGENTS_PROMPT } from '../runtime/init-prompt.js'
-import { runCodebuddyCommand, type CodeBuddyCommandDeps } from '../runtime/codebuddy-command.js'
-import type { CodeBuddyService } from '../codebuddy.js'
-import { formatChangesSummary, type ChangesSummaryView, type WorkspaceDiffView } from '../runtime/changes.js'
-import { formatDeliverables, type PresentedFileView } from '../runtime/deliverables.js'
-import { showApproval, showChoice, showQuestionBatch, showTextInput } from './dialogs.js'
+import { showApproval, showQuestionBatch } from './dialogs.js'
 import type { PendingAttachment } from '../runtime/attachments.js'
 import { TuiAutocompleteProvider, type SessionReferenceService, type SkillSuggestion } from './autocomplete.js'
 import { currentPreset, renderStatusRows } from './status-line.js'
 import { createPalette, editorTheme, markdownTheme, type Palette } from './theme.js'
 import { globalShortcut } from './keymap.js'
-import { changesCommand, deliverablesCommand, filesCommand } from './commands/artifacts.js'
-import { HELP_LINES, LOCAL_COMMANDS } from './commands/catalog.js'
-import { attachCommand, attachmentsCommand } from './commands/attachments.js'
+import { LOCAL_COMMANDS } from './commands/catalog.js'
 import type { CommandContext } from './commands/context.js'
-import { mcpCommand } from './commands/mcp.js'
-import { modelCommand, reasoningCommand } from './commands/model.js'
-import { pluginsCommand } from './commands/plugins.js'
-import { providerCommand } from './commands/provider.js'
-import { agentsCommand, jobsCommand, permissionsCommand } from './commands/runtime-status.js'
-import { helpCommand, statusCommand } from './commands/session.js'
-import { sessionsCommand } from './commands/sessions.js'
-import { openTuiSettings, settingsCommand, showHostSettings } from './commands/settings.js'
-import { diffCommand, toolCommand, toolsCommand } from './commands/tools.js'
-import { exportCommand, openCommand, presetCommand, previewCommand } from './commands/workspace-files.js'
-import { scheduleCommand, workspacesCommand } from './commands/workspace.js'
+import { runCommandLine } from './commands/router.js'
+import type { AgentDefaultModelService, LLM, SessionProjectionsService, SkillsCatalog } from './commands/services.js'
+import { openTuiSettings, showHostSettings } from './commands/settings.js'
+import { errorMessage } from './commands/shared.js'
 import { subscribeSessionEvents } from './session-events.js'
 import { nextStreamInterval, STREAM_MIN_INTERVAL_MS, STREAM_MS_PER_CHAR, TranscriptRenderer, WAIT_ROW_DELAY_MS, waitingText, waitingVisible, type TranscriptBlock, type TranscriptEntry, type WaitRetry } from './transcript.js'
 import { Rule } from './rule.js'
-import { diffLines } from './diff.js'
 
 
 /** Terminal application lifecycle. */
@@ -60,205 +42,6 @@ export interface TerminalApp {
 }
 
 const MAX_NOTICES = 12
-/** Sessions shown by one `/sessions` notice; the store can hold hundreds. */
-const MAX_LISTED_SESSIONS = 12
-const NL = String.fromCharCode(10)
-
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
-interface LlmCatalog {
-  listProviders(): readonly { readonly id: string; readonly name?: string }[]
-  listConfigurableProviders(): readonly {
-    readonly provider: string
-    readonly displayName?: string
-    readonly settingsNs?: string
-    readonly nativeAuth?: { readonly env?: readonly string[]; readonly oauth?: boolean }
-    readonly defaultBaseURL?: string
-    readonly baseURLEnv?: readonly string[]
-    readonly declared?: boolean
-  }[]
-  listModels(provider: string): Promise<readonly { readonly id: string; readonly name: string; readonly description?: string }[]>
-  discoverModels(settingsNs: string, request: {
-    readonly provider?: string
-    readonly baseURL?: string
-    readonly api?: string
-    readonly apiKey?: string
-  }, signal?: AbortSignal): Promise<readonly {
-    readonly id: string
-    readonly name?: string
-    readonly contextWindow?: number
-    readonly maxTokens?: number
-    readonly inputModalities?: readonly ('text' | 'image')[]
-  }[]>
-  resolveModelInfo(provider: string, model: string): Promise<{
-    readonly context?: { readonly contextWindow?: number }
-    readonly reasoning?: {
-      readonly efforts: readonly { readonly id: string; readonly name: string; readonly description?: string }[]
-      readonly defaultEffort?: string
-    }
-  }>
-}
-
-interface SkillsCatalog {
-  list(options?: { readonly cwd?: string; readonly signal?: AbortSignal; readonly scope?: unknown }): Promise<readonly {
-    readonly name: string
-    readonly description: string
-    readonly whenToUse?: string
-    readonly invocation?: { readonly modelInvocable?: boolean; readonly userInvocable?: boolean }
-  }[]>
-}
-
-interface PermissionPresets {
-  readonly names: readonly string[]
-  current(session: Session): string
-  set(session: Session, name: string): void
-}
-
-interface JobRow {
-  readonly id: string
-  readonly kind: string
-  readonly label: string
-  readonly status: string
-  readonly progress?: string
-  readonly detail?: string
-  readonly startedAt: number
-}
-
-interface JobsService {
-  list(caller?: SessionId): readonly JobRow[]
-  kill(id: string, caller?: SessionId, reason?: string): 'requested' | 'already-finished'
-}
-
-interface SubagentRow {
-  readonly id: SessionId
-  readonly createdAt: number
-  readonly mode: string
-  readonly label?: string
-}
-
-interface SubagentsService {
-  listChildren(parentSessionId: SessionId, signal?: AbortSignal): Promise<readonly SubagentRow[]>
-}
-
-interface WorkspaceRow {
-  readonly id: string
-  readonly path: string
-  readonly title: string
-  readonly sessionIds: readonly string[]
-}
-
-interface WorkspaceService {
-  list(): readonly WorkspaceRow[]
-  create(path: string, title?: string): Promise<WorkspaceRow>
-  get(id: string): WorkspaceRow | undefined
-  resolveByPath(path: string): Promise<WorkspaceRow | undefined>
-  pinSession(sessionId: SessionId): Promise<void>
-  unpinSession(sessionId: SessionId): Promise<void>
-  archiveSession(sessionId: SessionId, options?: { stopActivity?: boolean }): Promise<void>
-  unarchiveSession(sessionId: SessionId): Promise<void>
-}
-
-interface ScheduleRow {
-  readonly id: string
-  readonly kind: string
-  readonly title: string
-  readonly prompt: string
-  readonly scheduledAt: string
-}
-
-interface ScheduleService {
-  list(request: { sessionId: SessionId }): Promise<readonly ScheduleRow[]>
-  create(
-    sessionId: SessionId,
-    request: { title: string; prompt: string; after_seconds: number },
-    signal?: AbortSignal,
-  ): Promise<ScheduleRow>
-  delete(request: { sessionId: SessionId; id: string }, signal?: AbortSignal): Promise<unknown>
-}
-
-interface PluginRow {
-  readonly entryId: string
-  readonly moduleName: string
-  readonly enabled: boolean
-  readonly readOnlyReason?: string
-  readonly meta?: { readonly name?: string; readonly description?: string }
-}
-
-interface PluginChangeResult {
-  readonly changed: boolean
-  readonly application: string
-  readonly target: string
-  readonly enabled?: boolean
-  readonly error?: { readonly code: string; readonly message?: string }
-}
-
-interface PluginInspection {
-  readonly status: 'accepted' | 'refused'
-  readonly kind?: string
-  readonly name?: string
-  readonly version?: string
-  readonly description?: string
-  readonly bundle?: boolean | null
-  readonly problem?: string
-  readonly reason?: string
-}
-
-interface PluginManagerService {
-  listBundles(): Promise<readonly {
-    name: string
-    enabled: boolean
-    installed: boolean
-    removable?: boolean
-    official?: boolean
-    availability?: string
-    optional?: boolean
-    version?: string
-    description?: string
-    installTarget?: { readonly spec: string; readonly version: string }
-  }[]>
-  listPlugins(): Promise<readonly PluginRow[]>
-  setPluginEnabled(id: string, enabled: boolean): Promise<PluginChangeResult>
-  inspect(spec: string): Promise<PluginInspection>
-  installBundle(spec: string, options?: { enabled?: boolean }): Promise<PluginChangeResult>
-  removeBundle(name: string): Promise<PluginChangeResult>
-}
-
-interface WorkspaceChangesService {
-  summary(sessionId: SessionId, seq: number): ChangesSummaryView | undefined
-  diff(sessionId: SessionId, seq: number, index: number, signal: AbortSignal): Promise<WorkspaceDiffView | undefined>
-}
-
-interface McpManagerStatus {
-  snapshot(): Record<string, { readonly status: 'starting' | 'connected' | 'disconnected' | 'error'; readonly error?: string }>
-}
-
-interface SessionProjectionsService {
-  stateOf(session: Session, key: string): unknown
-}
-
-interface AgentDefaultModelService {
-  saveSelection(selection: ModelSelection): Promise<void>
-}
-
-interface CredentialsService {
-  set(ref: string, value: string): Promise<void>
-  resolve(ref: string): Promise<{ readonly value?: string } | undefined>
-}
-
-interface SettingsService {
-  describe(options?: { redactSecrets?: boolean }): readonly {
-    ns: string
-    value: Record<string, unknown>
-    schema: unknown
-    revision: number
-    secrets?: readonly { path: readonly string[]; set: boolean }[]
-  }[]
-  update(ns: string, patch: object, expectedRevision?: number): Promise<void>
-  mutate(ns: string, ops: readonly ({ op: 'set'; path: readonly string[]; value: unknown } | { op: 'unset'; path: readonly string[] })[], expectedRevision?: number): Promise<void>
-}
 
 /**
  * Mount the pi-tui application over one owned Host Agent.
@@ -385,6 +168,8 @@ export async function startTerminalApp(
   const interactionAbort = new AbortController()
   const attemptPositions = new Map<string, { turn: number; step: number }>()
   let contextWindow: number | undefined
+  /** Output tokens one request reserves, as the compactor deducts them. */
+  let contextReserved: number | undefined
   let modelSelection: ModelSelectionRef = {
     current: sessionModelSelection(active.agent.session) ?? {
       provider: active.agent.options.provider ?? 'deepseek-official',
@@ -476,6 +261,7 @@ export async function startTerminalApp(
     if (disposed) return
     const options = active.agent.options
     const projections = host.get('sessionProjections') as SessionProjectionsService | undefined
+    const meter = readContextMeter(projections, active.agent.session, contextReserved)
     renderStatusRows({ header, status }, palette, {
       title: config.title,
       sessionId: active.id,
@@ -486,7 +272,10 @@ export async function startTerminalApp(
       reasoningEffort: modelSelection.current?.reasoningEffort,
       preset: currentPreset(host.get('agentPresets') as AgentPresetService | undefined, active.agent.ctx),
       attachmentCount: pendingAttachments.length,
-      contextWindow,
+      // The routed request's own capacity wins, as on the Web meter; the model
+      // catalog value only stands in before the first request is routed.
+      contextWindow: meter.window ?? contextWindow,
+      contextMeter: meter.reading,
       stats: projections?.stateOf(active.agent.session, 'sessionStats') as SessionStats | undefined,
       events: active.agent.session.snapshotEvents(),
     })
@@ -494,12 +283,13 @@ export async function startTerminalApp(
   }
 
   const refreshContextWindow = async (): Promise<void> => {
-    const llm = host.get('llm') as LlmCatalog | undefined
+    const llm = host.get('llm') as LLM | undefined
     const current = modelSelection.current
     if (llm === undefined || current === undefined) return
     try {
       const info = await llm.resolveModelInfo(current.provider, current.model)
       contextWindow = info.context?.contextWindow
+      contextReserved = info.defaultMaxTokens
       renderStatus()
     }
     catch {
@@ -568,10 +358,6 @@ export async function startTerminalApp(
     interactionDisposers = []
   }
 
-  const listSessions = async (): Promise<void> => {
-    await sessionsCommand(commandContext())
-  }
-
   const switchTo = async (next: () => Promise<HostSession>): Promise<void> => {
     if (switching || disposed) return
     switching = true
@@ -599,6 +385,7 @@ export async function startTerminalApp(
       }
       disposeModelSelection = installModelSelection(active.agent.ctx, modelSelection)
       contextWindow = undefined
+      contextReserved = undefined
       registerInteractions()
       subscribeActive()
       void refreshContextWindow()
@@ -663,192 +450,36 @@ export async function startTerminalApp(
     openTuiSettings: () => openTuiSettings(commandContext()),
     showHostSettings: () => showHostSettings(commandContext()),
     modelSelection,
-    setContextWindow: tokens => { contextWindow = tokens },
+    setContextWindow: (tokens, reservedTokens) => {
+      contextWindow = tokens
+      contextReserved = reservedTokens
+    },
     persistSelection,
   })
 
-  const runCommand = async (line: string): Promise<void> => {
-    const withoutSlash = line.slice(1)
-    const space = withoutSlash.indexOf(' ')
-    const name = (space === -1 ? withoutSlash : withoutSlash.slice(0, space)).toLowerCase()
-    const args = space === -1 ? '' : withoutSlash.slice(space + 1).trim()
+  /**
+   * Route one `/` line through the command dispatcher. Only what a handler
+   * cannot reach through its command context is injected here: the session
+   * switch, prompts, the transcript reset, and the preset record.
+   */
+  const runCommand = (line: string): Promise<void> => runCommandLine(line, {
+    context: commandContext,
+    switchTo,
+    sendPrompt,
+    clearTranscript: () => {
+      entries = []
+      localNotices = []
+      renderer.clear()
+      scheduleTranscript(true)
+    },
+    exit: requestExit,
+    preset: {
+      current: () => selectedPreset,
+      select: id => { selectedPreset = id },
+    },
+    skills: loadSkills,
+  })
 
-    switch (name) {
-      case 'exit':
-      case 'quit':
-        requestExit(0)
-        return
-      case 'help': {
-        await helpCommand(commandContext(), HELP_LINES)
-        return
-      }
-      case 'clear':
-        entries = []
-        localNotices = []
-        renderer.clear()
-        scheduleTranscript(true)
-        return
-      case 'status': {
-        statusCommand(commandContext())
-        return
-      }
-      case 'cancel':
-        active.agent.cancel({ kind: 'user' })
-        pushNotice('info', 'Cancellation requested')
-        return
-      case 'new':
-        await switchTo(() => createHostSession(host, {
-          ...config,
-          sessionId: undefined,
-          agentPreset: selectedPreset ?? config.agentPreset,
-        }))
-        return
-      case 'init':
-        sendPrompt(INIT_AGENTS_PROMPT)
-        return
-      case 'sessions':
-        await listSessions()
-        return
-      case 'resume':
-        if (args === '') await listSessions()
-        else await switchTo(() => resumeHostSession(host, args as SessionId))
-        return
-      case 'model': {
-        await modelCommand(commandContext(), args)
-        return
-      }
-      case 'reasoning': {
-        await reasoningCommand(commandContext(), args)
-        return
-      }
-      case 'permissions': {
-        await permissionsCommand(commandContext(), args)
-        return
-      }
-      case 'jobs': {
-        jobsCommand(commandContext(), args)
-        return
-      }
-      case 'agents': {
-        await agentsCommand(commandContext())
-        return
-      }
-      case 'workspaces': {
-        await workspacesCommand(commandContext(), args, switchTo, () => selectedPreset)
-        return
-      }
-      case 'schedule': {
-        await scheduleCommand(commandContext(), args)
-        return
-      }
-      case 'plugins': {
-        await pluginsCommand(commandContext(), args)
-        return
-      }
-      case 'settings': {
-        await settingsCommand(commandContext(), args)
-        return
-      }
-            case 'preset': {
-              await presetCommand(commandContext(), args, () => selectedPreset, id => { selectedPreset = id })
-              return;
-            }
-            case 'export': {
-              await exportCommand(commandContext(), args)
-              return;
-            }
-            case 'open': {
-              await openCommand(commandContext(), args)
-              return;
-            }
-            case 'attach': {
-              await attachCommand(commandContext(), args)
-              return;
-            }
-            case 'files': {
-              await filesCommand(commandContext(), args)
-              return;
-            }
-            case 'changes': {
-              await changesCommand(commandContext(), args)
-              return;
-            }
-            case 'deliverables': {
-              await deliverablesCommand(commandContext(), args)
-              return;
-            }
-            case 'preview': {
-              await previewCommand(commandContext(), args)
-              return;
-            }
-            case 'tools': {
-              toolsCommand(commandContext())
-              return;
-            }
-            case 'tool': {
-              await toolCommand(commandContext(), args)
-              return;
-            }
-            case 'diff': {
-              await diffCommand(commandContext(), args)
-              return;
-            }
-            case 'attachments': {
-              await attachmentsCommand(commandContext())
-              return;
-            }
-            case 'mcp': {
-              await mcpCommand(commandContext(), args)
-              return;
-            }
-            case 'codebuddy': {
-                const codebuddyService = host.get('codebuddy') as CodeBuddyService | undefined;
-                await runCodebuddyCommand(args, {
-                    service: codebuddyService,
-                    authorization: host.get('authorization') as CodeBuddyCommandDeps['authorization'],
-                    credentials: host.get('credentials') as CodeBuddyCommandDeps['credentials'],
-                    openUrl: url => openUrlInBrowser(url),
-                    signal: interactionAbort.signal,
-                    notice: (level, text) => pushNotice(level, text),
-                    prompt: question => showTextInput(
-                        tui,
-                        palette,
-                        question.message,
-                        question.placeholder ?? '',
-                        question.secret === true ? 'Input is hidden from the transcript · Esc cancels' : 'Enter submits · Esc cancels',
-                        interactionAbort.signal,
-                    ),
-                });
-                return;
-            }
-            case 'provider': {
-              await providerCommand(commandContext(), args)
-              return;
-            }
-            default: {
-                try {
-                    const execution = await host.commands.execute(active.agent, line, [], new AbortController().signal);
-                    if (execution !== undefined) {
-                        // Host commands append command/done before execute() resolves, and the
-                        // transcript renders that event. Do not also surface result.text here.
-                        return;
-                    }
-                }
-                catch (error) {
-                    pushNotice('error', 'Command failed: ' + errorMessage(error));
-                    return;
-                }
-                // A user-invocable skill goes through as a prompt: dsh-tool-skill reads the
-                // /name gesture from claimed user messages and injects the skill body.
-                const skills = await loadSkills();
-                if (skills.some(skill => skill.name.toLowerCase() === name)) {
-                    sendPrompt(line);
-                    return;
-                }
-                pushNotice('warning', 'Unknown command: /' + name + '. Use /help for local and host commands.');
-            }
-        }
-    };
     const handleSubmit = (text: string): void => {
         const trimmed = text.trim();
         if (trimmed === '' && pendingAttachments.length === 0)
