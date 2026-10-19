@@ -5,6 +5,7 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import { Rule } from '../src/ui/rule.js'
 import { createPalette, markdownTheme } from '../src/ui/theme.js'
 import { contentText, liveChunkHasOutput, nextStreamInterval, reduceTranscript, reduceTranscriptWindow, STREAM_MIN_INTERVAL_MS, type TranscriptBlock, type TranscriptEntry } from '../src/ui/transcript.js'
+import { renderTranscriptBlock } from '../src/ui/transcript-render.js'
 import { REASONING_REVEAL_MAX_MS } from '../src/ui/reasoning-reveal.js'
 import { sameTranscriptBlock, TranscriptRenderer } from '../src/ui/transcript-renderer.js'
 import { formatToolArguments } from '../src/ui/tool-preview.js'
@@ -40,6 +41,37 @@ function toolResult(callId: string, text: string, seq: number): TranscriptEntry 
       content: [{ type: 'text', text }],
       isError: false,
     },
+  }, seq)
+}
+
+function ptcStart(subCallId: string, name: string, args: unknown, seq: number, parentCallId = 'call-outer'): TranscriptEntry {
+  return durable('tool/ptc-dispatch-start', {
+    rootCallId: parentCallId,
+    parentCallId,
+    subCallId,
+    name,
+    arguments: args,
+  }, seq)
+}
+
+function ptcSettle(
+  subCallId: string,
+  name: string,
+  text: string,
+  meta: unknown,
+  seq: number,
+  parentCallId = 'call-outer',
+  args: unknown = {},
+): TranscriptEntry {
+  return durable('tool/ptc-dispatch', {
+    rootCallId: parentCallId,
+    parentCallId,
+    subCallId,
+    name,
+    arguments: args,
+    isError: false,
+    content: [{ type: 'text', text }],
+    ...(meta === undefined ? {} : { meta }),
   }, seq)
 }
 
@@ -517,6 +549,139 @@ describe('reduceTranscript', () => {
       durable('tool/call', { turn: 1, step: 1, callId: 'call-1', name: 'run_code', arguments: '{}' }, 2),
     ], tracked, 1_000)
     expect(late.blocks).toHaveLength(0)
+  })
+
+  it('renders a nested edit card with diff rows from PTC', () => {
+    const entries: TranscriptEntry[] = [
+      durable('tool/call', { turn: 1, step: 1, callId: 'call-outer', name: 'run_code', arguments: '{}' }, 1),
+      ptcStart('call-outer:ptc:1', 'edit', { file_path: 'a.ts' }, 2),
+      ptcSettle('call-outer:ptc:1', 'edit', 'updated a.ts', {
+        diffs: [{ path: 'a.ts', oldText: 'old', newText: 'new' }],
+      }, 3),
+      toolResult('call-outer', 'nested output', 4),
+    ]
+    const blocks = reduceTranscript(entries, options)
+    expect(blocks).toHaveLength(2)
+    expect(blocks[0]).toMatchObject({ kind: 'tool', callId: 'call-outer', pending: false })
+    expect(blocks[1]).toMatchObject({
+      kind: 'tool',
+      callId: 'call-outer:ptc:1',
+      name: 'edit',
+      result: 'updated a.ts',
+      pending: false,
+      diffs: [{ path: 'a.ts', oldText: 'old', newText: 'new' }],
+    })
+    const output = renderTranscriptBlock(blocks[1]!, options).render(100).join('\n')
+    expect(output).toContain('├ diff')
+    expect(output).toContain('│ - old')
+    expect(output).toContain('│ + new')
+  })
+
+  it('settles a PTC edit card whose start left the window', () => {
+    const entries: TranscriptEntry[] = [
+      ptcSettle('call-outer:ptc:1', 'edit', 'updated a.ts', {
+        diffs: [{ path: 'a.ts', oldText: 'old', newText: 'new' }],
+      }, 2),
+    ]
+    const blocks = reduceTranscript(entries, options)
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0]).toMatchObject({ kind: 'tool', name: 'edit', pending: false, seq: 2 })
+  })
+
+  it('keeps non-editing PTC sub-calls inside the parent card', () => {
+    const entries: TranscriptEntry[] = [
+      durable('tool/call', { turn: 1, step: 1, callId: 'call-outer', name: 'run_code', arguments: '{}' }, 1),
+      ptcStart('call-outer:ptc:1', 'bash', { command: 'ls' }, 2),
+      ptcSettle('call-outer:ptc:1', 'bash', 'file.txt', undefined, 3),
+      ptcStart('call-outer:ptc:2', 'write', { file_path: 'b.ts', content: 'x' }, 4),
+      ptcSettle('call-outer:ptc:2', 'write', 'created b.ts', {
+        operation: 'create',
+        path: 'b.ts',
+        diffs: [],
+      }, 5, 'call-outer', { file_path: 'b.ts', content: 'x' }),
+      toolResult('call-outer', 'done', 6),
+    ]
+    const blocks = reduceTranscript(entries, options)
+    const tools = blocks.filter(block => block.kind === 'tool')
+    expect(tools).toHaveLength(2)
+    expect(tools[1]).toMatchObject({
+      name: 'write',
+      callId: 'call-outer:ptc:2',
+      pending: false,
+      diffs: [{ path: 'b.ts', oldText: null, newText: 'x' }],
+    })
+  })
+
+  it('rebuilds a created file diff from the native write call arguments', () => {
+    const entries: TranscriptEntry[] = [
+      durable('tool/call', {
+        turn: 1,
+        step: 1,
+        callId: 'call-write',
+        name: 'write',
+        arguments: JSON.stringify({ file_path: 'c.ts', content: 'hello' }),
+      }, 1),
+      durable('tool/result', {
+        turn: 1,
+        step: 1,
+        message: {
+          role: 'tool',
+          source: { kind: 'tool', callId: 'call-write' },
+          toolCallId: 'call-write',
+          content: [{ type: 'text', text: 'Created file' }],
+          isError: false,
+        },
+        meta: { operation: 'create', path: 'c.ts', diffs: [] },
+      }, 2),
+    ]
+    const blocks = reduceTranscript(entries, options)
+    expect(blocks[0]).toMatchObject({
+      kind: 'tool',
+      name: 'write',
+      diffs: [{ path: 'c.ts', oldText: null, newText: 'hello' }],
+    })
+    const output = renderTranscriptBlock(blocks[0]!, options).render(100).join('\n')
+    expect(output).toContain('│ + hello')
+  })
+
+  it('deduplicates PTC events and rebuilds the same nested card', () => {
+    const toolMemory = {
+      settled: new Set<string>(),
+      pruned: new Set<string>(),
+      prunedSeqs: new Set<number>(),
+      callBySeq: new Map<number, string>(),
+    }
+    const tracked = { ...options, toolMemory }
+    const entries: TranscriptEntry[] = [
+      ptcStart('call-outer:ptc:1', 'edit', { file_path: 'a.ts' }, 2),
+      ptcSettle('call-outer:ptc:1', 'edit', 'updated a.ts', {
+        diffs: [{ path: 'a.ts', oldText: 'old', newText: 'new' }],
+      }, 3),
+      ptcStart('call-outer:ptc:1', 'edit', { file_path: 'a.ts' }, 4),
+      ptcSettle('call-outer:ptc:1', 'edit', 'duplicate', undefined, 5),
+    ]
+    const first = reduceTranscriptWindow(entries, tracked, 1_000)
+    expect(first.blocks).toHaveLength(1)
+    expect(first.blocks[0]).toMatchObject({ pending: false, result: 'updated a.ts', seq: 3 })
+
+    const second = reduceTranscriptWindow(entries, tracked, 1_000)
+    expect(second.blocks).toHaveLength(1)
+    expect(second.blocks[0]).toMatchObject({ pending: false, result: 'updated a.ts', seq: 3 })
+  })
+
+  it('hides nested edit cards when the parent run_code output is pruned', () => {
+    const entries: TranscriptEntry[] = [
+      durable('tool/call', { turn: 1, step: 1, callId: 'call-outer', name: 'run_code', arguments: '{}' }, 1),
+      ptcStart('call-outer:ptc:1', 'edit', { file_path: 'a.ts' }, 2),
+      ptcSettle('call-outer:ptc:1', 'edit', 'updated a.ts', {
+        diffs: [{ path: 'a.ts', oldText: 'old', newText: 'new' }],
+      }, 3),
+      toolResult('call-outer', 'nested output', 4),
+      durable('compaction/prune', { shadowedSeqs: [4], shadowedTokenCount: 10 }, 5),
+    ]
+    const blocks = reduceTranscript(entries, options)
+    expect(blocks.some(block => block.kind === 'tool')).toBe(false)
+    expect(blocks.some(block => block.kind === 'notice' && block.text.includes('pruned'))).toBe(true)
   })
 
   it('keeps prune memory after the original entries leave the window', () => {

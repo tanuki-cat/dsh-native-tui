@@ -32,6 +32,37 @@ export function asFileDiffs(meta: unknown): FileDiff[] | undefined {
 }
 
 /**
+ * Read a result's diffs, falling back to the call arguments for a created
+ * file. The Host records an empty diff list for creates (there is no prior
+ * content to compare) and exposes the written content in the arguments.
+ * @param meta - persisted or live result metadata.
+ * @param args - raw JSON arguments of the matching call.
+ * @returns non-empty file diffs, or undefined when there is nothing to show.
+ */
+export function resultFileDiffs(meta: unknown, args: string): FileDiff[] | undefined {
+  const diffs = asFileDiffs(meta)
+  if (diffs !== undefined) return diffs
+  if (meta === null || typeof meta !== 'object') return undefined
+  const record = meta as { readonly operation?: unknown; readonly path?: unknown }
+  if (record.operation !== 'create') return undefined
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(args)
+  }
+  catch {
+    return undefined
+  }
+  if (parsed === null || typeof parsed !== 'object') return undefined
+  const call = parsed as { readonly file_path?: unknown; readonly content?: unknown }
+  const path = typeof call.file_path === 'string'
+    ? call.file_path
+    : typeof record.path === 'string' ? record.path : undefined
+  const content = typeof call.content === 'string' ? call.content : undefined
+  if (path === undefined || content === undefined) return undefined
+  return [{ path, oldText: null, newText: content }]
+}
+
+/**
  * Compute a bounded line diff with a longest-common-subsequence walk.
  * Text larger than the safety cap falls back to whole-file remove/add rows.
  * @param oldText - previous text, or null for a created file.

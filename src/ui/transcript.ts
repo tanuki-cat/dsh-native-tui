@@ -23,7 +23,7 @@ export type TranscriptEntry =
   | { readonly type: 'live'; readonly event: LiveChunkEntry }
 import type { Palette } from './theme.js'
 import type { DisplayMode } from '../config.js'
-import { asFileDiffs, type FileDiff } from './diff.js'
+import { resultFileDiffs, type FileDiff } from './diff.js'
 import { clip } from './tool-preview.js'
 import { REASONING_REVEAL_RECENT_MS, reasoningRevealFrom, rememberRevealProgress, revealCompletedReasoning, revealDurableReasoning, type RevealProgress } from './reasoning-reveal.js'
 import { isCodeExecutionTool } from './transcript-render.js'
@@ -41,6 +41,14 @@ const STREAM_FRAME_BUDGET_MS = 8
  * the card appearing at once.
  */
 const ASSISTANT_SETTLE_MS = STREAM_MAX_INTERVAL_MS + 50
+
+/**
+ * Nested PTC tools that always get their own card, including the pending row
+ * before a result exists. Other sub-calls stay inside the parent `run_code`
+ * card; showing every one would duplicate what that result already summarizes.
+ */
+const PTC_CARD_TOOLS: ReadonlySet<string> = new Set(['write', 'edit'])
+
 /**
  * Estimated milliseconds pi-tui spends re-rendering one character of streaming
  * Markdown. The reducer cannot measure that render, so the caller estimates it
@@ -194,6 +202,23 @@ function toolResultText(message: { readonly content?: readonly ContentBlock[] })
   return contentText(message.content)
 }
 
+/** Render a PTC sub-call's normalized JSON arguments through the native form. */
+function ptcArguments(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (value === undefined) return ''
+  try {
+    return JSON.stringify(value) ?? ''
+  }
+  catch {
+    return ''
+  }
+}
+
+/** Narrow a PTC settle payload's content to the blocks the transcript understands. */
+function ptcContent(value: unknown): readonly ContentBlock[] | undefined {
+  return Array.isArray(value) ? value as readonly ContentBlock[] : undefined
+}
+
 function stepKey(turn: number, step: number): string {
   return `${String(turn)}:${String(step)}`
 }
@@ -303,6 +328,14 @@ export function reduceTranscriptWindow(
   const runCodeDisplay = options.runCodeDisplay ?? 'detailed'
   const showReasoning = thinkingDisplay !== 'hidden' && (options.thinkingDisplay !== undefined || options.showReasoning)
   const compactionByCall = new Map<string, number>()
+  /** PTC child call ids per parent `run_code`, so a pruned parent hides its cards. */
+  const ptcByParent = new Map<string, Set<string>>()
+  const rememberPtcChild = (parentCallId: string | undefined, subCallId: string): void => {
+    if (parentCallId === undefined) return
+    const children = ptcByParent.get(parentCallId) ?? new Set<string>()
+    children.add(subCallId)
+    ptcByParent.set(parentCallId, children)
+  }
   const revealDurable = (
     text: string,
     stream: readonly AssistantStreamRecord[] | undefined,
@@ -506,10 +539,74 @@ export function reduceTranscriptWindow(
               }
             }
           }
+          // A pruned run_code hides the write/edit cards it produced.
+          for (const subCallId of ptcByParent.get(callId) ?? []) {
+            prunedCalls.add(subCallId)
+            const childIndex = toolByCall.get(subCallId)
+            const child = childIndex === undefined ? undefined : blocks[childIndex]
+            if (childIndex !== undefined && child?.kind === 'tool') {
+              blocks[childIndex] = {
+                ...child,
+                result: undefined,
+                diffs: undefined,
+                pending: false,
+                pruned: true,
+              }
+            }
+          }
         }
         const count = shadowedSeqs.length
         const tokens = typeof data.shadowedTokenCount === 'number' ? data.shadowedTokenCount : 0
         blocks.push({ kind: 'notice', tone: 'info', text: 'Tool output pruned · ' + String(count) + ' item(s) · ~' + String(tokens) + ' tokens', seq })
+      }
+      continue
+    }
+    if (extensionType === 'tool/ptc-dispatch-start' || extensionType === 'tool/ptc-dispatch') {
+      const data = (event as unknown as { readonly data?: Record<string, unknown> }).data
+      const subCallId = data === undefined ? undefined : typeof data.subCallId === 'string' ? data.subCallId : undefined
+      const parentCallId = data === undefined ? undefined : typeof data.parentCallId === 'string' ? data.parentCallId : undefined
+      const name = data !== undefined && typeof data.name === 'string' && data.name !== '' ? data.name : 'tool'
+      const settle = extensionType === 'tool/ptc-dispatch'
+      const args = ptcArguments(data?.arguments)
+      const diffs = settle ? resultFileDiffs(data?.meta, args) : undefined
+      const pruned = subCallId === undefined || prunedSeqs.has(seq) || prunedCalls.has(subCallId)
+        || (parentCallId !== undefined && prunedCalls.has(parentCallId))
+      // Only file-editing sub-calls need their own card; the rest are already
+      // summarized by the parent run_code result.
+      if (subCallId !== undefined && !pruned && (PTC_CARD_TOOLS.has(name) || diffs !== undefined)) {
+        const index = toolByCall.get(subCallId)
+        const prior = index === undefined ? undefined : blocks[index]
+        if (!settle) {
+          if (index === undefined) {
+            toolByCall.set(subCallId, blocks.length)
+            callIdBySeq.set(seq, subCallId)
+            blocks.push({ kind: 'tool', callId: subCallId, name, args, pending: true, seq })
+            rememberPtcChild(parentCallId, subCallId)
+          }
+        }
+        else if (!(prior?.kind === 'tool' && prior.pending === false)) {
+          const settled: TranscriptBlock = {
+            kind: 'tool',
+            callId: subCallId,
+            name,
+            args,
+            result: contentText(ptcContent(data?.content)),
+            ...(data?.isError === true ? { isError: true } : {}),
+            ...(diffs === undefined ? {} : { diffs }),
+            pending: false,
+            seq,
+          }
+          if (index === undefined) {
+            toolByCall.set(subCallId, blocks.length)
+            callIdBySeq.set(seq, subCallId)
+            blocks.push(settled)
+            rememberPtcChild(parentCallId, subCallId)
+          }
+          else if (prior?.kind === 'tool') {
+            blocks[index] = { ...prior, ...settled }
+          }
+          settledCalls.add(subCallId)
+        }
       }
       continue
     }
@@ -654,7 +751,7 @@ export function reduceTranscriptWindow(
         }
         const result = toolResultText(event.data.message)
         const isError = event.data.message.isError === true
-        const diffs = asFileDiffs(event.data.meta)
+        const diffs = resultFileDiffs(event.data.meta, prior?.kind === 'tool' ? prior.args : '')
         if (index === undefined) {
           blocks.push({
             kind: 'tool',

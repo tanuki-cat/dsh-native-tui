@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { asFileDiffs, diffLines } from '../src/ui/diff.js'
+import { asFileDiffs, diffLines, resultFileDiffs } from '../src/ui/diff.js'
 
 describe('asFileDiffs', () => {
   it('accepts the write/edit metadata envelope', () => {
@@ -13,6 +13,30 @@ describe('asFileDiffs', () => {
     expect(asFileDiffs({})).toBeUndefined()
     expect(asFileDiffs({ diffs: [] })).toBeUndefined()
     expect(asFileDiffs({ diffs: [{ path: 1, oldText: 'a', newText: 'b' }] })).toBeUndefined()
+  })
+})
+
+describe('resultFileDiffs', () => {
+  it('prefers the recorded hunk diffs', () => {
+    expect(resultFileDiffs({
+      operation: 'update',
+      diffs: [{ path: 'a.txt', oldText: 'a', newText: 'b' }],
+    }, JSON.stringify({ file_path: 'a.txt', content: 'ignored' }))).toEqual([
+      { path: 'a.txt', oldText: 'a', newText: 'b' },
+    ])
+  })
+
+  it('rebuilds a create from the write arguments', () => {
+    expect(resultFileDiffs(
+      { operation: 'create', path: 'dir/new.txt', diffs: [] },
+      JSON.stringify({ file_path: 'new.txt', content: 'one\ntwo' }),
+    )).toEqual([{ path: 'new.txt', oldText: null, newText: 'one\ntwo' }])
+  })
+
+  it('does not invent a diff for an empty update or missing arguments', () => {
+    expect(resultFileDiffs({ operation: 'update', diffs: [] }, JSON.stringify({ file_path: 'a.txt', content: 'x' }))).toBeUndefined()
+    expect(resultFileDiffs({ operation: 'create', diffs: [] }, 'not json')).toBeUndefined()
+    expect(resultFileDiffs({ operation: 'create' }, JSON.stringify({ file_path: 'a.txt' }))).toBeUndefined()
   })
 })
 
