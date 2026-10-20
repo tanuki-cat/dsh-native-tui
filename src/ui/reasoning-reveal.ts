@@ -122,6 +122,63 @@ export function rememberRevealProgress(
   }
 }
 
+/** Prefix of an answer-text reveal, so retries and reasoning keys cannot collide. */
+export const STREAM_TEXT_PROGRESS_PREFIX = 'text:'
+
+/**
+ * Largest unread answer backlog still spread over frames. A burst bigger than
+ * this is a non-streaming gateway sending a whole block at once; delaying that
+ * behind an animation would only make the UI lag the model.
+ */
+export const STREAM_TEXT_MAX_BACKLOG = 600
+
+/** Baseline answer reveal rate, in characters per millisecond. */
+export const STREAM_TEXT_CHARS_PER_MS = 1.2
+
+/**
+ * Spread streamed answer text over frames instead of painting a whole provider
+ * chunk at once.
+ *
+ * Providers hand text over in bursts: one event can carry a whole sentence, so
+ * painting each batch makes the answer appear in jumps. The reveal advances by
+ * wall clock — so a slow frame catches up instead of stretching the animation —
+ * and takes a share of the backlog each frame, which drains a burst within a
+ * few frames while never lagging far behind the model.
+ * @param text - all answer text received for the step so far.
+ * @param progress - reveal state for this step; advanced in place.
+ * @param now - current wall clock.
+ * @returns the prefix to render and whether more text is still waiting.
+ */
+export function revealStreamText(
+  text: string,
+  progress: RevealProgress,
+  now: number,
+): { readonly text: string; readonly pending: boolean } {
+  const total = text.length
+  if (total === 0) return { text, pending: false }
+  if (progress.visible >= total) {
+    progress.start = now
+    return { text, pending: false }
+  }
+  const backlog = total - progress.visible
+  // A whole-block settlement is not a stream: show it, do not animate it.
+  if (backlog > STREAM_TEXT_MAX_BACKLOG) {
+    progress.visible = total
+    progress.start = now
+    return { text, pending: false }
+  }
+  const paced = Math.floor(Math.max(0, now - progress.start) * STREAM_TEXT_CHARS_PER_MS)
+  const catchUp = Math.ceil(backlog * 0.4)
+  const advance = Math.min(backlog, Math.max(1, paced, catchUp))
+  let next = progress.visible + advance
+  // Never split a surrogate pair: a lone half renders as a replacement glyph.
+  const code = text.charCodeAt(next - 1)
+  if (next < total && code >= 0xD800 && code <= 0xDBFF) next = Math.min(total, next + 1)
+  progress.visible = next
+  progress.start = now
+  return next >= total ? { text, pending: false } : { text: text.slice(0, next), pending: true }
+}
+
 /**
  * Reveal one completed reasoning block over frames. The visible length follows
  * elapsed wall clock, so a slow frame catches up instead of stretching the

@@ -6,7 +6,7 @@ import { Rule } from '../src/ui/rule.js'
 import { createPalette, markdownTheme } from '../src/ui/theme.js'
 import { contentText, liveChunkHasOutput, nextFrameDelay, nextStreamInterval, reduceTranscript, reduceTranscriptWindow, STREAM_MIN_INTERVAL_MS, transcriptFrameChanged, type TranscriptBlock, type TranscriptEntry } from '../src/ui/transcript.js'
 import { renderTranscriptBlock } from '../src/ui/transcript-render.js'
-import { REASONING_REVEAL_MAX_MS } from '../src/ui/reasoning-reveal.js'
+import { REASONING_REVEAL_MAX_MS, revealStreamText, STREAM_TEXT_MAX_BACKLOG } from '../src/ui/reasoning-reveal.js'
 import { sameTranscriptBlock, TranscriptRenderer } from '../src/ui/transcript-renderer.js'
 import { formatToolArguments } from '../src/ui/tool-preview.js'
 import { WAIT_ROW_DELAY_MS, waitingText, waitingVisible } from '../src/ui/waiting.js'
@@ -18,6 +18,8 @@ const options = {
   palette,
   markdown: markdownTheme(palette),
 }
+/** The same reduction options, named for reuse inside describe blocks. */
+const optionsBase = options
 
 function durable(type: string, data: unknown, seq = 0): TranscriptEntry {
   return { type: 'event', event: { type, seq, time: 0, data } as unknown as SessionEvent }
@@ -1074,9 +1076,10 @@ describe('TranscriptRenderer', () => {
     renderer.set(entries, [])
     const partial = renderer.container.render(80).join('\n')
     expect(partial).toContain('thinking')
-    // The answer is real streamed content, so it appears on its own schedule;
-    // only the tool rows behind the reveal wait for it.
-    expect(partial).toContain('final answer')
+    // The answer is real streamed content, so it is not held behind the
+    // reasoning reveal; it starts appearing on the first frame as a revealed
+    // prefix rather than as a whole provider chunk.
+    expect(partial).toContain('final')
 
     vi.setSystemTime(1_200)
     renderer.set(entries, [])
@@ -1220,6 +1223,78 @@ describe('nextStreamInterval', () => {
   })
 })
 
+describe('revealStreamText', () => {
+  const progress = (visible = 0, start = 0) => ({ visible, start })
+  const advance = (text: string, state: ReturnType<typeof progress>, now: number) => revealStreamText(text, state, now)
+
+  it('reveals a prefix of a burst instead of the whole chunk', () => {
+    const state = progress()
+    const reveal = advance('The quick brown fox jumps over the lazy dog', state, 0)
+    expect(reveal.pending).toBe(true)
+    expect(reveal.text.length).toBeGreaterThan(0)
+    expect(reveal.text.length).toBeLessThan(43)
+  })
+
+  it('drains the backlog within a few frames', () => {
+    const text = 'x'.repeat(200)
+    const state = progress()
+    let shown = 0
+    for (let frame = 0; frame < 8; frame += 1) {
+      const reveal = advance(text, state, frame * 33)
+      shown = reveal.text.length
+      if (!reveal.pending) break
+    }
+    expect(shown).toBe(200)
+  })
+
+  it('catches up by wall clock when frames are slow', () => {
+    const text = 'x'.repeat(200)
+    const state = progress()
+    const reveal = advance(text, state, 500)
+    expect(reveal.pending).toBe(false)
+    expect(reveal.text).toBe(text)
+  })
+
+  it('shows a whole-block settlement at once', () => {
+    const text = 'x'.repeat(STREAM_TEXT_MAX_BACKLOG + 1)
+    const state = progress()
+    const reveal = advance(text, state, 0)
+    expect(reveal.pending).toBe(false)
+    expect(reveal.text).toBe(text)
+  })
+
+  it('keeps a settled block visible and resumes after it', () => {
+    const revealProgress = new Map()
+    const options = { ...optionsBase, revealProgress } as never
+    const entries: TranscriptEntry[] = [
+      liveChunk(1, 1, 1, { type: 'text-delta', index: 0, text: 'abc' }),
+      liveChunk(2, 1, 1, { type: 'block-end', index: 0, block: { type: 'text', text: 'abc' } }),
+    ]
+    const settled = reduceTranscriptWindow(entries, options, 1_000)
+    const settledBlock = settled.blocks.at(-1)
+    expect(settledBlock?.kind).toBe('assistant')
+    // The block-end snaps the settled text into view, never past it.
+    expect(settledBlock?.kind === 'assistant' ? settledBlock.text : '').toBe('abc')
+
+    entries.push(liveChunk(3, 1, 1, { type: 'text-delta', index: 1, text: 'def' }))
+    const resumed = reduceTranscriptWindow(entries, options, 1_010)
+    const resumedBlock = resumed.blocks.at(-1)
+    const text = resumedBlock?.kind === 'assistant' ? resumedBlock.text : ''
+    // A later block in the same step resumes from the settled text instead of
+    // re-revealing it from the first character.
+    expect(text.startsWith('abc')).toBe(true)
+    expect(text.length).toBeGreaterThan(3)
+  })
+
+  it('never splits a surrogate pair', () => {
+    const text = '😀😀😀😀😀'
+    const state = progress()
+    const reveal = advance(text, state, 0)
+    expect(reveal.text.length % 2).toBe(0)
+    expect([...reveal.text].every(character => character === '😀')).toBe(true)
+  })
+})
+
 describe('nextFrameDelay', () => {
   it('waits a full interval when the last paint just happened', () => {
     expect(nextFrameDelay(33, 0)).toBe(33)
@@ -1324,7 +1399,13 @@ describe('TranscriptRenderer component reuse', () => {
 
   it('reports the trailing live block size for frame pacing', () => {
     const renderer = new TranscriptRenderer(options)
-    renderer.set([liveChunk(1, 1, 1, { type: 'text-delta', text: 'hello' })], [])
+    const entries = [liveChunk(1, 1, 1, { type: 'text-delta', text: 'hello' })]
+    // Text is revealed over frames, so the first frame paints a prefix; the
+    // size reported for pacing is what that frame will actually render.
+    renderer.set(entries, [])
+    expect(renderer.liveContentLength).toBeGreaterThan(0)
+    expect(renderer.liveContentLength).toBeLessThan(5)
+    for (let frame = 0; frame < 6; frame += 1) renderer.set(entries, [])
     expect(renderer.liveContentLength).toBe(5)
     renderer.set([durable('assistant/message', { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'final' }] } }, 2)], [])
     expect(renderer.liveContentLength).toBe(0)
