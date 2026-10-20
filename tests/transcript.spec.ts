@@ -9,7 +9,7 @@ import { renderTranscriptBlock } from '../src/ui/transcript-render.js'
 import { REASONING_REVEAL_MAX_MS, revealStreamText, STREAM_TEXT_MAX_BACKLOG } from '../src/ui/reasoning-reveal.js'
 import { sameTranscriptBlock, TranscriptRenderer } from '../src/ui/transcript-renderer.js'
 import { formatToolArguments } from '../src/ui/tool-preview.js'
-import { WAIT_ROW_DELAY_MS, waitingText, waitingVisible } from '../src/ui/waiting.js'
+import { WAIT_ROW_DELAY_MS, waitSubjectAfter, waitingText, waitingVisible, type WaitSubject } from '../src/ui/waiting.js'
 
 const palette = createPalette('plain')
 const options = {
@@ -1219,17 +1219,52 @@ afterEach(() => {
 
 describe('waitingText', () => {
   it('counts the seconds the request has been in flight', () => {
-    expect(waitingText(1_000, undefined, 1_000)).toBe('waiting for API response · 0s')
-    expect(waitingText(1_000, undefined, 4_400)).toBe('waiting for API response · 3s')
+    expect(waitingText(1_000, undefined, 1_000)).toBe('waiting for response · 0s')
+    expect(waitingText(1_000, undefined, 4_400)).toBe('waiting for response · 3s')
   })
 
   it('names the automatic retry so the reader does not retry by hand', () => {
     expect(waitingText(1_000, { retry: 2, maxRetries: 5, code: 'TRANSPORT' }, 6_000))
-      .toBe('waiting for API response · 5s  ·  retry 2/5 after TRANSPORT (automatic)')
+      .toBe('waiting for response · 5s  ·  retry 2/5 after TRANSPORT (automatic)')
   })
 
   it('never counts backwards when the clock jumps', () => {
-    expect(waitingText(5_000, undefined, 1_000)).toBe('waiting for API response · 0s')
+    expect(waitingText(5_000, undefined, 1_000)).toBe('waiting for response · 0s')
+  })
+
+  it('names the tool call the model is writing', () => {
+    expect(waitingText(1_000, undefined, 4_000, { kind: 'tool', name: 'run_code' }))
+      .toBe('generating run_code call · 3s')
+    expect(waitingText(1_000, undefined, 4_000, { kind: 'tool' })).toBe('generating a tool call · 3s')
+  })
+
+  it('keeps the retry suffix when a tool call is streaming', () => {
+    expect(waitingText(1_000, { retry: 1, maxRetries: 5, code: 'SERVER' }, 2_000, { kind: 'tool', name: 'bash' }))
+      .toBe('generating bash call · 1s  ·  retry 1/5 after SERVER (automatic)')
+  })
+})
+
+describe('waitSubjectAfter', () => {
+  it('stays on the request until a tool call starts', () => {
+    const request: WaitSubject = { kind: 'request' }
+    expect(waitSubjectAfter(request, { type: 'block-start' })).toBe(request)
+    expect(waitSubjectAfter(request, { type: 'text-delta' })).toBe(request)
+    expect(waitSubjectAfter(request, { type: 'reasoning-delta' })).toBe(request)
+  })
+
+  it('adopts the tool name from the first delta and keeps it', () => {
+    const named = waitSubjectAfter({ kind: 'request' }, { type: 'tool-call-delta', name: 'run_code' })
+    expect(named).toEqual({ kind: 'tool', name: 'run_code' })
+    // Later deltas only extend the arguments; the row keeps naming the call.
+    expect(waitSubjectAfter(named, { type: 'tool-call-delta' })).toBe(named)
+    // A second call renames the row rather than leaving the stale one.
+    expect(waitSubjectAfter(named, { type: 'tool-call-delta', name: 'bash' })).toEqual({ kind: 'tool', name: 'bash' })
+  })
+
+  it('reports a nameless tool phase when the name never arrives', () => {
+    const nameless = waitSubjectAfter({ kind: 'request' }, { type: 'tool-call-delta' })
+    expect(nameless).toEqual({ kind: 'tool' })
+    expect(waitSubjectAfter(nameless, { type: 'tool-call-delta' })).toBe(nameless)
   })
 })
 
@@ -1654,7 +1689,9 @@ describe('TranscriptRenderer component reuse', () => {
     const renderer = new TranscriptRenderer(options)
     renderer.set([user(1, 'question')], [{ kind: 'waiting', text: waitingText(0, undefined, 3_000) }])
     const output = renderer.container.render(80).join('\n')
-    expect(output).toContain('⟳ waiting for API response · 3s')
+    expect(output).toContain('⟳ waiting for response · 3s')
+    renderer.set([user(1, 'question')], [{ kind: 'waiting', text: waitingText(0, undefined, 3_000, { kind: 'tool', name: 'run_code' }) }])
+    expect(renderer.container.render(80).join('\n')).toContain('⟳ generating run_code call · 3s')
     // The row is transient, so it leaves no cached component behind.
     expect(renderer.container.children).toHaveLength(3)
   })

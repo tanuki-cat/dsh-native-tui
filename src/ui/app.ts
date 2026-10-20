@@ -37,7 +37,7 @@ import { errorMessage } from './commands/shared.js'
 import { subscribeSessionEvents } from './session-events.js'
 import { liveChunkHasOutput, nextFrameDelay, nextStreamInterval, STREAM_MIN_INTERVAL_MS, STREAM_MS_PER_CHAR, transcriptFrameChanged, type TranscriptBlock, type TranscriptEntry } from './transcript.js'
 import { TranscriptRenderer } from './transcript-renderer.js'
-import { WAIT_ROW_DELAY_MS, waitingText, waitingVisible, type WaitRetry } from './waiting.js'
+import { WAIT_ROW_DELAY_MS, waitSubjectAfter, waitingText, waitingVisible, type WaitRetry, type WaitSubject } from './waiting.js'
 import { holdProcessWarnings, type WarningGuard } from './warnings.js'
 import { Rule } from './rule.js'
 
@@ -234,6 +234,8 @@ export async function startTerminalApp(
   /** Epoch ms the in-flight model request began, undefined when none is pending. */
   let waitSince: number | undefined
   let waitRetry: WaitRetry | undefined
+  /** What the awaited model has produced so far, so the row can name it. */
+  let waitSubject: WaitSubject = { kind: 'request' }
   let waitTicker: ReturnType<typeof setInterval> | undefined
   let unsubscribeSession: (() => void) | undefined
   let interactionDisposers: Array<() => void> = []
@@ -333,6 +335,7 @@ export async function startTerminalApp(
   const clearWait = (): void => {
     waitSince = undefined
     waitRetry = undefined
+    waitSubject = { kind: 'request' }
     stopWaitTicker()
   }
 
@@ -342,6 +345,7 @@ export async function startTerminalApp(
    */
   const beginWait = (): void => {
     waitSince = Date.now()
+    waitSubject = { kind: 'request' }
     // Repaint on the same cadence the row becomes reportable, so it shows on time.
     if (waitTicker === undefined) waitTicker = setInterval(() => { scheduleTranscript(true) }, WAIT_ROW_DELAY_MS)
   }
@@ -349,7 +353,7 @@ export async function startTerminalApp(
   const waitingBlock = (): (TranscriptBlock & { readonly kind: 'waiting' }) | undefined => {
     const now = Date.now()
     if (waitSince === undefined || !waitingVisible(waitSince, waitRetry, now)) return undefined
-    return { kind: 'waiting', text: waitingText(waitSince, waitRetry, now) }
+    return { kind: 'waiting', text: waitingText(waitSince, waitRetry, now, waitSubject) }
   }
 
   const pushNotice = (tone: 'info' | 'warning' | 'error', text: string): void => {
@@ -415,8 +419,18 @@ export async function startTerminalApp(
         }
         // A bare block-start creates an empty live row; keep the wait row until
         // the chunk produces something the reader can actually see.
-        if (chunk !== undefined && waitSince !== undefined
-          && liveChunkHasOutput(chunk, thinkingDisplayMode !== 'hidden')) clearWait()
+        if (chunk !== undefined && waitSince !== undefined) {
+          if (liveChunkHasOutput(chunk, thinkingDisplayMode !== 'hidden')) clearWait()
+          // A tool call streams for a long time before any card exists, so the
+          // row switches to naming it instead of only counting seconds.
+          else {
+            const subject = waitSubjectAfter(waitSubject, chunk)
+            if (subject !== waitSubject) {
+              waitSubject = subject
+              scheduleTranscript(true)
+            }
+          }
+        }
         entries.push(entry)
         // Start the placeholder or first revealed chunk without waiting for the
         // current transcript timer, which may be up to 100ms away.

@@ -140,7 +140,7 @@ let waitingSeen = false
 const started = Date.now()
 const tick = setInterval(() => {
   const text = strip(out)
-  if (text.includes('waiting for API response')) waitingSeen = true
+  if (text.includes('waiting for response')) waitingSeen = true
   if (phase === 'editor' && text.includes('enter send')) {
     phase = 'model'
     try { child.stdin.write('/model mock/mock-model\r') } catch {}
