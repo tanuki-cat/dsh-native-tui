@@ -31,7 +31,7 @@ import type { AgentDefaultModelService, LLM, SessionProjectionsService, SkillsCa
 import { openTuiSettings, showHostSettings } from './commands/settings.js'
 import { errorMessage } from './commands/shared.js'
 import { subscribeSessionEvents } from './session-events.js'
-import { liveChunkHasOutput, nextStreamInterval, STREAM_MIN_INTERVAL_MS, STREAM_MS_PER_CHAR, type TranscriptBlock, type TranscriptEntry } from './transcript.js'
+import { liveChunkHasOutput, nextFrameDelay, nextStreamInterval, STREAM_MIN_INTERVAL_MS, STREAM_MS_PER_CHAR, transcriptFrameChanged, type TranscriptBlock, type TranscriptEntry } from './transcript.js'
 import { TranscriptRenderer } from './transcript-renderer.js'
 import { WAIT_ROW_DELAY_MS, waitingText, waitingVisible, type WaitRetry } from './waiting.js'
 import { Rule } from './rule.js'
@@ -180,6 +180,12 @@ export async function startTerminalApp(
   let pendingAttachments: PendingAttachment[] = []
   let transcriptTimer: ReturnType<typeof setTimeout> | undefined
   let transcriptInterval = STREAM_MIN_INTERVAL_MS
+  /** Bumped by anything that changes what the transcript should show. */
+  let transcriptRevision = 0
+  /** What the last painted frame showed, so an identical one can be skipped. */
+  let painted = { revision: -1, wait: '' }
+  /** performance.now() of the last frame that actually requested a paint. */
+  let lastPaintAt = 0
   /** Epoch ms the in-flight model request began, undefined when none is pending. */
   let waitSince: number | undefined
   let waitRetry: WaitRetry | undefined
@@ -212,31 +218,47 @@ export async function startTerminalApp(
     return undefined
   }
 
+  /**
+   * Rebuild the transcript and paint it.
+   *
+   * A frame is skipped when nothing it could show changed since the last one:
+   * the stream interval keeps firing while chunks arrive, and repainting an
+   * identical screen only costs terminal writes.
+   */
   const renderTranscript = (): void => {
     if (disposed) return
+    const revision = transcriptRevision
     const started = performance.now()
     const pending = waitingBlock()
+    const pendingText = pending === undefined ? '' : pending.text
     renderer.set(entries, pending === undefined ? localNotices : [...localNotices, pending])
     // Bound the next rebuild, then pace it: the rebuild excludes pi-tui's later
     // container render, whose dominant cost is the growing live Markdown.
     if (renderer.retainedFrom > 0) entries = entries.slice(renderer.retainedFrom)
     const frameMs = performance.now() - started + renderer.liveContentLength * STREAM_MS_PER_CHAR
     transcriptInterval = nextStreamInterval(transcriptInterval, frameMs)
-    // A completed reasoning block can arrive without deltas. Keep repainting
-    // on the current adaptive interval until its local reveal finishes.
-    if (renderer.liveRevealPending) {
-      if (transcriptTimer !== undefined) {
-        clearTimeout(transcriptTimer)
-        transcriptTimer = undefined
-      }
-      scheduleTranscript()
+    const revealing = renderer.liveRevealPending
+    const mark = { revision, wait: pendingText }
+    if (transcriptFrameChanged(painted, mark, revealing)) {
+      painted = mark
+      lastPaintAt = performance.now()
+      tui.requestRender()
     }
-    tui.requestRender()
+    // A local reveal has no incoming chunk to re-arm the timer, so it drives
+    // its own frames until the whole block is visible.
+    if (revealing) scheduleTranscript()
   }
 
+  /**
+   * Ask for a transcript frame.
+   * @param immediate - paint now instead of waiting for the next stream frame.
+   *   Bursts are still coalesced so one interval never paints twice.
+   */
   const scheduleTranscript = (immediate = false): void => {
     if (disposed) return
-    if (immediate) {
+    transcriptRevision += 1
+    const elapsed = performance.now() - lastPaintAt
+    if (immediate && elapsed >= transcriptInterval) {
       if (transcriptTimer !== undefined) {
         clearTimeout(transcriptTimer)
         transcriptTimer = undefined
@@ -248,7 +270,7 @@ export async function startTerminalApp(
     transcriptTimer = setTimeout(() => {
       transcriptTimer = undefined
       renderTranscript()
-    }, transcriptInterval)
+    }, nextFrameDelay(transcriptInterval, elapsed))
   }
 
   /** Stop the one-second repaint that keeps the wait row's elapsed time live. */
@@ -275,7 +297,7 @@ export async function startTerminalApp(
     if (waitTicker === undefined) waitTicker = setInterval(() => { scheduleTranscript(true) }, WAIT_ROW_DELAY_MS)
   }
 
-  const waitingBlock = (): TranscriptBlock | undefined => {
+  const waitingBlock = (): (TranscriptBlock & { readonly kind: 'waiting' }) | undefined => {
     const now = Date.now()
     if (waitSince === undefined || !waitingVisible(waitSince, waitRetry, now)) return undefined
     return { kind: 'waiting', text: waitingText(waitSince, waitRetry, now) }

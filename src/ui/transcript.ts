@@ -68,6 +68,48 @@ export function nextStreamInterval(current: number, frameMs: number): number {
   const scaled = frameMs > STREAM_FRAME_BUDGET_MS ? current * 1.5 : current * 0.75
   return Math.max(STREAM_MIN_INTERVAL_MS, Math.min(STREAM_MAX_INTERVAL_MS, Math.round(scaled)))
 }
+
+/**
+ * Delay before the next streaming frame.
+ *
+ * The delay is measured from the previous paint, not from the chunk that
+ * requested it. Chunk arrivals are bursty, so re-arming a full interval on
+ * every arrival makes frames alternate between one and two intervals — a
+ * rhythm that reads as stutter even when each frame is cheap.
+ * @param interval - the current adaptive frame interval.
+ * @param elapsedSincePaint - milliseconds since the last painted frame.
+ * @returns milliseconds to wait before painting.
+ */
+export function nextFrameDelay(interval: number, elapsedSincePaint: number): number {
+  return Math.max(0, interval - Math.max(0, elapsedSincePaint))
+}
+
+/** What the last painted frame showed, for skipping identical repaints. */
+export interface TranscriptPaintMark {
+  /** Revision of the entry window and local notices. */
+  readonly revision: number
+  /** The wait row text that frame drew, empty when it drew none. */
+  readonly wait: string
+}
+
+/**
+ * Whether a rebuild has anything new to paint.
+ *
+ * Streaming frames are scheduled on a fixed cadence, so some land with no new
+ * chunk. Repainting an identical screen only costs terminal writes; a local
+ * reveal is the one case with no incoming data that still needs frames.
+ * @param painted - state the last painted frame reflected.
+ * @param current - state the rebuild just produced.
+ * @param revealing - whether a completed reasoning block is still expanding.
+ * @returns true when the frame must be painted.
+ */
+export function transcriptFrameChanged(
+  painted: TranscriptPaintMark,
+  current: TranscriptPaintMark,
+  revealing: boolean,
+): boolean {
+  return revealing || current.revision !== painted.revision || current.wait !== painted.wait
+}
 /** One rendered transcript row. */
 export type TranscriptBlock = ({
   readonly kind: 'user'; readonly text: string

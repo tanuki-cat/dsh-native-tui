@@ -75,6 +75,13 @@ export class TranscriptRenderer {
   private liveChars = 0
   private revealPending = false
   private options: TranscriptOptions
+  /**
+   * Separators are stateless, so one instance each serves every block. Reusing
+   * them keeps a saturated rebuild from allocating thousands of components per
+   * frame, which is what showed up as GC hitches in the stream probe.
+   */
+  private readonly gap = new Spacer(1)
+  private readonly separator: Rule
 
   /**
    * Index into the last reduced event window below which no retained block
@@ -108,6 +115,7 @@ export class TranscriptRenderer {
         callBySeq: new Map(),
       },
     }
+    this.separator = new Rule(this.options.palette.dim)
   }
 
   /** Switch reasoning/code-execution density and rebuild the existing event window. */
@@ -181,10 +189,10 @@ export class TranscriptRenderer {
     this.container.clear()
     for (const [index, block] of blocks.entries()) {
       if (block.kind === 'assistant' && block.live) liveChars += block.text.length + (block.reasoning?.length ?? 0)
-      if (index > 0) this.container.addChild(new Spacer(1))
+      if (index > 0) this.container.addChild(this.gap)
       if (index > 0 && block.kind === 'user') {
-        this.container.addChild(new Rule(this.options.palette.dim))
-        this.container.addChild(new Spacer(1))
+        this.container.addChild(this.separator)
+        this.container.addChild(this.gap)
       }
       const key = blockKey(block)
       const previous = key === undefined ? undefined : this.cached.get(key)

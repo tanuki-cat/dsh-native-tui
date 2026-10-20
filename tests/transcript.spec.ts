@@ -4,7 +4,7 @@ import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import { Rule } from '../src/ui/rule.js'
 import { createPalette, markdownTheme } from '../src/ui/theme.js'
-import { contentText, liveChunkHasOutput, nextStreamInterval, reduceTranscript, reduceTranscriptWindow, STREAM_MIN_INTERVAL_MS, type TranscriptBlock, type TranscriptEntry } from '../src/ui/transcript.js'
+import { contentText, liveChunkHasOutput, nextFrameDelay, nextStreamInterval, reduceTranscript, reduceTranscriptWindow, STREAM_MIN_INTERVAL_MS, transcriptFrameChanged, type TranscriptBlock, type TranscriptEntry } from '../src/ui/transcript.js'
 import { renderTranscriptBlock } from '../src/ui/transcript-render.js'
 import { REASONING_REVEAL_MAX_MS } from '../src/ui/reasoning-reveal.js'
 import { sameTranscriptBlock, TranscriptRenderer } from '../src/ui/transcript-renderer.js'
@@ -1217,6 +1217,41 @@ describe('nextStreamInterval', () => {
     let interval = STREAM_MIN_INTERVAL_MS
     for (let frame = 0; frame < 20; frame += 1) interval = nextStreamInterval(interval, 40)
     expect(interval).toBe(100)
+  })
+})
+
+describe('nextFrameDelay', () => {
+  it('waits a full interval when the last paint just happened', () => {
+    expect(nextFrameDelay(33, 0)).toBe(33)
+  })
+
+  it('keeps frames on a cadence measured from the last paint', () => {
+    // 20 ms after a paint, only the remaining 13 ms of the interval is due:
+    // waiting a full interval here would alternate 33/53 ms frames.
+    expect(nextFrameDelay(33, 20)).toBe(13)
+    expect(nextFrameDelay(33, 33)).toBe(0)
+  })
+
+  it('does not go negative when a paint is overdue', () => {
+    expect(nextFrameDelay(33, 120)).toBe(0)
+    expect(nextFrameDelay(33, -5)).toBe(33)
+  })
+})
+
+describe('transcriptFrameChanged', () => {
+  const painted = { revision: 7, wait: '' }
+
+  it('paints a new revision or a changed wait row', () => {
+    expect(transcriptFrameChanged(painted, { revision: 8, wait: '' }, false)).toBe(true)
+    expect(transcriptFrameChanged(painted, { revision: 7, wait: 'waiting · 2s' }, false)).toBe(true)
+  })
+
+  it('skips a frame with nothing new', () => {
+    expect(transcriptFrameChanged(painted, { revision: 7, wait: '' }, false)).toBe(false)
+  })
+
+  it('always paints while a reasoning block is still revealing', () => {
+    expect(transcriptFrameChanged(painted, { revision: 7, wait: '' }, true)).toBe(true)
   })
 })
 

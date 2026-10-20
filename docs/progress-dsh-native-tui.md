@@ -197,7 +197,7 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 
 ## 9. 剩余事项（2026-10-17 审查记录）
 
-当前代码与 451 个测试通过（41 个测试文件）；以下按优先级保留，不再混入已完成项。
+当前代码与 457 个测试通过（41 个测试文件）；以下按优先级保留，不再混入已完成项。
 
 ### P1
 
@@ -229,6 +229,7 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - [x] computer-use 用户侧实机可用。
 - [x] approval dialog allow/reject 与显式 Cancel 行、reason 渲染测试（Esc 与 Cancel 行同样 settlement 为 cancelled）。
 - [x] MCP fiber 激活失败 Loader row 清理。
+- [x] 流式渲染节拍与空帧修复（2026-10-20）：① `scheduleTranscript` 原先只在 chunk 到达时重新计时，且固定等满一个 `transcriptInterval`，chunk 突发使帧间隔在 33/66/100 ms 之间跳变；改为按上次绘制时刻对齐（`nextFrameDelay`）。② 增加内容签名（修订号 + 等待行文本），无变化的帧跳过 `requestRender`，避免空转重绘。mock SSE 实测（1200 chunks × 8 字符 / 12 ms）：14.0 fps → 26.5 fps，gap p50 44 → 34 ms、p90 51 → 41 ms、max 151 → 61 ms。③ 顺带确认闪烁的结构性来源：main-screen 下换行时其后的状态区/编辑器/footer 整体位移，pi-tui 按行 diff 会重写约 15 行（488 帧中 96 帧 >3× 中位数）；alt-screen（`fullscreen: true`）每帧通常只重写 1 行、无尖峰。④ `TranscriptRenderer` 复用无状态的 `Spacer`/`Rule` 实例，不再每帧为每个 block 新建组件。新增 `nextFrameDelay` / `transcriptFrameChanged` 单测（transcript 测试 +6），`pnpm check` 41 files / 457 tests。
 - [x] 宽松排版与状态区分区（2026-10-20）：header 改为三行（标题、Session id、cwd）；transcript 用 `Box(2, 1)` 做左右 2 列/上下 1 行留白；transcript 与状态区之间加 `Rule`，状态块改为 `● state   model …   think …` + 空行 + preset/快捷键；编辑器用 `Box(2, 0)` 包住使上下边框与内容同宽内缩；新增 prompt 下方两行 footer（`↳ usage` + `ctx`），指标从状态块移入 footer。新增 `tests/status-line.spec.ts`（6 例）与 `scripts/fake-tty-layout.mjs` 真实 Host 探针；`pnpm check` 41 files / 451 tests。
 - [x] Settings 配置整体重构与引导式 UI（2026-10-20）：native-tui 全部 10 个字段注册为 volatile 并补 schema description；新增 `ui/settings-panel.ts`（SettingsList + opaque frame，搜索/子菜单/暂存标题）、`ui/commands/settings-tui.ts`（字段目录、类型化编辑、暂存与保存回执）、`ui/commands/settings-host.ts`（schema 驱动的 Host 内嵌编辑器）、`ui/commands/settings-common.ts`（revision 冲突重试）与 `runtime/settings.ts` 的 schema 投影/校验/路径工具。`/settings edit|items|set` 保留为脚本化入口；`/settings host` 不再是只读 namespace 列表。title/showReasoning 保存后即时生效，theme/fullscreen 提示重启，cwd/sessionId/agentPreset 标注下次启动。验证：`pnpm check` 41 files / 451 tests；三个真实 Host 探针（见 P2）通过。
 - [x] MCP settings 实时 reconcile：`settings/document-updated` 驱动 manager 对新增/修改/删除 server 就地装载或卸载，不再需要重启 TUI；`tools/change` 加工具集合驱动 connect/disconnect 回推（mcp-manager 共 13 个单测）。
