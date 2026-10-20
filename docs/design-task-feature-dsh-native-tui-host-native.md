@@ -74,7 +74,7 @@
 - Transcript 层次：参考 pi agent 使用全宽背景带（用户消息、reasoning、tool 输出），assistant 标签与 streaming 状态；context 用 ◇ 标签；tool 用 ├ args/result 与 diff 分支；notice 用 i/!/✕ 图标；用户 turn 之间插入 dim Rule。长行使用 BarText 让每条 wrap 行保留左色条。dark/light 使用不同 band 背景，plain 取消背景。
 - 本地 notice 记录创建时的 afterSeq，渲染时按 durable event seq 插入；命令输出不再统一追加到 transcript 末尾。
 - 运行中 Esc/Ctrl+C 取消当前 turn；Esc 在 overlay 打开时不抢占，交给 dialog。
-- 状态栏固定三行：第一行 `● state  model provider/model`，第二行 preset/effort/快捷键，第三行 `↳ turns · steps · tok/s · total tok · cache % · ctx %`。模型常驻状态栏，header 第二行只保留 cwd。TPS=decodeTokens/decodeMs；cache=读取缓存/总 prompt；context=最近 prompt token/模型 contextWindow。
+- 宽松排版与分区：header 三行（标题、Session id、cwd）；transcript 左右各 2 列、上下各 1 行留白；状态块第一行 `● state   model provider/model   think effort`，空行后是 preset/快捷键；编辑器边框与内容同宽内缩；footer 第一行 `↳ turns · steps · tok/s · total tok · cache %`，第二行 `ctx %`。TPS=decodeTokens/decodeMs；cache=读取缓存/总 prompt；context=最近 prompt token/模型 contextWindow。
 - 已验证 fullscreen: true 启动、输入 /help 展示完整命令列表、Ctrl+D 正常退出；默认 fullscreen: false 仍走 TuiMainScreen。
 - 图片读取上线 8 MiB，使用文件头嗅探，不依赖扩展名。
 - 字段选择器解析 schemastery uid/refs，拒绝 secret 字段，输入值按 JSON 解析后写回。
@@ -112,7 +112,7 @@
 - 已验证多行 approval title 的 dialog frame 渲染：每行宽度受限、边框完整、无嵌入换行；Markdown/Text Pager 与 Image overlay 复用同一 FramedOverlay/dialogFrame。
 - 已验证 mcp-manager 对 fake MCP server 的 `connected` 和失败连接的 `error` 状态；`/mcp list` 显示初始连接结果。
 - 已验证四个 preset 均挂载 compaction-basic/command-compact；`/compact` 可用，transcript 渲染 compaction lifecycle 与 tool-result prune。自动压缩的真实长上下文触发仍需 E2E。
-- 已验证 `/reasoning high` 后状态栏显示 `effort high`，`/status` 显示 `Reasoning: high`。
+- 已验证 `/reasoning high` 后状态栏显示 `think high`，`/status` 显示 `Reasoning: high`。
 - 已验证 `/provider` 补全显示 add/list/remove，`/provider re` 过滤为 remove。
 - 已验证 `/preset minimal` 写入 `selectedDefault`，重启后仍以 minimal 创建 Session。
 - 已验证选择后 profile 写入 `agent-default-model: { provider, model, reasoningEffort }`；重启后 `/status` 恢复保存值。

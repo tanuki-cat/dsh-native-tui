@@ -1,4 +1,5 @@
 import {
+  Box,
   Editor,
   ProcessTerminal,
   ScrollView,
@@ -64,10 +65,16 @@ export async function startTerminalApp(
   const tui = config.fullscreen
     ? new TuiAltScreen(terminal, false, undefined, { mouse: true })
     : new TuiMainScreen(terminal, false)
-  const header = new Text('', 1, 0)
-  const headerRule = new Rule(text => palette.dim(text), 1)
-  const status = new Text('', 1, 0)
-  const editor = new Editor(tui, editorTheme(palette), { paddingX: 1 })
+  const header = new Text('', 2, 0)
+  const headerRule = new Rule(text => palette.dim(text), 2)
+  const statusRule = new Rule(text => palette.dim(text), 2)
+  const status = new Text('', 2, 0)
+  const footer = new Text('', 2, 0)
+  const editor = new Editor(tui, editorTheme(palette))
+  // The editor paints its own top/bottom border at the full component width;
+  // wrapping it keeps that border aligned with the inset rules and status text.
+  const editorBox = new Box(2, 0)
+  editorBox.addChild(editor)
   const markdown = markdownTheme(palette)
   const renderer = new TranscriptRenderer({
     showReasoning: config.showReasoning,
@@ -79,30 +86,38 @@ export async function startTerminalApp(
   })
   let thinkingDisplayMode = config.thinkingDisplay
 
+  // One inset content column: transcript bands, rules, status, and editor all
+  // share the same left/right margin so the page breathes like pi agent's.
+  const transcript = new Box(2, 1)
+  transcript.addChild(renderer.container)
+
   if (tui instanceof TuiAltScreen) {
-    const footer = new VStack([
-      { component: status, basis: 'auto' },
-      { component: editor, basis: 'auto' },
-    ])
     tui.setLayoutRoot(new VStack([
       { component: header, basis: 'auto' },
       { component: headerRule, basis: 'auto' },
+      { component: new Spacer(1), basis: 'auto' },
       {
-        component: new ScrollView(renderer.container, { follow: 'end', primary: true, overscroll: 'chain' }),
+        component: new ScrollView(transcript, { follow: 'end', primary: true, overscroll: 'chain' }),
         basis: 0,
         grow: 1,
         minSize: 1,
       },
+      { component: statusRule, basis: 'auto' },
+      { component: status, basis: 'auto' },
       { component: new Spacer(1), basis: 'auto' },
-      { component: footer, basis: 'auto', shrink: 1, minSize: 1 },
+      { component: editorBox, basis: 'auto' },
+      { component: footer, basis: 'auto' },
     ]))
   } else {
     tui.addChild(header)
     tui.addChild(headerRule)
-    tui.addChild(renderer.container)
     tui.addChild(new Spacer(1))
+    tui.addChild(transcript)
+    tui.addChild(statusRule)
     tui.addChild(status)
-    tui.addChild(editor)
+    tui.addChild(new Spacer(1))
+    tui.addChild(editorBox)
+    tui.addChild(footer)
   }
   tui.setFocus(editor)
 
@@ -277,7 +292,7 @@ export async function startTerminalApp(
     const options = active.agent.options
     const projections = host.get('sessionProjections') as SessionProjectionsService | undefined
     const meter = readContextMeter(projections, active.agent.session, contextReserved)
-    renderStatusRows({ header, status }, palette, {
+    renderStatusRows({ header, status, footer }, palette, {
       title,
       sessionId: active.id,
       cwd: summaryCwd() ?? config.cwd,

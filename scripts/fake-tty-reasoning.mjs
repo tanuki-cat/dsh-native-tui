@@ -11,8 +11,8 @@ let phase = 0
 const tick = setInterval(() => {
   const text = out.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
   if (phase === 0 && text.includes('enter send')) { phase = 1; try { child.stdin.write('/model mock/mock-model\r') } catch {} }
-  else if (phase === 1 && text.includes('Reasoning efforts: low, medium, high')) { phase = 2; try { child.stdin.write('/reasoning high\r') } catch {} }
-  else if (phase === 2 && text.includes('Reasoning effort: high') && text.includes('effort high')) { phase = 3; try { child.stdin.write('/status\r') } catch {} }
+  else if (phase === 1 && text.includes('Reasoning efforts: low, high')) { phase = 2; try { child.stdin.write('/reasoning high\r') } catch {} }
+  else if (phase === 2 && text.includes('Reasoning effort: high') && text.includes('think high')) { phase = 3; try { child.stdin.write('/status\r') } catch {} }
   else if (phase === 3 && text.includes('Reasoning: high')) {
     phase = 4
     setTimeout(() => { try { child.stdin.write('\x04') } catch {} }, 700)

@@ -143,7 +143,7 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - 工具 call 的 `[tool-call]` 内容不再进入正文；参数 JSON 按字段展开 code/description/timeoutMs。
 - `/provider add` 已验证 Input modalities=Text + image 会显式写入 `input: [text, image]`。
 - `/provider add` 已验证 Reasoning levels=`low,medium,high` 会写入 `reasoningEfforts`。
-- 已验证 `/model mock/mock-model` → `/reasoning high` → 状态栏 `effort high`，`/status` 显示 `Reasoning: high`。
+- 已验证 `/model mock/mock-model` → `/reasoning high` → 状态栏 `think high`，`/status` 显示 `Reasoning: high`。
 - 已验证选择后 profile 写入 `agent-default-model` 的 provider/model/reasoningEffort；重启 TUI 后 `/status` 自动恢复 mock/mock-model + high。
 - 已验证本地命令输出按事件顺序插入：`/provider list`、`/model`、`/reasoning`、`/status` 的 notice 位于随后 prompt 的 context/AI 输出之前。
 - 已验证 Store API key 模式：粘贴 key → credential store（0600）→ 自动发现 stored-model → 保存并选中，`/provider list` 显示 `(stored)`。
@@ -151,7 +151,7 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - 已验证输入 `/provider` 时补全列表显示 `/provider add/list/edit/models/input/remove`；输入 `/provider re` 只显示 remove。
 - 已验证 `/preset minimal` 写入 `agent-preset-registry.selectedDefault: minimal`；重启后状态栏和 `/status` 仍显示 minimal。
 - 已验证默认 bundle 加载 computer-use、Cua Driver native、mcp-client、mcp-resources、mcp-manager、session-stats；profile 启动无激活错误。
-- 状态栏常驻三行：`● idle  model <provider>/<model>` + preset/effort/快捷键 + `↳ turns/steps/tok/s/tokens/cache/ctx`；header 第二行只显示 cwd，避免长会话滚动后还需要 `/status` 确认模型。ctx 段与 Web 端同口径（token meter `contextPressure` 的 projected 值），渲染为 `ctx 42%  (~420K / 1M · compact at 80%)`。
+- 宽松排版（2026-10-20 调整）：header 三行（标题、Session id、cwd）；transcript 内容左右各 2 列留白、上下各 1 行留白；状态区独立成块 `● idle   model <provider>/<model>   think <effort>` + 空行 + preset/快捷键，编辑器边框与内容同宽内缩；footer 两行分别显示 `↳ turns/steps/tok/s/tokens/cache` 和 `ctx ...`。ctx 段与 Web 端同口径（token meter `contextPressure` 的 projected 值），渲染为 `ctx 42%  (~420K / 1M · compact at 80%)`。
 - 参考 pi agent 增加用户消息、reasoning、tool 输出的全宽背景带；dark/light theme 使用不同底色，plain 保持无样式。
 - Choice/TextInput/Approval、Markdown/Text Pager、Image 弹窗统一使用全宽 opaque dialogFrame；标题按行 wrap、长 reason 限制、每行补齐背景，避免底层 transcript 透出和串行。
 - 已验证 `/mcp add` 写入 `mcp-manager.servers.demo`；mcp-manager 等待 mcp-client fiber 激活并通过 `mcpManagerStatus` 暴露状态。
@@ -197,7 +197,7 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 
 ## 9. 剩余事项（2026-10-17 审查记录）
 
-当前代码与 445 个测试通过（40 个测试文件）；以下按优先级保留，不再混入已完成项。
+当前代码与 451 个测试通过（41 个测试文件）；以下按优先级保留，不再混入已完成项。
 
 ### P1
 
@@ -229,7 +229,8 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - [x] computer-use 用户侧实机可用。
 - [x] approval dialog allow/reject 与显式 Cancel 行、reason 渲染测试（Esc 与 Cancel 行同样 settlement 为 cancelled）。
 - [x] MCP fiber 激活失败 Loader row 清理。
-- [x] Settings 配置整体重构与引导式 UI（2026-10-20）：native-tui 全部 10 个字段注册为 volatile 并补 schema description；新增 `ui/settings-panel.ts`（SettingsList + opaque frame，搜索/子菜单/暂存标题）、`ui/commands/settings-tui.ts`（字段目录、类型化编辑、暂存与保存回执）、`ui/commands/settings-host.ts`（schema 驱动的 Host 内嵌编辑器）、`ui/commands/settings-common.ts`（revision 冲突重试）与 `runtime/settings.ts` 的 schema 投影/校验/路径工具。`/settings edit|items|set` 保留为脚本化入口；`/settings host` 不再是只读 namespace 列表。title/showReasoning 保存后即时生效，theme/fullscreen 提示重启，cwd/sessionId/agentPreset 标注下次启动。验证：`pnpm check` 40 files / 445 tests；三个真实 Host 探针（见 P2）通过。
+- [x] 宽松排版与状态区分区（2026-10-20）：header 改为三行（标题、Session id、cwd）；transcript 用 `Box(2, 1)` 做左右 2 列/上下 1 行留白；transcript 与状态区之间加 `Rule`，状态块改为 `● state   model …   think …` + 空行 + preset/快捷键；编辑器用 `Box(2, 0)` 包住使上下边框与内容同宽内缩；新增 prompt 下方两行 footer（`↳ usage` + `ctx`），指标从状态块移入 footer。新增 `tests/status-line.spec.ts`（6 例）与 `scripts/fake-tty-layout.mjs` 真实 Host 探针；`pnpm check` 41 files / 451 tests。
+- [x] Settings 配置整体重构与引导式 UI（2026-10-20）：native-tui 全部 10 个字段注册为 volatile 并补 schema description；新增 `ui/settings-panel.ts`（SettingsList + opaque frame，搜索/子菜单/暂存标题）、`ui/commands/settings-tui.ts`（字段目录、类型化编辑、暂存与保存回执）、`ui/commands/settings-host.ts`（schema 驱动的 Host 内嵌编辑器）、`ui/commands/settings-common.ts`（revision 冲突重试）与 `runtime/settings.ts` 的 schema 投影/校验/路径工具。`/settings edit|items|set` 保留为脚本化入口；`/settings host` 不再是只读 namespace 列表。title/showReasoning 保存后即时生效，theme/fullscreen 提示重启，cwd/sessionId/agentPreset 标注下次启动。验证：`pnpm check` 41 files / 451 tests；三个真实 Host 探针（见 P2）通过。
 - [x] MCP settings 实时 reconcile：`settings/document-updated` 驱动 manager 对新增/修改/删除 server 就地装载或卸载，不再需要重启 TUI；`tools/change` 加工具集合驱动 connect/disconnect 回推（mcp-manager 共 13 个单测）。
 - [x] MCP 真实 tools/call E2E：`scripts/mcp-tools-call-e2e.mjs` 用真实 cordis 加官方 mcp-client 连接 `scripts/fake-mcp-stdio.mjs`，断言 `mcp__demo__echo` 的 stdio 往返结果。
 - [x] MCP 真实 TUI 回归：`scripts/fake-tty-mcp.mjs` 以绝对路径 `node` 启动 `scripts/fake-mcp-stdio.mjs`，`/mcp add` 后**不重启**直接 `/mcp list` 显示 `connected`，证明 settings → reconcile 与状态回推在真实 Host 中生效。

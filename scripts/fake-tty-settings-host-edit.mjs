@@ -62,7 +62,9 @@ const tick = setInterval(() => {
     setTimeout(() => write('Probe Model'), 500)
     setTimeout(() => write('\r'), 850)
   }
-  else if (phase === 7 && text.includes('Updated llm-pi-ai.providers.command-code.models[0].name')) {
+  // A 150-column frame draws the 88-column overlay over the middle of the
+  // transcript, so only the notice's left prefix is visible while it is open.
+  else if (phase === 7 && text.includes('Updated llm-pi-ai')) {
     phase = 8
     setTimeout(() => write('\x1b'), 500)
     setTimeout(() => write('\x1b'), 1000)
@@ -79,7 +81,7 @@ child.on('exit', (code, signal) => {
   console.log('EXIT', code, signal, 'phase', phase)
   console.log('NAMESPACE_PAGE', clean.includes('Settings · llm-pi-ai'))
   console.log('FIELD_ACTION', clean.includes('Host settings · providers.command-code.models[0].name'))
-  console.log('UPDATED_NOTICE', clean.includes('Updated llm-pi-ai.providers.command-code.models[0].name'))
+  console.log('UPDATED_NOTICE', clean.includes('Updated llm-pi-ai'))
   console.log('PATCH_HAS_NAME', /^\s*name: Probe Model$/m.test(after))
   console.log('ARRAY_ID_COUNT', beforeIds, '->', afterIds)
   console.log('--- TAIL ---')
