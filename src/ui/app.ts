@@ -625,13 +625,14 @@ export async function startTerminalApp(
         }
         session.append('model/selection', current)
       } catch {
-        // The default save below still covers a session that refuses the record.
+        // A session that refuses the record still reloads; its model may reset.
       }
     }
-    void persistSelection()
-      .catch(() => undefined)
-      .then(() => dispose(false))
-      .then(replace, replace)
+    // Persisting the default model here would call the config editor, which
+    // rewrites the profile patch from the running config and can undo a
+    // restart-only setting the user just saved. The session event above is
+    // enough to restore the model after the replacement.
+    void dispose(false).then(replace, replace)
   }
 
   const onSignal = (): void => {

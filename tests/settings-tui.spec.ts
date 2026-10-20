@@ -164,7 +164,7 @@ describe('settingsSaveReceipt', () => {
     expect(receipt).toContain('title (live)')
     expect(receipt).toContain('theme (restart)')
     expect(receipt).toContain('cwd (next launch)')
-    expect(receipt).toContain('Restart the TUI for theme.')
+    expect(receipt).toContain('Restart the TUI or run /reload for theme.')
     expect(receipt).toContain('Next launch for cwd.')
   })
 

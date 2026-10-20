@@ -558,7 +558,7 @@ function restartHint(changes: readonly { setting: TuiSetting }[]): string {
   const restart = changes.filter(change => change.setting.apply === 'restart').map(change => change.setting.key)
   const next = changes.filter(change => change.setting.apply === 'next-launch').map(change => change.setting.key)
   const parts: string[] = []
-  if (restart.length > 0) parts.push('Restart the TUI for ' + restart.join(', ') + '.')
+  if (restart.length > 0) parts.push('Restart the TUI or run /reload for ' + restart.join(', ') + '.')
   if (next.length > 0) parts.push('Next launch for ' + next.join(', ') + '.')
   return parts.length === 0 ? '' : NL + parts.join(' ')
 }
