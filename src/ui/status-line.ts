@@ -41,6 +41,13 @@ export interface StatusInput {
   readonly events: readonly unknown[]
 }
 
+/** Split one context line into the colored head and its dim detail. */
+export function splitContextLine(context: string): { readonly head: string; readonly detail: string } {
+  const index = context.indexOf('  ')
+  if (index === -1) return { head: context, detail: '' }
+  return { head: context.slice(0, index), detail: context.slice(index) }
+}
+
 /** Split the compact metrics row into usage and context lines. */
 export function splitSessionMetrics(text: string): { readonly usage: string; readonly context: string | undefined } {
   const parts = text.split('  ·  ')
@@ -66,25 +73,32 @@ export function renderStatusRows(rows: StatusRows, palette: Palette, input: Stat
   const state = input.running
     ? palette.warning('● working')
     : palette.success('● idle')
-  const thinking = input.reasoningEffort === undefined
-    ? palette.dim('think default')
-    : palette.dim('think ' + String(input.reasoningEffort))
+  const thinking = palette.reasoning(input.reasoningEffort)(
+    input.reasoningEffort === undefined ? 'think default' : 'think ' + String(input.reasoningEffort),
+  )
   const metaBits: string[] = []
-  if (input.preset !== undefined) metaBits.push(palette.dim('preset ' + input.preset))
-  if (input.attachmentCount > 0) metaBits.push(palette.dim('attached ' + String(input.attachmentCount)))
+  if (input.preset !== undefined) metaBits.push(palette.dim('preset ') + palette.preset(input.preset))
+  if (input.attachmentCount > 0) metaBits.push(palette.dim('attached ') + palette.accent(String(input.attachmentCount)))
   const hint = input.running
     ? 'enter steer · esc cancel · ctrl+c cancel · ctrl+d exit'
     : 'enter send · /help · ctrl+d exit'
   metaBits.push(palette.dim(hint))
   const metrics = collectSessionMetrics(input.events as never, input.stats, input.contextWindow, input.contextMeter)
   const split = splitSessionMetrics(formatSessionMetrics(metrics))
+  const model = palette.dim('model ')
+    + palette.bold(palette.brand(input.provider))
+    + palette.dim('/')
+    + palette.bold(palette.accent(input.model))
+  const context = split.context === undefined ? undefined : splitContextLine(split.context)
   rows.status.setText(
-    state + '   ' + palette.bold(palette.accent('model ' + input.provider + '/' + input.model))
-    + '   ' + thinking + '\n\n' + metaBits.join('   '),
+    state + '   ' + model + '   ' + thinking + '\n\n' + metaBits.join('   '),
   )
   rows.footer.setText(
-    palette.dim('↳ ' + split.usage)
-    + (split.context === undefined ? '' : '\n' + palette.dim('  ' + split.context)),
+    palette.accent('↳ ') + palette.dim(split.usage)
+    + (context === undefined
+      ? ''
+      : '\n  ' + palette.context(metrics.contextPercent, metrics.contextCompactPercent)(context.head)
+        + (context.detail === '' ? '' : palette.dim(context.detail))),
   )
 }
 

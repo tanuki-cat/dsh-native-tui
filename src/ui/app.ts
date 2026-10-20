@@ -102,16 +102,17 @@ export async function startTerminalApp(
   onExit: (code: number) => void,
 ): Promise<TerminalApp> {
   const palette: Palette = createPalette(config.theme)
+  let reasoningEffort: string | undefined
   const terminal = new ProcessTerminal()
   const tui = config.fullscreen
     ? new TuiAltScreen(terminal, false, undefined, { mouse: true })
     : new TuiMainScreen(terminal, false)
   const header = new Text('', 2, 0)
   const headerRule = new Rule(text => palette.dim(text), 2)
-  const statusRule = new Rule(text => palette.dim(text), 2)
+  const statusRule = new Rule(text => palette.reasoning(reasoningEffort)(text), 2)
   const status = new Text('', 2, 0)
   const footer = new Text('', 2, 0)
-  const editor = new Editor(tui, editorTheme(palette))
+  const editor = new Editor(tui, editorTheme(palette, () => reasoningEffort))
   // The editor paints its own top/bottom border at the full component width;
   // wrapping it keeps that border aligned with the inset rules and status text.
   const editorBox = new Box(2, 0)
@@ -248,6 +249,7 @@ export async function startTerminalApp(
     },
     assembled: undefined,
   }
+  reasoningEffort = modelSelection.current?.reasoningEffort
   let disposeModelSelection: (() => void) | undefined
   disposeModelSelection = installModelSelection(active.agent.ctx, modelSelection)
 
@@ -355,6 +357,7 @@ export async function startTerminalApp(
 
   const renderStatus = (): void => {
     if (disposed) return
+    reasoningEffort = modelSelection.current?.reasoningEffort
     const options = active.agent.options
     const projections = host.get('sessionProjections') as SessionProjectionsService | undefined
     const meter = readContextMeter(projections, active.agent.session, contextReserved)
@@ -365,7 +368,7 @@ export async function startTerminalApp(
       running: active.agent.status === 'running',
       provider: modelSelection.current?.provider ?? options.provider ?? 'deepseek-official',
       model: modelSelection.current?.model ?? options.model ?? 'deepseek-flash',
-      reasoningEffort: modelSelection.current?.reasoningEffort,
+      reasoningEffort,
       preset: currentPreset(host.get('agentPresets') as AgentPresetService | undefined, active.agent.ctx),
       attachmentCount: pendingAttachments.length,
       // The routed request's own capacity wins, as on the Web meter; the model

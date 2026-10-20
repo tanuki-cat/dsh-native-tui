@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { Palette } from '../src/ui/theme.js'
-import { renderStatusRows, splitSessionMetrics, type StatusInput } from '../src/ui/status-line.js'
+import { createPalette, type Palette } from '../src/ui/theme.js'
+import { renderStatusRows, splitContextLine, splitSessionMetrics, type StatusInput } from '../src/ui/status-line.js'
 
 function identity(text: string): string { return text }
 
@@ -20,6 +20,9 @@ const palette = {
   thinkingBand: identity,
   dialogBand: identity,
   dialogBorder: identity,
+  reasoning: () => identity,
+  preset: identity,
+  context: () => identity,
 } as unknown as Palette
 
 function rows() {
@@ -80,12 +83,54 @@ describe('renderStatusRows', () => {
     expect(state.status).toContain('enter steer')
   })
 
+  it('colors the thinking label through the reasoning palette hook', () => {
+    const seen: Array<string | undefined> = []
+    const colored = {
+      ...palette,
+      reasoning: (effort: string | undefined) => {
+        seen.push(effort)
+        return (text: string) => '[' + (effort ?? 'default') + ']' + text
+      },
+    } as unknown as Palette
+    const { state, rows: target } = rows()
+    renderStatusRows(target, colored, inputOf({ reasoningEffort: 'high' }))
+    expect(seen).toEqual(['high'])
+    expect(state.status).toContain('[high]think high')
+  })
+
+  it('colors the model pair, preset, attachments, and context head', () => {
+    const colored = createPalette('dark')
+    const { state, rows: target } = rows()
+    renderStatusRows(target, colored, inputOf({ attachmentCount: 2, contextMeter: { tokens: 700_000 } }))
+    expect(state.status).toContain('\u001B[34mprovider')
+    expect(state.status).toContain('\u001B[36mmodel')
+    expect(state.status).toContain('\u001B[38;5;141mptc')
+    expect(state.status).toContain('\u001B[36m2')
+    expect(state.footer).toContain('\u001B[36m↳ ')
+    expect(state.footer).toContain('\u001B[33mctx 70%')
+    expect(state.footer).toContain('\u001B[2m  (~700K / 1M · compact at 80%)')
+  })
+
+  it('turns the context head to error at the compaction trigger', () => {
+    const { state, rows: target } = rows()
+    renderStatusRows(target, createPalette('dark'), inputOf({ contextMeter: { tokens: 800_000 } }))
+    expect(state.footer).toContain('\u001B[31mctx 80%')
+  })
+
   it('puts usage and context on separate footer lines', () => {
     const { state, rows: target } = rows()
     renderStatusRows(target, palette, inputOf())
     expect(state.footer).toContain('↳ 2 turns')
     expect(state.footer).toContain('50 tok/s')
     expect(state.footer).toContain('\n  ctx 40%')
+  })
+})
+
+describe('splitContextLine', () => {
+  it('keeps the detail tail separate from the colored head', () => {
+    expect(splitContextLine('ctx 40%  (~400K / 1M · compact at 80%)'))
+      .toEqual({ head: 'ctx 40%', detail: '  (~400K / 1M · compact at 80%)' })
+    expect(splitContextLine('ctx —')).toEqual({ head: 'ctx —', detail: '' })
   })
 })
 
