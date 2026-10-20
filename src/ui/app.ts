@@ -26,6 +26,7 @@ import type { PendingAttachment } from '../runtime/attachments.js'
 import { TuiAutocompleteProvider, type SessionReferenceService, type SkillSuggestion } from './autocomplete.js'
 import { currentPreset, renderStatusRows } from './status-line.js'
 import { createPalette, editorTheme, markdownTheme, type Palette } from './theme.js'
+import { debug } from '../debug.js'
 import { globalShortcut } from './keymap.js'
 import { LOCAL_COMMANDS } from './commands/catalog.js'
 import type { CommandContext } from './commands/context.js'
@@ -283,7 +284,9 @@ export async function startTerminalApp(
     // container render, whose dominant cost is the growing live Markdown.
     if (renderer.retainedFrom > 0) entries = entries.slice(renderer.retainedFrom)
     const frameMs = performance.now() - started + renderer.liveContentLength * STREAM_MS_PER_CHAR
+    const sincePaint = performance.now() - lastPaintAt
     transcriptInterval = nextStreamInterval(transcriptInterval, frameMs)
+    debug(`stream frame: rebuild=${frameMs.toFixed(1)}ms sincePaint=${sincePaint.toFixed(1)}ms interval=${String(transcriptInterval)}ms live=${String(renderer.liveContentLength)} reveal=${String(renderer.liveRevealPending)}`)
     const revealing = renderer.liveRevealPending
     const mark = { revision, wait: pendingText }
     if (transcriptFrameChanged(painted, mark, revealing)) {
@@ -402,6 +405,14 @@ export async function startTerminalApp(
       sessionId: () => active.id,
       appendEntry: entry => {
         const chunk = entry.type === 'live' ? entry.event.data.chunk : undefined
+        if (chunk?.type === 'text-delta' || chunk?.type === 'reasoning-delta') {
+          debug(`stream chunk: ${chunk.type} ${String(chunk.text.length)} chars`)
+        }
+        else if (chunk?.type === 'block-end') {
+          const block = chunk.block
+          const size = block.type === 'text' || block.type === 'reasoning' ? block.text.length : 0
+          debug(`stream chunk: block-end ${block.type} ${String(size)} chars`)
+        }
         // A bare block-start creates an empty live row; keep the wait row until
         // the chunk produces something the reader can actually see.
         if (chunk !== undefined && waitSince !== undefined

@@ -14,6 +14,7 @@
  */
 
 import type { AssistantStreamRecord } from '@deepseek-ai/dsh-llm'
+import { debug } from '../debug.js'
 
 /** Maximum graphemes retained in one reasoning preview. */
 export const REASONING_PREVIEW = 3000
@@ -125,6 +126,9 @@ export function rememberRevealProgress(
 /** Prefix of an answer-text reveal, so retries and reasoning keys cannot collide. */
 export const STREAM_TEXT_PROGRESS_PREFIX = 'text:'
 
+/** Prefix of a live reasoning-delta reveal. */
+export const REASONING_LIVE_PROGRESS_PREFIX = 'reasoning-live:'
+
 /**
  * Largest unread answer backlog still spread over frames. A burst bigger than
  * this is a non-streaming gateway sending a whole block at once; delaying that
@@ -134,6 +138,19 @@ export const STREAM_TEXT_MAX_BACKLOG = 600
 
 /** Baseline answer reveal rate, in characters per millisecond. */
 export const STREAM_TEXT_CHARS_PER_MS = 1.2
+
+/**
+ * Share of the remaining backlog one frame may consume as catch-up. Kept well
+ * below a full line: a first frame that eats a large share of a 200-character
+ * burst paints a line-shaped block instead of a smooth prefix.
+ */
+export const STREAM_TEXT_CATCH_UP_RATIO = 0.15
+
+/** Hard cap for the very first reveal frame, in characters. */
+export const STREAM_TEXT_FIRST_FRAME_MAX = 24
+
+/** Wall-clock window in which the first frame still counts as an initial paint. */
+export const STREAM_TEXT_FIRST_FRAME_MS = 100
 
 /** Whether one UTF-16 unit opens a surrogate pair. */
 function isHighSurrogate(code: number): boolean {
@@ -172,9 +189,15 @@ export function revealStreamText(
     progress.start = now
     return { text, pending: false }
   }
-  const paced = Math.floor(Math.max(0, now - progress.start) * STREAM_TEXT_CHARS_PER_MS)
-  const catchUp = Math.ceil(backlog * 0.4)
-  const advance = Math.min(backlog, Math.max(1, paced, catchUp))
+  const elapsed = Math.max(0, now - progress.start)
+  const paced = Math.floor(elapsed * STREAM_TEXT_CHARS_PER_MS)
+  const catchUp = Math.ceil(backlog * STREAM_TEXT_CATCH_UP_RATIO)
+  let advance = Math.min(backlog, Math.max(1, paced, catchUp))
+  // A delayed first frame (for example, one that starts 500ms late) still
+  // catches up by wall clock; only an immediate first paint is capped.
+  if (progress.visible === 0 && elapsed < STREAM_TEXT_FIRST_FRAME_MS) {
+    advance = Math.min(advance, STREAM_TEXT_FIRST_FRAME_MAX)
+  }
   let next = progress.visible + advance
   // Never cut a surrogate pair: a lone half renders as a replacement glyph.
   if (next < total && isHighSurrogate(text.charCodeAt(next - 1))) next += 1
@@ -185,7 +208,9 @@ export function revealStreamText(
   }
   progress.visible = next
   progress.start = now
-  return next >= total ? { text, pending: false } : { text: text.slice(0, next), pending: true }
+  const pending = next < total
+  debug(`reveal text: backlog=${String(backlog)} advance=${String(advance)} visible=${String(next)}/${String(total)} elapsed=${String(Math.round(elapsed))}ms pending=${String(pending)}`)
+  return pending ? { text: text.slice(0, next), pending: true } : { text, pending: false }
 }
 
 /**

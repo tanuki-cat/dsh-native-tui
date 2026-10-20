@@ -1077,9 +1077,9 @@ describe('TranscriptRenderer', () => {
     const partial = renderer.container.render(80).join('\n')
     expect(partial).toContain('thinking')
     // The answer is real streamed content, so it is not held behind the
-    // reasoning reveal; it starts appearing on the first frame as a revealed
-    // prefix rather than as a whole provider chunk.
-    expect(partial).toContain('final')
+    // reasoning reveal; it starts appearing on the first frame as a small
+    // revealed prefix rather than as a whole provider chunk.
+    expect(partial).toContain('fi')
 
     vi.setSystemTime(1_200)
     renderer.set(entries, [])
@@ -1287,17 +1287,126 @@ describe('revealStreamText', () => {
     const settled = reduceTranscriptWindow(entries, options, 1_000)
     const settledBlock = settled.blocks.at(-1)
     expect(settledBlock?.kind).toBe('assistant')
-    // The block-end snaps the settled text into view, never past it.
-    expect(settledBlock?.kind === 'assistant' ? settledBlock.text : '').toBe('abc')
+    // The block-end keeps revealing instead of snapping the settled text in.
+    expect(settledBlock?.kind === 'assistant' ? settledBlock.text : '').toBe('a')
+    expect(settled.revealPending).toBe(true)
 
-    entries.push(liveChunk(3, 1, 1, { type: 'text-delta', index: 1, text: 'def' }))
-    const resumed = reduceTranscriptWindow(entries, options, 1_010)
+    const revealed = reduceTranscriptWindow(entries, options, 1_100)
+    const revealedBlock = revealed.blocks.at(-1)
+    expect(revealedBlock?.kind === 'assistant' ? revealedBlock.text : '').toBe('abc')
+
+    entries.push(liveChunk(3, 1, 1, { type: 'text-delta', index: 1, text: 'def' }, 1_110))
+    const resumed = reduceTranscriptWindow(entries, options, 1_120)
     const resumedBlock = resumed.blocks.at(-1)
     const text = resumedBlock?.kind === 'assistant' ? resumedBlock.text : ''
     // A later block in the same step resumes from the settled text instead of
     // re-revealing it from the first character.
     expect(text.startsWith('abc')).toBe(true)
     expect(text.length).toBeGreaterThan(3)
+  })
+
+  it('reveals a settled text block over frames instead of snapping it', () => {
+    const revealProgress = new Map()
+    const options = { ...optionsBase, revealProgress } as never
+    const text = 'x'.repeat(200)
+    const entries: TranscriptEntry[] = [
+      liveChunk(1, 1, 1, { type: 'block-end', index: 0, block: { type: 'text', text } }, 1_000),
+    ]
+    const first = reduceTranscriptWindow(entries, options, 1_000)
+    const firstBlock = first.blocks.at(-1)
+    expect(firstBlock?.kind).toBe('assistant')
+    expect(firstBlock?.kind === 'assistant' ? firstBlock.text.length : 0).toBeGreaterThan(0)
+    expect(firstBlock?.kind === 'assistant' ? firstBlock.text.length : 0).toBeLessThan(text.length)
+    expect(first.revealPending).toBe(true)
+
+    const done = reduceTranscriptWindow(entries, options, 1_500)
+    const doneBlock = done.blocks.at(-1)
+    expect(doneBlock?.kind === 'assistant' ? doneBlock.text : '').toBe(text)
+    expect(done.revealPending).toBe(false)
+  })
+
+  it('keeps a live row until a durable message finishes revealing', () => {
+    const revealProgress = new Map()
+    const options = { ...optionsBase, revealProgress } as never
+    const text = 'y'.repeat(200)
+    const entries: TranscriptEntry[] = [
+      liveChunk(1, 1, 1, { type: 'text-delta', index: 0, text }, 1_000),
+      durable('assistant/message', {
+        turn: 1,
+        step: 1,
+        message: { content: [{ type: 'text', text }] },
+        stream: [],
+      }, 2),
+    ]
+    const first = reduceTranscriptWindow(entries, options, 1_000)
+    const firstBlock = first.blocks.at(-1)
+    expect(firstBlock?.kind).toBe('assistant')
+    expect(firstBlock?.kind === 'assistant' ? firstBlock.live : true).toBe(false)
+    expect(firstBlock?.kind === 'assistant' ? firstBlock.text.length : 0).toBeLessThan(text.length)
+    expect(first.revealPending).toBe(true)
+
+    const revealed = reduceTranscriptWindow(entries, options, 1_500)
+    const revealedBlock = revealed.blocks.at(-1)
+    expect(revealedBlock?.kind === 'assistant' ? revealedBlock.text : '').toBe(text)
+    // One more frame is still needed to replace the transient row.
+    expect(revealed.revealPending).toBe(true)
+
+    const final = reduceTranscriptWindow(entries, options, 1_510)
+    const finalBlock = final.blocks.at(-1)
+    expect(finalBlock?.kind).toBe('assistant')
+    expect(finalBlock?.kind === 'assistant' ? finalBlock.text : '').toBe(text)
+    expect(finalBlock?.kind === 'assistant' ? finalBlock.live : true).toBe(false)
+    expect(final.revealPending).toBe(false)
+  })
+
+  it('recreates the pending reveal when the live rows are already gone', () => {
+    const revealProgress = new Map()
+    const options = { ...optionsBase, revealProgress } as never
+    const text = 'w'.repeat(200)
+    revealProgress.set('text:1:1', { start: 1_000, visible: 0 })
+    const entries: TranscriptEntry[] = [
+      durable('assistant/message', {
+        turn: 1,
+        step: 1,
+        message: { content: [{ type: 'text', text }] },
+        stream: [],
+      }, 2),
+    ]
+    const first = reduceTranscriptWindow(entries, options, 1_000)
+    const firstBlock = first.blocks.at(-1)
+    expect(firstBlock?.kind === 'assistant' ? firstBlock.text.length : 0).toBeGreaterThan(0)
+    expect(firstBlock?.kind === 'assistant' ? firstBlock.text.length : 0).toBeLessThan(text.length)
+    expect(first.revealPending).toBe(true)
+
+    const revealed = reduceTranscriptWindow(entries, options, 1_500)
+    const revealedBlock = revealed.blocks.at(-1)
+    expect(revealedBlock?.kind === 'assistant' ? revealedBlock.text : '').toBe(text)
+    expect(revealed.revealPending).toBe(true)
+
+    const final = reduceTranscriptWindow(entries, options, 1_510)
+    const finalBlock = final.blocks.at(-1)
+    expect(finalBlock?.kind === 'assistant' ? finalBlock.text : '').toBe(text)
+    expect(final.revealPending).toBe(false)
+  })
+
+  it('reveals live reasoning deltas over frames', () => {
+    const revealProgress = new Map()
+    const options = { ...optionsBase, revealProgress, thinkingDisplay: 'detailed' } as never
+    const reasoning = 'z'.repeat(200)
+    const entries: TranscriptEntry[] = [
+      liveChunk(1, 1, 1, { type: 'reasoning-delta', index: 0, text: reasoning }, 1_000),
+    ]
+    const first = reduceTranscriptWindow(entries, options, 1_000)
+    const firstBlock = first.blocks.at(-1)
+    expect(firstBlock?.kind).toBe('assistant')
+    expect(firstBlock?.kind === 'assistant' ? firstBlock.reasoning?.length ?? 0 : 0).toBeGreaterThan(0)
+    expect(firstBlock?.kind === 'assistant' ? firstBlock.reasoning?.length ?? 0 : 0).toBeLessThan(reasoning.length)
+    expect(first.revealPending).toBe(true)
+
+    const done = reduceTranscriptWindow(entries, options, 1_500)
+    const doneBlock = done.blocks.at(-1)
+    expect(doneBlock?.kind === 'assistant' ? doneBlock.reasoning : '').toBe(reasoning)
+    expect(done.revealPending).toBe(false)
   })
 
   it('never splits a surrogate pair', () => {
@@ -1308,11 +1417,10 @@ describe('revealStreamText', () => {
     expect([...reveal.text].every(character => character === '😀')).toBe(true)
   })
 
-  it('extends a cut that would land inside a pair', () => {
-    // A 40% catch-up on three units rounds to two, which is exactly the
-    // boundary between the high and low half of the emoji.
+  it('keeps an emoji pair whole after a capped first frame', () => {
     const state = progress()
-    expect(advance('a😀', state, 0)).toEqual({ text: 'a😀', pending: false })
+    expect(advance('a😀', state, 0)).toEqual({ text: 'a', pending: true })
+    expect(advance('a😀', state, 33)).toEqual({ text: 'a😀', pending: false })
   })
 
   it('holds a pair cut by the chunk boundary until the rest arrives', () => {

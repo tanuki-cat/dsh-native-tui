@@ -21,9 +21,9 @@ DeepSeek Harness 的 host-native 终端前端，基于 pi-tui。
 - Agent Presets：standard / ptc / minimal / cordis；/preset 可在首个 turn 前切换当前 Session，已开始的 Session 锁定并用于下一次 /new；选择同时写入 `agent-preset-registry.selectedDefault`，重启后继续使用。
 - Workspace 列表/创建/切换/pin/unpin/archive/unarchive；Schedule 列表/创建/删除；Settings 引导式 TUI 配置页（全部 native-tui 字段：显示模式、transcript、theme/fullscreen、title、cwd、sessionId、agentPreset，带即时/重启/下次启动标注与暂存 diff）与 Host 命名空间内嵌编辑器（搜索、类型化编辑、数组增删/JSON、secret 保护、revision 冲突重试）；Plugins 列表/官方市场/检查/安装/移除/启停（带确认，实时应用）。
 - 可选 `fullscreen`：TuiAltScreen + ScrollView，header/status/editor 固定，鼠标滚轮滚动、文本选择复制。
-- Transcript 层次：参考 pi agent 使用全宽背景带（用户消息、reasoning、tool 输出）、assistant/context 标签、notice 图标、turn 分隔线；本地命令输出按 durable event sequence 插入，不会一律堆在 transcript 末尾。reasoning 块按 live chunk 增量刷新；若网关只在完成时回传整块 reasoning（Responses 路径常见），reasoning `block-start` 会先显示 `thinking …` 占位，完整块再按字素展开。展开按 wall clock 推进（`elapsed × rate`，rate 自适应保证 3000 字素预览约 600ms 内完成），帧率掉到 10fps 也只是跳步更快，不会把动画拉长；grapheme 切分按块缓存，长 reasoning 不会每帧重新分词。展开期间只暂缓其后真正“由该 reasoning 触发”的行：tool/step 卡片与 info notice 等 reveal 完成，`compact`/`hidden` 模式不参与展开；新的 user 消息、warning/error notice 以及同一 assistant 块的 answer 文本照常实时显示，避免整段答案最后一帧突然出现。delta 路径没有本地展开，但 assistant 行最后一段内容与紧随其后的 tool 卡片之间保留一个渲染间隔的 settle grace，二者不会落在同一帧。reveal 进度按 step 记录并在重试（`assistant/attempt` 或同 step 的新 live 块）时清除，重试的 reasoning 从第一个 grapheme 重新展开，不会继承上一次的完成度。这是 TUI 本地平滑，不等同于 Web 端：Web 在 block-end 到达时直接显示完整 reasoning，不暂缓后续节点。
+- Transcript 层次：参考 pi agent 使用全宽背景带（用户消息、reasoning、tool 输出）、assistant/context 标签、notice 图标、turn 分隔线；本地命令输出按 durable event sequence 插入，不会一律堆在 transcript 末尾。reasoning 块按 live chunk 增量刷新，并和 answer delta 一样走本地 reveal；若网关只在完成时回传整块 reasoning（Responses 路径常见），reasoning `block-start` 会先显示 `thinking …` 占位，完整块再按字素展开。展开按 wall clock 推进（`elapsed × rate`，rate 自适应保证 3000 字素预览约 600ms 内完成），帧率掉到 10fps 也只是跳步更快，不会把动画拉长；grapheme 切分按块缓存，长 reasoning 不会每帧重新分词。展开期间只暂缓其后真正“由该 reasoning 触发”的行：tool/step 卡片与 info notice 等 reveal 完成，`compact`/`hidden` 模式不参与展开；新的 user 消息、warning/error notice 以及同一 assistant 块的 answer 文本照常实时显示，避免整段答案最后一帧突然出现。answer/reasoning 最后一段内容与紧随其后的 tool 卡片之间保留一个渲染间隔的 settle grace，二者不会落在同一帧。reveal 进度按 step 记录并在重试（`assistant/attempt` 或同 step 的新 live 块）时清除，重试的 reasoning 从第一个 grapheme 重新展开，不会继承上一次的完成度。这是 TUI 本地平滑，不等同于 Web 端：Web 在 block-end 到达时直接显示完整 reasoning，不暂缓后续节点。
 - 流式节拍：帧间隔按**上次绘制时刻**对齐（`nextFrameDelay`），chunk 突发不会把帧间隔拉成 33/66 ms 交替；内容签名（修订号 + 等待行文本）未变的帧直接跳过重绘。mock SSE（1200 chunks × 8 字符 / 12 ms）实测 26 fps、gap p50 34 ms / p90 41 ms（修复前 14 fps、44–51 ms）；fullscreen（alt-screen）下每帧通常只重写 1 行，main-screen 因整屏 diff 会在换行时重写尾部区域，推荐开启 `fullscreen`。
-- 流式正文逐帧展开：provider 一帧可能带回整句/整段，直接绘制会让答案"跳"出来。live 文本按 wall clock（1.2 字/ms）推进并额外消化 40% 积压，把一次 200 字的突发摊到约 5 帧（~165 ms）；单个 chunk 超过 600 字视为整块返回，直接显示不排队。`block-end` 的文本视为已结算：立即完整显示，且同一步后续 block 从已结算长度继续展开，不会回退重放。
+- 流式正文逐帧展开：provider 一帧可能带回整句/整段，直接绘制会让答案"跳"出来。live 文本按 wall clock（1.2 字/ms）推进，首帧最多 24 字，后续每帧额外消化 15% 积压；一次 200 字的突发约 6 帧（~200 ms）展开，单个 chunk 超过 600 字视为整块返回，直接显示不排队。`block-end` 和 `assistant/message` 不再立即补全：backlog ≤ 600 时保留 reveal 进度继续展开（settlement 后最多再约 0.6 s），完成后才替换为 durable block，同一步后续 block 从已结算长度继续展开，不会回退重放。reasoning delta 也走同一 reveal；`DSH_NATIVE_TUI_DEBUG=1` 会输出每个 chunk 的字符数、帧间隔与本帧 reveal 推进量。
 - 等待行 `⟳ waiting for API response · Ns` 在请求超过 1 秒后出现，首个可渲染的 text/reasoning chunk 或 durable assistant/tool 事件到达时消失；裸 `block-start` 不会提前清除，避免等待行先消失但内容尚未出现。
 - 运行中 `Esc` / `Ctrl+C` 取消 turn；输入框有草稿时 `Esc` 先清空草稿，空输入才取消 turn（overlay 聚焦时不触发）。长文本和 tool 输出按行保持左侧色条。
 - 上下文压缩：默认 preset 启用 `compaction-basic` 自动压力压缩与 context-overflow 恢复，以及 tool-result pruner；TUI 渲染 compaction start/summary/end；prune 会隐藏对应 tool 卡片并保留 prune notice；session 级 tool memory 会忽略同一 callId 的晚到/重复 call/result，即使原始事件已离开 retained window；`compact-checkpoint` 在匹配的 compaction 卡片已存在时不再重复渲染完整 checkpoint。进程在 `compaction/start` 与 `compaction/end` 之间崩溃时，resume 写入的 `turn/end{interrupted}` / `session/end-seed` 会释放 Host 的压缩锁，卡片随之显示 `⚠ Compaction interrupted` 而不是一直停在 running；同一 resume 的 `Turn interrupted before it finished` 也会作为 notice 显示。`/compact` 作为 Host command 可手动触发。
@@ -365,6 +365,12 @@ DSH_HOME=/tmp/dsh-native-tui-native-diff-home node scripts/fake-tty-native-diff.
 
 ~~~sh
 node scripts/fake-tty-reload.mjs
+~~~
+
+流式大 chunk 的平滑与 settlement 收尾用同一类探针验证（212 字单 chunk，首帧 24 字，逐帧推进到完整）：
+
+~~~sh
+node scripts/fake-tty-stream-smooth.mjs
 ~~~
 
 内置 CodeBuddy 插件（两条路由挂载、`/codebuddy status|doctor`、`/model` seed 模型）用真实 Host 冒烟，离线可跑：

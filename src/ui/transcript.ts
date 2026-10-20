@@ -25,7 +25,8 @@ import type { Palette } from './theme.js'
 import type { DisplayMode } from '../config.js'
 import { resultFileDiffs, type FileDiff } from './diff.js'
 import { clip } from './tool-preview.js'
-import { REASONING_REVEAL_RECENT_MS, reasoningRevealFrom, rememberRevealProgress, revealCompletedReasoning, revealDurableReasoning, revealStreamText, STREAM_TEXT_PROGRESS_PREFIX, type RevealProgress } from './reasoning-reveal.js'
+import { REASONING_LIVE_PROGRESS_PREFIX, REASONING_REVEAL_RECENT_MS, reasoningRevealFrom, rememberRevealProgress, revealCompletedReasoning, revealDurableReasoning, revealStreamText, STREAM_TEXT_MAX_BACKLOG, STREAM_TEXT_PROGRESS_PREFIX, type RevealProgress } from './reasoning-reveal.js'
+import { debug } from '../debug.js'
 import { isCodeExecutionTool } from './transcript-render.js'
 
 /** Streaming frame interval bounds, in milliseconds. */
@@ -363,6 +364,8 @@ export function reduceTranscriptWindow(
     settledLength: number
     reasoning: string
     revealing: boolean
+    /** Reasoning came from a completed block, so the completed reveal owns it. */
+    reasoningSettled: boolean
     starting: boolean
   }>()
   let durableRevealPending = false
@@ -449,7 +452,7 @@ export function reduceTranscriptWindow(
     if (live === undefined) {
       const index = blocks.length
       blocks.push({ kind: 'assistant', text: '', reasoning: '', live: true })
-      live = { index, text: '', textFinal: false, settledLength: 0, reasoning: '', revealing: false, starting: false }
+      live = { index, text: '', textFinal: false, settledLength: 0, reasoning: '', revealing: false, reasoningSettled: false, starting: false }
       liveByStep.set(key, live)
       // A step only starts a second live block when a retry took over from the
       // previous attempt. Its reasoning must reveal from the start instead of
@@ -474,18 +477,23 @@ export function reduceTranscriptWindow(
     else if (chunk.type === 'reasoning-delta' && showReasoning) {
       live.starting = false
       live.reasoning += chunk.text
+      live.reasoningSettled = false
     }
     else if (chunk.type === 'block-end') {
       live.starting = false
       if (chunk.block.type === 'text' && chunk.block.text.length >= live.text.length) {
         live.text = chunk.block.text
-        // The provider closed the block: this text is settled, so the reveal
-        // must not keep animating it. Keep its progress at the full length so
-        // a later block in the same step resumes instead of re-revealing.
+        // The provider closed the block, but a fast burst may still be behind
+        // the local reveal. Keep the progress: the settled text finishes
+        // revealing over the next frames instead of snapping in one paint.
         live.textFinal = true
         live.settledLength = live.text.length
-        const settled = options.revealProgress?.get(STREAM_TEXT_PROGRESS_PREFIX + key)
-        if (settled !== undefined) settled.visible = live.text.length
+        const progressKey = STREAM_TEXT_PROGRESS_PREFIX + key
+        if (options.revealProgress !== undefined
+          && options.revealProgress.get(progressKey) === undefined
+          && live.text.length <= STREAM_TEXT_MAX_BACKLOG) {
+          rememberRevealProgress(options.revealProgress, progressKey, { start: now, visible: 0 })
+        }
       }
       else if (chunk.block.type === 'reasoning' && showReasoning && chunk.block.text.trim() !== '') {
         const completed = chunk.block.text
@@ -503,10 +511,12 @@ export function reduceTranscriptWindow(
             : { text: completed, pending: false }
           live.reasoning = reveal.text
           live.revealing = reveal.pending
+          live.reasoningSettled = true
         }
         else {
           if (completed.length >= live.reasoning.length) live.reasoning = completed
           live.revealing = false
+          live.reasoningSettled = false
         }
       }
     }
@@ -705,14 +715,80 @@ export function reduceTranscriptWindow(
       case 'assistant/message': {
         const key = stepKey(event.data.turn, event.data.step)
         finalizedSteps.add(key)
-        options.revealProgress?.delete(STREAM_TEXT_PROGRESS_PREFIX + key)
-        const live = liveByStep.get(key)
+        const text = contentText(event.data.message.content)
+        const fullReasoning = showReasoning ? contentReasoning(event.data.message.content) : ''
+        const revealProgress = options.revealProgress
+        const progressKey = STREAM_TEXT_PROGRESS_PREFIX + key
+        const progress = revealProgress?.get(progressKey)
+        let live = liveByStep.get(key)
+        // The subscription removes a step's live rows before appending the
+        // durable message, so the reducer may see only the message. Recreate a
+        // transient row from the settled text when a reveal is still pending;
+        // the progress map carries the prefix already on screen. A step that
+        // never streamed (history) stays static.
+        const pendingReveal = revealProgress !== undefined && text.trim() !== ''
+          && (live !== undefined || progress !== undefined)
+          && (progress === undefined
+            ? text.length <= STREAM_TEXT_MAX_BACKLOG
+            : progress.visible < text.length && text.length - progress.visible <= STREAM_TEXT_MAX_BACKLOG)
+        debug(`stream message: text=${String(text.length)} live=${live === undefined ? 'no' : 'yes'} progress=${progress === undefined ? 'none' : String(progress.visible)} pending=${String(pendingReveal)}`)
+        if (pendingReveal && revealProgress !== undefined) {
+          if (progress === undefined) {
+            rememberRevealProgress(revealProgress, progressKey, { start: now, visible: 0 })
+          }
+          if (live === undefined) {
+            const index = blocks.length
+            blocks.push({ kind: 'assistant', text: '', live: false })
+            live = {
+              index,
+              text: '',
+              textFinal: false,
+              settledLength: 0,
+              reasoning: '',
+              revealing: false,
+              reasoningSettled: false,
+              starting: false,
+            }
+            liveByStep.set(key, live)
+          }
+          const reveal = revealDurable(fullReasoning, event.data.stream, key)
+          if (reveal.pending) durableRevealPending = true
+          live.text = text
+          live.textFinal = true
+          live.settledLength = text.length
+          if (fullReasoning.trim() !== '') {
+            if (live.reasoning === '') {
+              // No deltas arrived: the completed-reasoning reveal owns this text.
+              live.reasoning = reveal.text
+              live.reasoningSettled = true
+              live.revealing = reveal.pending
+            }
+            else {
+              if (reveal.text.length > live.reasoning.length) live.reasoning = reveal.text
+              live.reasoningSettled = false
+              live.revealing = false
+            }
+          }
+          else {
+            live.revealing = false
+          }
+          contentAt[live.index] = event.time
+          blocks[live.index] = {
+            kind: 'assistant',
+            text,
+            ...(live.reasoning === '' ? {} : { reasoning: live.reasoning }),
+            live: false,
+            ...(live.revealing ? { revealing: true } : {}),
+          }
+          break
+        }
+        revealProgress?.delete(progressKey)
+        revealProgress?.delete(REASONING_LIVE_PROGRESS_PREFIX + key)
         if (live !== undefined) {
           live.revealing = false
           blocks[live.index] = { kind: 'assistant', text: '', live: true }
+          liveByStep.delete(key)
         }
-        const text = contentText(event.data.message.content)
-        const fullReasoning = showReasoning ? contentReasoning(event.data.message.content) : ''
         const reveal = revealDurable(fullReasoning, event.data.stream, key)
         if (reveal.pending) durableRevealPending = true
         if (text.trim() !== '' || fullReasoning.trim() !== '') {
@@ -734,6 +810,7 @@ export function reduceTranscriptWindow(
         // clock would let the retried block reveal from the old attempt's count.
         options.revealProgress?.delete(reasoningKey(event.data.turn, event.data.step))
         options.revealProgress?.delete(STREAM_TEXT_PROGRESS_PREFIX + key)
+        options.revealProgress?.delete(REASONING_LIVE_PROGRESS_PREFIX + key)
         const live = liveByStep.get(key)
         if (live !== undefined) {
           // Settle the transient rows and drop the accumulator so a retry of the
@@ -883,9 +960,12 @@ export function reduceTranscriptWindow(
   // chunk at once. Only the interactive renderer tracks progress; direct
   // reducers (tests, exports) render the received text as-is.
   let textRevealPending = false
+  let reasoningLivePending = false
   if (options.revealProgress !== undefined) {
     for (const [key, live] of liveByStep) {
-      if (live.text === '' || live.textFinal || finalizedSteps.has(key)) continue
+      // A finalized step normally lets the durable block own the text. The one
+      // exception is a final message whose backlog is still being revealed.
+      if (live.text === '' || (finalizedSteps.has(key) && !live.textFinal)) continue
       const progressKey = STREAM_TEXT_PROGRESS_PREFIX + key
       let progress = options.revealProgress.get(progressKey)
       if (progress === undefined) {
@@ -899,9 +979,31 @@ export function reduceTranscriptWindow(
       const block = blocks[live.index]
       if (block?.kind === 'assistant') blocks[live.index] = { ...block, text: reveal.text }
     }
+    if (showReasoning) {
+      for (const [key, live] of liveByStep) {
+        if (live.reasoning === '' || live.revealing || live.reasoningSettled) continue
+        if (finalizedSteps.has(key) && !live.textFinal) continue
+        const progressKey = REASONING_LIVE_PROGRESS_PREFIX + key
+        let progress = options.revealProgress.get(progressKey)
+        if (progress === undefined) {
+          progress = { start: now, visible: 0 }
+          rememberRevealProgress(options.revealProgress, progressKey, progress)
+        }
+        const reveal = revealStreamText(live.reasoning, progress, now)
+        if (reveal.pending) reasoningLivePending = true
+        const block = blocks[live.index]
+        if (block?.kind === 'assistant') blocks[live.index] = { ...block, reasoning: reveal.text }
+      }
+    }
   }
+  // A finalized live row whose text is fully revealed still needs one more
+  // frame: that frame replaces it with the durable assistant block.
+  const finalTextWaiting = [...liveByStep].some(([key, live]) =>
+    finalizedSteps.has(key) && live.textFinal && live.text !== '')
   const revealPending = durableRevealPending
     || textRevealPending
+    || reasoningLivePending
+    || finalTextWaiting
     || [...liveByStep.values()].some(live => live.revealing)
   const visible: TranscriptBlock[] = []
   const visibleSources: number[] = []
