@@ -135,6 +135,11 @@ export const STREAM_TEXT_MAX_BACKLOG = 600
 /** Baseline answer reveal rate, in characters per millisecond. */
 export const STREAM_TEXT_CHARS_PER_MS = 1.2
 
+/** Whether one UTF-16 unit opens a surrogate pair. */
+function isHighSurrogate(code: number): boolean {
+  return code >= 0xD800 && code <= 0xDBFF
+}
+
 /**
  * Spread streamed answer text over frames instead of painting a whole provider
  * chunk at once.
@@ -171,9 +176,13 @@ export function revealStreamText(
   const catchUp = Math.ceil(backlog * 0.4)
   const advance = Math.min(backlog, Math.max(1, paced, catchUp))
   let next = progress.visible + advance
-  // Never split a surrogate pair: a lone half renders as a replacement glyph.
-  const code = text.charCodeAt(next - 1)
-  if (next < total && code >= 0xD800 && code <= 0xDBFF) next = Math.min(total, next + 1)
+  // Never cut a surrogate pair: a lone half renders as a replacement glyph.
+  if (next < total && isHighSurrogate(text.charCodeAt(next - 1))) next += 1
+  // A chunk can end inside a pair. Hold that half-written pair until its low
+  // half arrives, unless holding would stop the reveal from advancing.
+  if (next === total && total - 1 > progress.visible && isHighSurrogate(text.charCodeAt(total - 1))) {
+    next = total - 1
+  }
   progress.visible = next
   progress.start = now
   return next >= total ? { text, pending: false } : { text: text.slice(0, next), pending: true }

@@ -86,7 +86,7 @@ export function nextFrameDelay(interval: number, elapsedSincePaint: number): num
 
 /** What the last painted frame showed, for skipping identical repaints. */
 export interface TranscriptPaintMark {
-  /** Revision of the entry window and local notices. */
+  /** Revision of the rows the rebuild produced, bumped when they change. */
   readonly revision: number
   /** The wait row text that frame drew, empty when it drew none. */
   readonly wait: string
@@ -95,8 +95,8 @@ export interface TranscriptPaintMark {
 /**
  * Whether a rebuild has anything new to paint.
  *
- * Streaming frames are scheduled on a fixed cadence, so some land with no new
- * chunk. Repainting an identical screen only costs terminal writes; a local
+ * Frames are scheduled on a cadence, so some rebuild the same rows as the last
+ * one. Repainting an identical screen only costs terminal writes; a local
  * reveal is the one case with no incoming data that still needs frames.
  * @param painted - state the last painted frame reflected.
  * @param current - state the rebuild just produced.

@@ -1227,6 +1227,20 @@ describe('revealStreamText', () => {
   const progress = (visible = 0, start = 0) => ({ visible, start })
   const advance = (text: string, state: ReturnType<typeof progress>, now: number) => revealStreamText(text, state, now)
 
+  /** Whether every surrogate unit in the text belongs to a complete pair. */
+  function isWellFormed(value: string): boolean {
+    for (let index = 0; index < value.length; index += 1) {
+      const code = value.charCodeAt(index)
+      if (code >= 0xDC00 && code <= 0xDFFF) return false
+      if (code >= 0xD800 && code <= 0xDBFF) {
+        const low = value.charCodeAt(index + 1)
+        if (low < 0xDC00 || low > 0xDFFF) return false
+        index += 1
+      }
+    }
+    return true
+  }
+
   it('reveals a prefix of a burst instead of the whole chunk', () => {
     const state = progress()
     const reveal = advance('The quick brown fox jumps over the lazy dog', state, 0)
@@ -1290,8 +1304,31 @@ describe('revealStreamText', () => {
     const text = '😀😀😀😀😀'
     const state = progress()
     const reveal = advance(text, state, 0)
-    expect(reveal.text.length % 2).toBe(0)
+    expect(isWellFormed(reveal.text)).toBe(true)
     expect([...reveal.text].every(character => character === '😀')).toBe(true)
+  })
+
+  it('extends a cut that would land inside a pair', () => {
+    // A 40% catch-up on three units rounds to two, which is exactly the
+    // boundary between the high and low half of the emoji.
+    const state = progress()
+    expect(advance('a😀', state, 0)).toEqual({ text: 'a😀', pending: false })
+  })
+
+  it('holds a pair cut by the chunk boundary until the rest arrives', () => {
+    const state = progress()
+    // The provider closed a chunk after the high half: paint the ASCII text and
+    // wait for the low half instead of rendering a replacement glyph.
+    expect(advance('ab\uD83D', state, 100)).toEqual({ text: 'ab', pending: true })
+    expect(advance('ab😀', state, 116)).toEqual({ text: 'ab😀', pending: false })
+  })
+
+  it('stops holding a pair the stream never completes', () => {
+    const state = progress()
+    // A lone high surrogate cannot pair, so the reveal must settle rather than
+    // repaint the same prefix forever.
+    expect(advance('ab\uD83D', state, 100)).toEqual({ text: 'ab', pending: true })
+    expect(advance('ab\uD83D', state, 200)).toEqual({ text: 'ab\uD83D', pending: false })
   })
 })
 
@@ -1419,6 +1456,33 @@ describe('TranscriptRenderer component reuse', () => {
     renderer.clear()
     renderer.set(entries, [])
     expect(renderer.container.children[0]).not.toBe(before)
+  })
+
+  it('reports a rebuild that painted the same rows as unchanged', () => {
+    const renderer = new TranscriptRenderer(options)
+    const entries = [user(1, 'hello'), assistant(2, 'world')]
+    renderer.set(entries, [])
+    expect(renderer.contentChanged).toBe(true)
+    renderer.set(entries, [])
+    expect(renderer.contentChanged).toBe(false)
+  })
+
+  it('reports a rebuild that painted new streamed text as changed', () => {
+    const renderer = new TranscriptRenderer(options)
+    const entries = [liveChunk(1, 1, 1, { type: 'text-delta', text: 'hello' })]
+    renderer.set(entries, [])
+    for (let frame = 0; frame < 8; frame += 1) renderer.set(entries, [])
+    expect(renderer.contentChanged).toBe(false)
+    renderer.set([...entries, liveChunk(2, 1, 1, { type: 'text-delta', text: ' world' })], [])
+    expect(renderer.contentChanged).toBe(true)
+  })
+
+  it('reports a cleared transcript as changed so the screen repaints empty', () => {
+    const renderer = new TranscriptRenderer(options)
+    renderer.set([user(1, 'hello')], [])
+    renderer.clear()
+    renderer.set([], [])
+    expect(renderer.contentChanged).toBe(true)
   })
 })
 

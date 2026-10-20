@@ -180,7 +180,7 @@ export async function startTerminalApp(
   let pendingAttachments: PendingAttachment[] = []
   let transcriptTimer: ReturnType<typeof setTimeout> | undefined
   let transcriptInterval = STREAM_MIN_INTERVAL_MS
-  /** Bumped by anything that changes what the transcript should show. */
+  /** Bumped whenever a rebuild changes the rows the transcript paints. */
   let transcriptRevision = 0
   /** What the last painted frame showed, so an identical one can be skipped. */
   let painted = { revision: -1, wait: '' }
@@ -221,17 +221,19 @@ export async function startTerminalApp(
   /**
    * Rebuild the transcript and paint it.
    *
-   * A frame is skipped when nothing it could show changed since the last one:
-   * the stream interval keeps firing while chunks arrive, and repainting an
-   * identical screen only costs terminal writes.
+   * Rebuilds are scheduled on a cadence while streaming and once a second while
+   * waiting, so a frame can land with nothing new to show. The revision comes
+   * from the rebuild itself, which lets such a frame skip the repaint instead of
+   * writing an identical screen.
    */
   const renderTranscript = (): void => {
     if (disposed) return
-    const revision = transcriptRevision
     const started = performance.now()
     const pending = waitingBlock()
     const pendingText = pending === undefined ? '' : pending.text
     renderer.set(entries, pending === undefined ? localNotices : [...localNotices, pending])
+    if (renderer.contentChanged) transcriptRevision += 1
+    const revision = transcriptRevision
     // Bound the next rebuild, then pace it: the rebuild excludes pi-tui's later
     // container render, whose dominant cost is the growing live Markdown.
     if (renderer.retainedFrom > 0) entries = entries.slice(renderer.retainedFrom)
@@ -256,7 +258,6 @@ export async function startTerminalApp(
    */
   const scheduleTranscript = (immediate = false): void => {
     if (disposed) return
-    transcriptRevision += 1
     const elapsed = performance.now() - lastPaintAt
     if (immediate && elapsed >= transcriptInterval) {
       if (transcriptTimer !== undefined) {

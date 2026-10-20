@@ -45,6 +45,24 @@ export function sameTranscriptBlock(left: TranscriptBlock, right: TranscriptBloc
 }
 
 /**
+ * Whether a rebuild would paint exactly what the previous one painted.
+ *
+ * Frames are scheduled on a cadence, so some rebuilds land with no new event.
+ * Comparing the block list keeps those from costing a terminal repaint; a false
+ * negative only writes an identical screen.
+ * @param left - blocks from the previous rebuild.
+ * @param right - blocks from the current rebuild.
+ * @returns true when the container would render the same rows.
+ */
+function sameTranscriptBlocks(left: readonly TranscriptBlock[], right: readonly TranscriptBlock[]): boolean {
+  if (left.length !== right.length) return false
+  for (let index = 0; index < left.length; index += 1) {
+    if (!sameTranscriptBlock(left[index]!, right[index]!)) return false
+  }
+  return true
+}
+
+/**
  * Stable identity of one reduced block, for carrying its component across a
  * rebuild. `maxEntries` drops old rows from the front and shifts every later
  * block's index, so index alignment cannot decide reuse. A live assistant
@@ -71,6 +89,9 @@ export class TranscriptRenderer {
   private extra: readonly TranscriptBlock[] = []
   /** Component per stable block identity from the previous rebuild. */
   private cached = new Map<string, { readonly block: TranscriptBlock; readonly component: Component }>()
+  /** Block list from the previous rebuild, for detecting a frame with nothing new. */
+  private paintedBlocks: readonly TranscriptBlock[] | undefined
+  private changed = false
   private retained = 0
   private liveChars = 0
   private revealPending = false
@@ -99,6 +120,11 @@ export class TranscriptRenderer {
   /** True while a completed reasoning block is still being revealed across frames. */
   get liveRevealPending(): boolean {
     return this.revealPending
+  }
+
+  /** True when the last rebuild changed what the container would paint. */
+  get contentChanged(): boolean {
+    return this.changed
   }
 
   /**
@@ -165,6 +191,8 @@ export class TranscriptRenderer {
     this.options.toolMemory?.prunedSeqs.clear()
     this.options.toolMemory?.callBySeq.clear()
     this.cached.clear()
+    this.paintedBlocks = undefined
+    this.changed = false
     this.container.clear()
   }
 
@@ -184,6 +212,8 @@ export class TranscriptRenderer {
       blocks.push(block)
     }
     blocks.push(...pending, ...trailing)
+    this.changed = this.paintedBlocks === undefined || !sameTranscriptBlocks(this.paintedBlocks, blocks)
+    this.paintedBlocks = blocks
     const next = new Map<string, { readonly block: TranscriptBlock; readonly component: Component }>()
     let liveChars = 0
     this.container.clear()
