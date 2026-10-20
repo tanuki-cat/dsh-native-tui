@@ -108,16 +108,16 @@ export async function startTerminalApp(
   const tui = config.fullscreen
     ? new TuiAltScreen(terminal, false, undefined, { mouse: true })
     : new TuiMainScreen(terminal, false)
-  const header = new Text('', 2, 0)
-  const headerRule = new Rule(text => palette.dim(text), 2)
-  const statusRule = new Rule(text => palette.reasoning(reasoningEffort)(text), 2)
-  const status = new Text('', 2, 0)
-  const footer = new Text('', 2, 0)
+  // Every row uses the width the terminal reports: no stored horizontal inset,
+  // so transcript, status, prompt, and the divider rules share one left edge
+  // and stay aligned through a resize.
+  const header = new Text('', 0, 0)
+  const headerRule = new Rule(text => palette.dim(text))
+  const statusRule = new Rule(text => palette.reasoning(reasoningEffort)(text))
+  const status = new Text('', 0, 0)
+  const footer = new Text('', 0, 0)
+  // The editor paints its border and content across the full width it is given.
   const editor = new Editor(tui, editorTheme(palette, () => reasoningEffort))
-  // The editor paints its own top/bottom border at the full component width;
-  // wrapping it keeps that border aligned with the inset rules and status text.
-  const editorBox = new Box(2, 0)
-  editorBox.addChild(editor)
   const markdown = markdownTheme(palette)
   const renderer = new TranscriptRenderer({
     showReasoning: config.showReasoning,
@@ -129,9 +129,9 @@ export async function startTerminalApp(
   })
   let thinkingDisplayMode = config.thinkingDisplay
 
-  // One inset content column: transcript bands, rules, status, and editor all
-  // share the same left/right margin so the page breathes like pi agent's.
-  const transcript = new Box(2, 1)
+  // Vertical breathing room only: the transcript shares the full-width column
+  // with the header, status, prompt, and rules.
+  const transcript = new Box(0, 1)
   transcript.addChild(renderer.container)
 
   if (tui instanceof TuiAltScreen) {
@@ -148,7 +148,7 @@ export async function startTerminalApp(
       { component: statusRule, basis: 'auto' },
       { component: status, basis: 'auto' },
       { component: new Spacer(1), basis: 'auto' },
-      { component: editorBox, basis: 'auto' },
+      { component: editor, basis: 'auto' },
       { component: footer, basis: 'auto' },
     ]))
   } else {
@@ -159,7 +159,7 @@ export async function startTerminalApp(
     tui.addChild(statusRule)
     tui.addChild(status)
     tui.addChild(new Spacer(1))
-    tui.addChild(editorBox)
+    tui.addChild(editor)
     tui.addChild(footer)
   }
   tui.setFocus(editor)

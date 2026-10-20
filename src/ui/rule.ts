@@ -1,18 +1,21 @@
 import type { Component } from '@earendil-works/pi-tui'
 
-/** Full-width horizontal rule with optional horizontal padding. */
+/**
+ * Horizontal rule that fills the width its parent hands it.
+ *
+ * The component owns no inset: it paints every column it is given, so the line
+ * always spans its container edge to edge and follows a resize without any
+ * stored width or margin. Containers (the transcript column, the app layout)
+ * decide the inset by rendering the rule narrower.
+ */
 export class Rule implements Component {
-  constructor(
-    private readonly style: (text: string) => string,
-    private readonly paddingX = 0,
-  ) {}
+  constructor(private readonly style: (text: string) => string) {}
 
   invalidate(): void {
     // The rule has no cached state.
   }
 
   render(width: number): string[] {
-    const inner = Math.max(0, width - this.paddingX * 2)
-    return [' '.repeat(this.paddingX) + this.style('─'.repeat(inner))]
+    return [this.style('─'.repeat(Math.max(0, Math.floor(width))))]
   }
 }
