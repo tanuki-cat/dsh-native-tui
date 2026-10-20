@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process'
 import {
   Box,
   Editor,
@@ -17,6 +18,8 @@ import type { ContentBlock } from '@deepseek-ai/dsh-llm/types'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { DisplayMode, ResolvedConfig } from '../config.js'
 import { createHostSession, readContextMeter, resumeHostSession, sessionAgentPreset, sessionModelSelection, type AgentPresetService, type HostSession } from '../runtime/agent.js'
+import { findLauncher, parseProfileArg, resumeHint } from '../runtime/launcher.js'
+import { reloadArgs } from '../runtime/reload.js'
 import type { SessionStats } from '../runtime/metrics.js'
 import { showApproval, showQuestionBatch } from './dialogs.js'
 import type { PendingAttachment } from '../runtime/attachments.js'
@@ -48,6 +51,43 @@ export interface TerminalApp {
 }
 
 const MAX_NOTICES = 12
+
+/**
+ * Replace the running Node process with a fresh dsh invocation. `execve` keeps
+ * the PID and inherited terminal; platforms without it use a child process
+ * that owns the same stdio.
+ * @param args - launcher arguments after the entry script.
+ */
+function replaceProcess(args: readonly string[]): void {
+  const entry = process.argv[1]
+  if (entry === undefined) {
+    process.stderr.write('native-tui: reload failed: cannot locate the dsh entry script\n')
+    process.exit(1)
+  }
+  try {
+    process.stdout.write('\nReloading dsh…\n')
+  } catch {
+    // A closed stdout must not prevent the replacement.
+  }
+  try {
+    if (process.execve !== undefined) {
+      process.execve(process.execPath, [process.execPath, entry, ...args], process.env)
+    }
+    const child = spawn(process.execPath, [entry, ...args], {
+      cwd: process.cwd(),
+      env: process.env,
+      stdio: 'inherit',
+    })
+    child.once('error', error => {
+      process.stderr.write('native-tui: reload failed: ' + error.message + '\n')
+      process.exit(1)
+    })
+    child.once('exit', code => { process.exit(code ?? 1) })
+  } catch (error) {
+    process.stderr.write('native-tui: reload failed: ' + (error instanceof Error ? error.message : String(error)) + '\n')
+    process.exit(1)
+  }
+}
 
 /**
  * Mount the pi-tui application over one owned Host Agent.
@@ -540,6 +580,7 @@ export async function startTerminalApp(
       scheduleTranscript(true)
     },
     exit: requestExit,
+    reload: requestReload,
     preset: {
       current: () => selectedPreset,
       select: id => { selectedPreset = id },
@@ -548,6 +589,7 @@ export async function startTerminalApp(
   })
 
   const handleSubmit = (text: string): void => {
+    if (exiting) return
     const trimmed = text.trim()
     if (trimmed === '' && pendingAttachments.length === 0) return
     editor.setText('')
@@ -568,11 +610,35 @@ export async function startTerminalApp(
     void dispose().then(() => { onExit(code) }, () => { onExit(code) })
   }
 
+  const requestReload = (): void => {
+    if (exiting || disposed) return
+    exiting = true
+    const args = reloadArgs(process.argv.slice(2), active.id)
+    const replace = (): void => { replaceProcess(args) }
+    const current = modelSelection.current
+    if (current !== undefined) {
+      try {
+        // The event map augmentation lives in a package this entry point does
+        // not import; the Host accepts the same record from its session API.
+        const session = active.agent.session as unknown as {
+          append(type: string, data: unknown): unknown
+        }
+        session.append('model/selection', current)
+      } catch {
+        // The default save below still covers a session that refuses the record.
+      }
+    }
+    void persistSelection()
+      .catch(() => undefined)
+      .then(() => dispose(false))
+      .then(replace, replace)
+  }
+
   const onSignal = (): void => {
     void dispose().finally(() => { process.exit(143) })
   }
 
-  const dispose = async (): Promise<void> => {
+  const dispose = async (reportSession = true): Promise<void> => {
     if (disposed) return
     disposed = true
     interactionAbort.abort(new Error('native-tui: terminal disposed'))
@@ -599,10 +665,18 @@ export async function startTerminalApp(
       }
     }
     warningGuard = undefined
-    if (!reportedSession) {
+    if (reportSession && !reportedSession) {
       reportedSession = true
+      const profile = parseProfileArg(process.argv.slice(2))
+      let resume = resumeHint(profile, undefined, active.id)
       try {
-        process.stdout.write('\nSession: ' + active.id + '\nResume: dsh --profile tui --resume ' + active.id + '\n')
+        resume = resumeHint(profile, await findLauncher(profile), active.id)
+      }
+      catch {
+        // Keep the explicit fallback when the launcher lookup fails.
+      }
+      try {
+        process.stdout.write('\nSession: ' + active.id + '\nResume: ' + resume + '\n')
       }
       catch {
         // A closed stdout must not turn a normal exit into a failure.

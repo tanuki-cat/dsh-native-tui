@@ -11,7 +11,7 @@ interface Notice {
 }
 
 /** A dispatcher whose every collaborator records what the line asked of it. */
-function harness(options: { readonly hostResult?: unknown; readonly skills?: readonly SkillSuggestion[] } = {}) {
+function harness(options: { readonly hostResult?: unknown; readonly skills?: readonly SkillSuggestion[]; readonly running?: boolean } = {}) {
   const notices: Notice[] = []
   const calls: string[] = []
   const switched: Array<() => Promise<unknown>> = []
@@ -28,7 +28,7 @@ function harness(options: { readonly hostResult?: unknown; readonly skills?: rea
     config: { cwd: '/tmp', agentPreset: 'ptc' },
     palette: {},
     tui: {},
-    active: { id: 'session-1', agent: { cancel: () => { calls.push('cancel') } } },
+    active: { id: 'session-1', agent: { status: options.running === true ? 'running' : 'idle', cancel: () => { calls.push('cancel') } } },
     signal: new AbortController().signal,
     notice: (tone: string, text: string) => { notices.push({ tone, text }) },
     renderStatus: () => undefined,
@@ -46,6 +46,7 @@ function harness(options: { readonly hostResult?: unknown; readonly skills?: rea
     sendPrompt: text => { prompts.push(text) },
     clearTranscript: () => { calls.push('clearTranscript') },
     exit: code => { calls.push('exit:' + String(code)) },
+    reload: () => { calls.push('reload') },
     preset: {
       current: () => { calls.push('preset.current'); return 'ptc' },
       select: id => { calls.push('preset.select:' + id) },
@@ -61,6 +62,26 @@ describe('command router', () => {
     await runCommandLine('/exit', h.deps)
     expect(h.calls).toEqual(['exit:0'])
     expect(h.contextBuilds()).toBe(0)
+  })
+
+  it('reloads through the injected callback', async () => {
+    const h = harness()
+    await runCommandLine('/reload', h.deps)
+    expect(h.calls).toEqual(['reload'])
+  })
+
+  it('refuses to reload while a turn is running', async () => {
+    const h = harness({ running: true })
+    await runCommandLine('/reload', h.deps)
+    expect(h.calls).toEqual([])
+    expect(h.notices).toEqual([{ tone: 'warning', text: 'Wait for the running turn to finish before /reload.' }])
+  })
+
+  it('rejects reload arguments', async () => {
+    const h = harness()
+    await runCommandLine('/reload now', h.deps)
+    expect(h.calls).toEqual([])
+    expect(h.notices).toEqual([{ tone: 'warning', text: 'Usage: /reload' }])
   })
 
   it('clears the transcript through the injected callback', async () => {

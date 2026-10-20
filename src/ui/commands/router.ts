@@ -48,6 +48,8 @@ export interface CommandRouterDeps {
   readonly clearTranscript: () => void
   /** Leave the process with this exit code. */
   readonly exit: (code: number) => void
+  /** Replace the process with a fresh TUI that resumes the session on screen. */
+  readonly reload: () => void
   /** The agent preset new sessions inherit, and where `/preset` records it. */
   readonly preset: {
     readonly current: () => string | undefined
@@ -76,6 +78,17 @@ export async function runCommandLine(line: string, deps: CommandRouterDeps): Pro
   }
 
   switch (name) {
+    case 'reload':
+      if (args !== '') {
+        ctx().notice('warning', 'Usage: /reload')
+        return
+      }
+      if (ctx().active.agent.status === 'running') {
+        ctx().notice('warning', 'Wait for the running turn to finish before /reload.')
+        return
+      }
+      deps.reload()
+      return
     case 'exit':
     case 'quit':
       deps.exit(0)

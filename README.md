@@ -51,15 +51,18 @@ pnpm install
 pnpm build
 dsh plugin --profile tui add /absolute/path/to/dsh-native-tui
 
-# 启动
+# 启动（安装脚本或首次启动会创建 dnt，等价于 dsh --profile tui）
+dnt
+
+# 手动安装或未生成 dnt 时直接启动
 dsh --profile tui
 
-# 直接恢复上次 Session（退出时打印的 Resume 命令）
-dsh --profile tui --resume <session-id>
+# 参数原样透传，例如恢复上次 Session（退出时打印的 Resume 命令）
+dnt --resume <session-id>
 ~~~
 
-`scripts/install.sh` 默认执行 `pnpm install --frozen-lockfile` 与 `pnpm build`，再通过 `dsh plugin --profile tui add` 安装；`--no-build` 跳过前置步骤，`--pack` 先打包，再移除旧安装并安装独立副本（版本号未变也会安装新内容）。DSH Host 包由当前 dsh 安装提供；插件运行时还依赖 pi-tui、schemastery、fflate，以及官方 computer-use / mcp / session-stats rc.2 包。
-安装路径使用 link: 时，修改源码后重新 pnpm build 即可生效。
+`scripts/install.sh` 默认执行 `pnpm install --frozen-lockfile` 与 `pnpm build`，再通过 `dsh plugin --profile tui add` 安装；`--no-build` 跳过前置步骤，`--pack` 先打包，再移除旧安装并安装独立副本（版本号未变也会安装新内容）。安装成功后脚本会在 `$XDG_BIN_HOME`（未设置时为 `~/.local/bin`）写入启动命令：`tui` profile 为 `dnt`，其他 profile 为 `dnt-<profile>`，作用等价于 `dsh --profile <profile>` 并原样透传参数；`--command <name>` 可以改名。直接用 `dsh plugin add` 安装时，插件在默认 DSH home 下首次启动也会补建同样的命令；`DSH_HOME` 不是默认的 `~/.dsh`（测试/探针或自定义 home）或设置 `DSH_NATIVE_TUI_NO_LAUNCHER=1` 时不自动创建。目标文件已存在且不是本插件生成的（不带 `dsh-native-tui launcher` 标记）时不会覆盖；不再需要时删除该文件即可。DSH Host 包由当前 dsh 安装提供；插件运行时还依赖 pi-tui、schemastery、fflate，以及官方 computer-use / mcp / session-stats rc.2 包。
+安装路径使用 link: 时，修改源码后重新 pnpm build 即可生效；更新 TUI 插件或其他插件后，在 TUI 内执行 `/reload` 会保存当前模型选择、恢复当前 Session 并重新加载进程。
 
 ## 命令
 
@@ -95,6 +98,7 @@ dsh --profile tui --resume <session-id>
 | /diff [index] | 分页查看最近/指定工具调用的 write/edit diff |
 | /attach <path>|paste|preview <i>|list|clear | 暂存或预览文件/图片/剪贴板图片，随下一条 prompt 发送 |
 | /attachments | 暂存附件管理器：预览或移除 |
+| /reload | 重新加载 TUI 与插件并恢复当前 Session；用于插件更新后生效 |
 | /exit, /quit | 退出并恢复终端；也可直接输入裸 `exit` / `quit` |
 
 Enter 发送；运行中 Enter 作为 steer；Ctrl+C 取消/退出；Ctrl+D 退出。
@@ -355,6 +359,12 @@ DSH_HOME=/tmp/dsh-native-tui-input-home node scripts/fake-tty-provider-input.mjs
 
 ~~~sh
 DSH_HOME=/tmp/dsh-native-tui-native-diff-home node scripts/fake-tty-native-diff.mjs
+~~~
+
+`/reload`（保存当前模型、恢复同一 Session 并替换进程）用自建临时 profile 的探针验证：
+
+~~~sh
+node scripts/fake-tty-reload.mjs
 ~~~
 
 内置 CodeBuddy 插件（两条路由挂载、`/codebuddy status|doctor`、`/model` seed 模型）用真实 Host 冒烟，离线可跑：

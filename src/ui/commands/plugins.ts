@@ -6,8 +6,16 @@
 
 import { showChoice } from '../dialogs.js'
 import type { CommandContext } from './context.js'
-import type { PluginManagerService } from './services.js'
+import type { PluginChangeResult, PluginManagerService } from './services.js'
 import { NL, errorMessage } from './shared.js'
+
+/** The trailing status for one plugin change. */
+function changeSuffix(result: PluginChangeResult): string {
+  if (result.error !== undefined) {
+    return ' · ' + result.error.code + (result.error.message === undefined ? '' : ' ' + result.error.message)
+  }
+  return ' · ' + result.application + (result.application === 'restart-required' ? ' · run /reload to apply' : '')
+}
 
 /** The `/plugins` command. */
 export async function pluginsCommand(ctx: CommandContext, args: string): Promise<void> {
@@ -119,7 +127,7 @@ export async function pluginsCommand(ctx: CommandContext, args: string): Promise
         ctx.palette,
         'Install ' + label + '?',
         [
-          { value: 'yes', label: 'Continue', description: 'pnpm installs the package; the profile may reload' },
+          { value: 'yes', label: 'Continue', description: 'pnpm installs the package; run /reload if it requires a restart' },
           { value: 'no', label: 'Cancel' },
         ],
         'Enter selects · Esc cancels',
@@ -128,10 +136,7 @@ export async function pluginsCommand(ctx: CommandContext, args: string): Promise
       if (confirmed !== 'yes') return
       ctx.notice('info', 'Installing ' + label + '… pnpm may take a while.')
       const result = await manager.installBundle(spec, { enabled: true })
-      const suffix = result.error === undefined
-        ? ' · ' + result.application
-        : ' · ' + result.error.code + (result.error.message === undefined ? '' : ' ' + result.error.message)
-      ctx.notice(result.error === undefined ? 'info' : 'error', 'install ' + label + suffix)
+      ctx.notice(result.error === undefined ? 'info' : 'error', 'install ' + label + changeSuffix(result))
     } catch (error) {
       ctx.notice('error', 'Could not install ' + spec + ': ' + errorMessage(error))
     }
@@ -158,7 +163,7 @@ export async function pluginsCommand(ctx: CommandContext, args: string): Promise
         ctx.palette,
         'Remove ' + name + '?',
         [
-          { value: 'yes', label: 'Continue', description: 'pnpm removes the dependency and the profile may reload' },
+          { value: 'yes', label: 'Continue', description: 'pnpm removes the dependency; run /reload if it requires a restart' },
           { value: 'no', label: 'Cancel' },
         ],
         'Enter selects · Esc cancels',
@@ -167,10 +172,7 @@ export async function pluginsCommand(ctx: CommandContext, args: string): Promise
       if (confirmed !== 'yes') return
       ctx.notice('info', 'Removing ' + name + '… pnpm may take a while.')
       const result = await manager.removeBundle(name)
-      const suffix = result.error === undefined
-        ? ' · ' + result.application
-        : ' · ' + result.error.code + (result.error.message === undefined ? '' : ' ' + result.error.message)
-      ctx.notice(result.error === undefined ? 'info' : 'error', 'remove ' + name + suffix)
+      ctx.notice(result.error === undefined ? 'info' : 'error', 'remove ' + name + changeSuffix(result))
     } catch (error) {
       ctx.notice('error', 'Could not remove ' + name + ': ' + errorMessage(error))
     }
@@ -198,7 +200,7 @@ export async function pluginsCommand(ctx: CommandContext, args: string): Promise
         ctx.palette,
         verb + ' plugin ' + id + '?',
         [
-          { value: 'yes', label: 'Continue', description: 'The profile may reload and interrupt this terminal' },
+          { value: 'yes', label: 'Continue', description: 'The profile may reload; run /reload if it requires a restart' },
           { value: 'no', label: 'Cancel' },
         ],
         'Enter selects · Esc cancels',
@@ -206,10 +208,7 @@ export async function pluginsCommand(ctx: CommandContext, args: string): Promise
       )
       if (confirmed !== 'yes') return
       const result = await manager.setPluginEnabled(id, verb === 'enable')
-      const suffix = result.error === undefined
-        ? ' · ' + result.application
-        : ' · ' + result.error.code + (result.error.message === undefined ? '' : ' ' + result.error.message)
-      ctx.notice(result.error === undefined ? 'info' : 'error', verb + ' ' + id + suffix)
+      ctx.notice(result.error === undefined ? 'info' : 'error', verb + ' ' + id + changeSuffix(result))
     } catch (error) {
       ctx.notice('error', 'Could not ' + verb + ' plugin: ' + errorMessage(error))
     }

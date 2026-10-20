@@ -12,7 +12,7 @@ import type { CommandSuggestion } from '../autocomplete.js'
 /** `/help` rows, one line per command family. */
 export const HELP_LINES: readonly string[] = [
   '/help · /new · /init · /sessions · /resume [id] · /status · /clear',
-  '/exit · /quit (or bare exit/quit)',
+  '/exit · /quit (or bare exit/quit) · /reload',
   '/cancel · /model [provider/model] · /reasoning [effort|default|map] · /provider [add|list|edit|models|remove <route>]',
   '/mcp [add|list|remove <name>]',
   '/permissions [preset]',
@@ -107,6 +107,7 @@ export const LOCAL_COMMANDS: readonly CommandSuggestion[] = [
   { name: 'diff', description: 'page the latest or one indexed tool diff', input: { hint: '[index]' } },
   { name: 'attach', description: 'stage or preview a file, image, or clipboard image', input: { hint: '<path>|paste|preview <i>|list|clear' } },
   { name: 'attachments', description: 'open the staged attachment manager' },
+  { name: 'reload', description: 'reload the TUI and plugins, resuming this session' },
   { name: 'exit', description: 'exit the terminal front door' },
   { name: 'quit', description: 'exit the terminal front door' },
 ]

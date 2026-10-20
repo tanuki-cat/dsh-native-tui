@@ -1,6 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { Config, parseResumeArg, resolveConfig, resolveDisplayMode, resolveVolatileValue, type Config as TuiConfig } from './config.js'
 import { startTerminalApp, type TerminalApp } from './ui/app.js'
+import { ensureLauncher, parseProfileArg } from './runtime/launcher.js'
 import { debug } from './debug.js'
 
 /** Cordis plugin name. */
@@ -37,6 +38,13 @@ export async function apply(ctx: Context, config: TuiConfig): Promise<void> {
   debug('apply: start')
   if (process.stdin.isTTY !== true || process.stdout.isTTY !== true) {
     throw new Error('native-tui: both stdin and stdout must be TTYs; use the headless or web profile for pipes')
+  }
+
+  try {
+    const launcher = await ensureLauncher(parseProfileArg(process.argv.slice(2)))
+    debug(`launcher: ${launcher.status}${launcher.path === undefined ? '' : ' ' + launcher.path}${launcher.reason === undefined ? '' : ' (' + launcher.reason + ')'}`)
+  } catch (error) {
+    debug(`launcher: ${error instanceof Error ? error.message : String(error)}`)
   }
 
   const resume = parseResumeArg(process.argv.slice(2))

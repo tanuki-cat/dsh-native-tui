@@ -32,7 +32,8 @@
 - /sessions 列出已持久化 Session（排除 subagent 子会话）。
 - /resume <id> 恢复并切换。
 - /status 展示 Session、cwd、模型、状态、事件数、创建时间。
-- 退出时取消运行中的 turn，dispose AgentHandle，恢复终端；随后输出 `Session: <id>` 和可直接执行的 `Resume: dsh --profile tui --resume <id>`。
+- 退出时取消运行中的 turn，dispose AgentHandle，恢复终端；随后输出 `Session: <id>` 和可直接执行的 `Resume: <launcher> --resume <id>`。存在本插件生成的启动命令时使用其名称（`tui` 为 `dnt`，其他 profile 为 `dnt-<profile>`），否则回退 `dsh --profile <profile> --resume <id>`。
+- `/reload` 保存当前模型选择（写入 Session 的 `model/selection`），恢复当前 Session 后用 `process.execve` 替换进程，用于本插件或其他插件更新后生效；运行中的 turn 会拒绝 reload。
 
 ### 对话与展示
 
