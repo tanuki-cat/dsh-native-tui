@@ -33,7 +33,7 @@ DeepSeek Harness 的 host-native 终端前端，基于 pi-tui。
 - `@@<query>` 自动补全其他 Session 的 canonical mention；发送时 Host session-reference 自动注入快照。
 - `/export [path]` 导出 Session JSONL；`/export zip [path]` 导出含 manifest、attachments、deliverables 的 ZIP bundle；`/export html [path]` 导出静态 HTML transcript；`/open` 预览文本文件，Markdown 以 pi-tui Markdown 样式分页渲染；`/preview` 渲染 PNG/JPEG/GIF/WebP 图片；`/files` 浏览目录并预览；`/attach` 暂存文件/图片或剪贴板图片并随下一条 prompt 发送（8 MiB 上限），`/attach preview <i>` 可内联预览暂存项，`/attachments` 打开暂存附件管理器（预览/移除）；`/deliverables` 可列出、打开 panel、预览或用系统文件管理器定位 present 交付文件；`/tools` 列出工具调用，`/tool <index>` 分页查看完整参数/结果，`/diff [index]` 查看 write/edit 的独立 diff。
 - 问答/审批在 preset Agent 上仍可用（question probe 已通过）。
-- `@file` 主机端补全（file-reference-local）与 `/` 本地/宿主命令+技能补全：`/` 菜单在命令之后列出 Host `ctx.skills` 的用户可调用技能（仅用户可调用的标注 `user-only`），选中插入 `/skill-name`，回车按普通 prompt 发送，由 `dsh-tool-skill` 读取 `/name` 手势并注入技能正文；选中的路径作为普通 prompt 文本，模型需用 read 工具读取。
+- `@file` 主机端补全（file-reference-local）与 `/` 本地/宿主命令+技能补全：`@` 菜单每行是「文件名 + 类型 · 完整路径」（与 pi agent 的文件补全一致），类型放在第二列开头，路径过长时被截断的是路径而不是「这是文件还是目录」；长路径只截断第一列的文件名，不会让所有行停在同一个公共目录前缀上；`/` 菜单在命令之后列出 Host `ctx.skills` 的用户可调用技能（仅用户可调用的标注 `user-only`），选中插入 `/skill-name`，回车按普通 prompt 发送，由 `dsh-tool-skill` 读取 `/name` 手势并注入技能正文；选中的路径作为普通 prompt 文本，模型需用 read 工具读取。
 - 会话列表/按 id 恢复、状态、清屏、安全退出、终端恢复；恢复 Session 时读取持久化的 model/selection 与 request/header，恢复模型、reasoning effort 和 preset；退出后打印 Session ID 和可直接执行的 `--resume` 命令。
 - 非 TTY 显式失败；Ctrl+C/Ctrl+D/SIGTERM/SIGHUP 安全退出。
 
@@ -385,6 +385,12 @@ node scripts/fake-tty-card-head.mjs
 
 ~~~sh
 DSH_HOME=/tmp/dsh-native-tui-wait-tool-phase-home node scripts/fake-tty-wait-tool-phase.mjs
+~~~
+
+`@file` 补全的长文件名布局同样用真实 Host 探针验证（同名前缀的 `docs/design-task-*` 文件，断言每行第一列是文件名而不是公共目录前缀）：
+
+~~~sh
+DSH_HOME=/tmp/dsh-native-tui-reasoning-stream-home node scripts/fake-tty-file-completion.mjs
 ~~~
 
 卡片首行不变量与饱和窗口的批量裁切由离线用例直接驱动真实 `TuiMainScreen`（假终端，断言 `fullRedraws === 0`），不需要 Host：

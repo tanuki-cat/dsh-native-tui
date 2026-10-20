@@ -62,6 +62,29 @@ export interface TuiAutocompleteOptions {
   getSessionReferences(): SessionReferenceService | undefined
 }
 
+/**
+ * The first column of one `@file` suggestion: its last path segment, plus a
+ * trailing slash for a directory. The path is rendered beside it as the
+ * description, so the name stays readable however deep the candidate is.
+ * @param candidate - one host-exported file or directory.
+ * @returns the basename followed by `/` for directories.
+ */
+function fileCandidateLabel(candidate: FileReferenceCandidate): string {
+  const name = candidate.path.slice(candidate.path.lastIndexOf('/') + 1)
+  return name + (candidate.kind === 'directory' ? '/' : '')
+}
+
+/**
+ * The second column of one `@file` suggestion: the full path, preceded by the
+ * entry kind. The kind leads so a path too long for the row is what gets cut,
+ * never the answer to "is this a file or a folder".
+ * @param candidate - one host-exported file or directory.
+ * @returns `kind · path`.
+ */
+function fileCandidateDescription(candidate: FileReferenceCandidate): string {
+  return candidate.kind + ' · ' + candidate.path
+}
+
 function activeSessionToken(line: string, cursorCol: number): { prefix: string; query: string } | undefined {
   const before = line.slice(0, cursorCol)
   const match = /(^|\s)@@([^\s@]*)$/.exec(before)
@@ -203,10 +226,15 @@ export class TuiAutocompleteProvider implements AutocompleteProvider {
     for (const candidate of candidates) {
       const value = formatFileMention(candidate, token.quoted)
       if (value === undefined) continue
+      // Mirror pi's file completion: the label is the entry's own name, which
+      // the suggestion list sizes its first column to, and the row's second
+      // column carries the kind and path. A deep path therefore truncates the
+      // name it shares with its siblings instead of cutting every row at the
+      // same directory prefix.
       items.push({
         value,
-        label: candidate.path + (candidate.kind === 'directory' ? '/' : ''),
-        description: candidate.kind,
+        label: fileCandidateLabel(candidate),
+        description: fileCandidateDescription(candidate),
       })
     }
     return items.length === 0 ? null : { items, prefix: token.prefix }

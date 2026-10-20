@@ -155,8 +155,21 @@ describe('TuiAutocompleteProvider', () => {
     ]).getSuggestions(['see @sr'], 0, 7, { signal })
     expect(suggestions?.prefix).toBe('@sr')
     expect(suggestions?.items).toEqual([
-      { value: '@src/', label: 'src/', description: 'directory' },
-      { value: '@src/main.ts', label: 'src/main.ts', description: 'file' },
+      { value: '@src/', label: 'src/', description: 'directory · src' },
+      { value: '@src/main.ts', label: 'main.ts', description: 'file · src/main.ts' },
+    ])
+  })
+
+  it('labels deep @file candidates by name so the long shared prefix cannot eat them', async () => {
+    // Every candidate shares docs/design-task-; only the tail differs. Naming the
+    // rows by basename keeps that tail visible whatever the terminal width is.
+    const suggestions = await provider([
+      { path: 'docs/design-task-add-event-tags.md', kind: 'file' },
+      { path: 'docs/design-task-fix-smart-display.md', kind: 'file' },
+    ]).getSuggestions(['@docs/de'], 0, 8, { signal })
+    expect(suggestions?.items).toEqual([
+      { value: '@docs/design-task-add-event-tags.md', label: 'design-task-add-event-tags.md', description: 'file · docs/design-task-add-event-tags.md' },
+      { value: '@docs/design-task-fix-smart-display.md', label: 'design-task-fix-smart-display.md', description: 'file · docs/design-task-fix-smart-display.md' },
     ])
   })
 
