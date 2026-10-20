@@ -15,9 +15,12 @@ const tick = setInterval(() => {
     try { child.stdin.write('/settings edit llm-deepseek\r') } catch {}
   } else if (phase === 1 && text.includes('Settings · llm-deepseek')) {
     phase = 2
-    try { child.stdin.write('\r') } catch {}
-  } else if (phase === 2 && (text.includes('Settings · llm-deepseek.models') || text.includes('Set llm-deepseek.models'))) {
+    try { child.stdin.write('models') } catch {}
+  } else if (phase === 2 && text.includes('search: models')) {
     phase = 3
+    try { child.stdin.write('\r') } catch {}
+  } else if (phase === 3 && text.includes('Host settings · models')) {
+    phase = 4
     setTimeout(() => { try { child.stdin.write('\x1b') } catch {} }, 400)
     setTimeout(() => { try { child.stdin.write('\x04') } catch {} }, 1000)
   }

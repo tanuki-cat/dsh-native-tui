@@ -27,7 +27,7 @@
 
 - 启动时创建新的 root Agent；Session id 为 native-tui-<uuid>。
 - 启动配置 sessionId 时恢复已持久化 Session；CLI `--resume <id>` 或 `--resume=<id>` 覆盖配置并直接恢复。恢复时从最新 `request/header` / `model/selection` 恢复模型与 reasoning effort，并从 `agent-preset/selected` / header 恢复 preset。
-- `thinkingDisplay`、`runCodeDisplay`、`maxTranscriptEntries`、`theme`、`fullscreen` 作为 native-tui volatile settings 暴露；`/settings` 打开独立 TUI settings 弹窗，显示模式与 transcript entries 立即生效，theme/fullscreen 保存后重启生效，`/settings host` 保留高级 Host settings。`showReasoning` 仅作为 legacy fallback，显式显示模式优先。compact 的 reasoning 取首行，run_code 取 description/code/result 单行摘要。
+- native-tui 的 10 个配置字段（`thinkingDisplay`、`runCodeDisplay`、`showReasoning`、`maxTranscriptEntries`、`theme`、`fullscreen`、`title`、`cwd`、`sessionId`、`agentPreset`）全部作为 volatile settings 暴露并带 schema description；`/settings` 打开引导式 SettingsList 页面，逐字段显示有效值和生效时机，暂存后一次 path-addressed mutation 保存。显示模式、transcript entries、title 立即生效，theme/fullscreen 保存后重启生效，cwd/sessionId/agentPreset 下次启动生效。`/settings host` 打开 schema 驱动的 Host 命名空间内嵌编辑器（搜索、嵌套/动态 record/数组、JSON、secret 保护与冲突重试），`/settings edit|items|set` 保留为脚本化入口。`showReasoning` 仅作为 legacy fallback，显式显示模式优先。compact 的 reasoning 取首行，run_code 取 description/code/result 单行摘要。
 - /new 创建新会话并切换。
 - /sessions 列出已持久化 Session（排除 subagent 子会话）。
 - /resume <id> 恢复并切换。
@@ -202,11 +202,11 @@ scripts/
 3. 远端连接（连接已有 dsh web Host）未实现；当前只支持本地 owned Agent。
 4. Plugin Manager 官方目录之外的市场搜索仍走 Web；PDF/Office 富文档预览未实现。
 5. 真实 PTY 下的 fullscreen 鼠标滚动/选择复制、真实模型流式/审批 waterfall 仍需普通终端和凭据环境复验。
-6. Settings 的动态 record 仍是 JSON 文本编辑；问题面板 multi-select 仍按单选项处理。
+6. 问题面板 multi-select 仍按单选项处理。Settings 的动态 record 现在同时提供具体 key 的叶子编辑与整体 JSON 编辑；含 secret 的 record 只能逐叶子编辑。
 7. 没有多 Agent 并发/后台会话视图；subagent 只读列出。
 8. 状态栏指标中 TPS 基于已完成 step；context 使用最近 prompt token；运行中断线状态不回推。
 9. package 仍为 private，发布名称/scope/CI 策略未确定。
-10. Settings wizard 目前覆盖 thinking/run_code/transcript entries/theme/fullscreen；title/cwd/sessionId/showReasoning 仍是 profile-only，Host settings 仍是列表入口。
+10. ~~Settings wizard 目前覆盖 thinking/run_code/transcript entries/theme/fullscreen；title/cwd/sessionId/showReasoning 仍是 profile-only，Host settings 仍是列表入口。~~ 2026-10-20 已解决：引导页覆盖全部 10 个字段，Host settings 为内嵌编辑器（见进度记录 P1/P2）。
 11. 自动压缩缺低 context window 长会话 E2E；MCP 运行中断线/重连与同 session 新配置加载仍未闭环。
 12. compaction open-start 在 Session 恢复时仍可能显示 running；context 百分比是 shadowedTokenCount 近似值。
 

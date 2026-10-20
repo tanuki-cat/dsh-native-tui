@@ -167,7 +167,7 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - 已验证退出后终端恢复并输出：`Session: <id>` 和 `Resume: dsh --profile tui --resume <id>`；用该命令重新启动可恢复同一 Session。
 - 已验证 `--resume <id>` 与 profile 的 `sessionId` 配置共存时，CLI 参数优先。
 - 已验证 `thinkingDisplay` / `runCodeDisplay` 的 hidden/compact/detailed 解析与渲染：compact 只保留首行/摘要，hidden 完全移除对应块。
-- 已验证 `/settings` 独立 TUI settings 弹窗：显示当前 thinking/run_code 模式、transcript entries、theme、fullscreen；前两者通过 native-tui volatile settings 立即生效并持久化，theme/fullscreen 保存后重启生效；`/settings host` 保留高级 Host settings 入口。
+- `/settings` 已重构为引导式 SettingsList 页面（2026-10-20）：覆盖全部 10 个 native-tui 字段，逐字段显示有效值与生效时机，暂存后一次保存并输出回执；thinking/code execution/showReasoning/transcript/title 立即生效，theme/fullscreen 重启生效，cwd/sessionId/agentPreset 下次启动生效。`/settings host` 为内嵌 Host 命名空间编辑器，不再是列表入口。此前 5 字段弹窗的验证结论由本条取代。
 - 已验证恢复 Session 后 `/status` 保留 mock/mock-model 与 preset minimal；新增 sessionModelSelection/sessionAgentPreset 单测覆盖 request/header 和 agent-preset/selected。
 - 已为 `/model` 增加内联搜索弹窗：按 value/label/description 过滤，Enter 选择；单测覆盖过滤与选择。
 - 修复 MCP fiber 激活失败后 Loader row 未清理的问题，并新增对应单测。
@@ -197,16 +197,16 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 
 ## 9. 剩余事项（2026-10-17 审查记录）
 
-当前代码与 401 个测试通过（37 个测试文件）；以下按优先级保留，不再混入已完成项。
+当前代码与 445 个测试通过（40 个测试文件）；以下按优先级保留，不再混入已完成项。
 
 ### P1
 
-- [ ] **Settings 覆盖完整化**：当前 wizard 覆盖 thinking/run_code/transcript entries/theme/fullscreen；title、cwd、sessionId、showReasoning 仍需 profile YAML 或高级命令。`Host settings…` 仍只是 namespace 列表，不是完整内嵌编辑器。
+- [x] **Settings 覆盖完整化（2026-10-20）**：`/settings` 改为引导式 SettingsList 页面，覆盖全部 native-tui 字段：thinkingDisplay、runCodeDisplay、showReasoning、maxTranscriptEntries、theme、fullscreen、title、cwd、sessionId、agentPreset。每行显示有效值、schema description 与生效时机（live / restart / next launch）；编辑先暂存，一次 path-addressed mutation 保存，revision 冲突自动重试；`Discard changes` 丢弃暂存，保存回执按生效时机分组。`Host settings…` 改为内嵌 Host 命名空间编辑器：schema 驱动的可搜索路径列表，支持嵌套对象、动态 record、数组 item、JSON 值、append/remove/reset，secret 字段只读且含 secret 的对象禁止整体 JSON 覆盖；所有写入走 path op，不重述被 redact 的 secret。
 
 ### P2
 
 - [ ] **真实 PTY**：fullscreen 鼠标滚动、选择复制、Ctrl+D 恢复尚未在普通终端验收。
-- [ ] **Settings wizard 自动化测试**：覆盖打开弹窗、修改 mode/entries、settings 持久化、theme/fullscreen restart 提示。
+- [x] **Settings wizard 自动化测试（2026-10-20）**：新增 `tests/settings-tui.spec.ts`（字段覆盖、生效时机、fallback、暂存/reset/保存回执）、`tests/settings-host.spec.ts`（嵌套/数组/dict/secret 枚举）、`tests/settings-common.spec.ts`（冲突重试）、`tests/settings.spec.ts` 扩展（schema 投影、类型解析、路径工具）与命令路由测试。真实 Host 探针 `scripts/fake-tty-settings-guided.mjs`（引导页改 thinkingDisplay 并保存、Host 内嵌编辑器浏览）、`scripts/fake-tty-settings-title.mjs`（title 保存后 header 即时生效）、`scripts/fake-tty-settings-host-edit.mjs`（`llm-pi-ai.providers.command-code.models[0].name` 嵌套数组项写入且数组条目数 102→102）均通过；旧 settings 探针（list/edit/nested/nested2/array）同步到新编辑器流程，在隔离 profile 上均 PASS。
 
 ### P3
 
@@ -229,6 +229,7 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - [x] computer-use 用户侧实机可用。
 - [x] approval dialog allow/reject 与显式 Cancel 行、reason 渲染测试（Esc 与 Cancel 行同样 settlement 为 cancelled）。
 - [x] MCP fiber 激活失败 Loader row 清理。
+- [x] Settings 配置整体重构与引导式 UI（2026-10-20）：native-tui 全部 10 个字段注册为 volatile 并补 schema description；新增 `ui/settings-panel.ts`（SettingsList + opaque frame，搜索/子菜单/暂存标题）、`ui/commands/settings-tui.ts`（字段目录、类型化编辑、暂存与保存回执）、`ui/commands/settings-host.ts`（schema 驱动的 Host 内嵌编辑器）、`ui/commands/settings-common.ts`（revision 冲突重试）与 `runtime/settings.ts` 的 schema 投影/校验/路径工具。`/settings edit|items|set` 保留为脚本化入口；`/settings host` 不再是只读 namespace 列表。title/showReasoning 保存后即时生效，theme/fullscreen 提示重启，cwd/sessionId/agentPreset 标注下次启动。验证：`pnpm check` 40 files / 445 tests；三个真实 Host 探针（见 P2）通过。
 - [x] MCP settings 实时 reconcile：`settings/document-updated` 驱动 manager 对新增/修改/删除 server 就地装载或卸载，不再需要重启 TUI；`tools/change` 加工具集合驱动 connect/disconnect 回推（mcp-manager 共 13 个单测）。
 - [x] MCP 真实 tools/call E2E：`scripts/mcp-tools-call-e2e.mjs` 用真实 cordis 加官方 mcp-client 连接 `scripts/fake-mcp-stdio.mjs`，断言 `mcp__demo__echo` 的 stdio 往返结果。
 - [x] MCP 真实 TUI 回归：`scripts/fake-tty-mcp.mjs` 以绝对路径 `node` 启动 `scripts/fake-mcp-stdio.mjs`，`/mcp add` 后**不重启**直接 `/mcp list` 显示 `connected`，证明 settings → reconcile 与状态回推在真实 Host 中生效。

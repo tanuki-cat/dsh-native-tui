@@ -43,18 +43,21 @@ export async function apply(ctx: Context, config: TuiConfig): Promise<void> {
   const resolved = resolveConfig(resume === undefined ? config : { ...config, sessionId: resume })
   let app: TerminalApp | undefined
   let exiting = false
-  const syncDisplayModes = (): void => {
-    const thinking = resolveDisplayMode(config.thinkingDisplay) ?? (config.showReasoning === false ? 'hidden' : 'detailed')
+  const syncLiveSettings = (): void => {
+    const showReasoning = resolveVolatileValue(config.showReasoning) ?? true
+    const thinking = resolveDisplayMode(config.thinkingDisplay) ?? (showReasoning ? 'detailed' : 'hidden')
     const runCode = resolveDisplayMode(config.runCodeDisplay) ?? 'detailed'
+    resolved.title = resolveVolatileValue(config.title) ?? 'DeepSeek Harness'
     app?.setDisplayModes(thinking, runCode)
     app?.setMaxEntries(resolveVolatileValue(config.maxTranscriptEntries) ?? 2000)
+    app?.setTitle(resolved.title)
   }
   ctx.inject(['settings'], (child) => {
     const settings = (child as unknown as { settings: { configure(options: Record<string, unknown>, fiber: unknown): () => void } }).settings
     child.effect(() => settings.configure({ auto: false }, ctx.fiber))
   })
   const offSettings = (ctx as unknown as { on(event: string, callback: (ns: string) => void): () => void })
-    .on('settings/document-updated', (ns) => { if (ns === 'native-tui') syncDisplayModes() })
+    .on('settings/document-updated', (ns) => { if (ns === 'native-tui') syncLiveSettings() })
   ctx.effect(() => offSettings)
 
   const exit = (code: number): void => {
@@ -68,7 +71,7 @@ export async function apply(ctx: Context, config: TuiConfig): Promise<void> {
   try {
     debug('apply: starting terminal')
     app = await startTerminalApp(ctx, resolved, exit)
-    syncDisplayModes()
+    syncLiveSettings()
     debug('apply: terminal started')
   } catch (error) {
     throw error

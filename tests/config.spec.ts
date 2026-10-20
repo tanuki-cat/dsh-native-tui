@@ -32,6 +32,23 @@ describe('resolveConfig', () => {
     expect(explicit.runCodeDisplay).toBe('hidden')
   })
 
+  it('unwraps Volatile references for startup fields', () => {
+    const ref = <T>(value: T) => ({ get: () => value })
+    const config = resolveConfig({
+      sessionId: ref('session-2'),
+      cwd: ref('/tmp/volatile'),
+      showReasoning: ref(false),
+      title: ref('Volatile TUI'),
+      agentPreset: ref('minimal'),
+    })
+    expect(config.sessionId).toBe('session-2')
+    expect(config.cwd).toBe('/tmp/volatile')
+    expect(config.showReasoning).toBe(false)
+    expect(config.thinkingDisplay).toBe('hidden')
+    expect(config.title).toBe('Volatile TUI')
+    expect(config.agentPreset).toBe('minimal')
+  })
+
   it('keeps explicit values', () => {
     const config = resolveConfig({
       sessionId: 'session-1',

@@ -40,6 +40,8 @@ import { Rule } from './rule.js'
 export interface TerminalApp {
   setDisplayModes(thinkingDisplay: DisplayMode, runCodeDisplay: DisplayMode): void
   setMaxEntries(maxEntries: number): void
+  /** Replace the product title shown in the header and status row. */
+  setTitle(title: string): void
   dispose(): Promise<void>
 }
 
@@ -153,6 +155,7 @@ export async function startTerminalApp(
   let reportedSession = false
   let exiting = false
   let switching = false
+  let title = config.title
   let selectedPreset: string | undefined = sessionAgentPreset(active.agent.session)
     ?? config.agentPreset
     ?? (host.get('agentPresets') as AgentPresetService | undefined)?.defaultId
@@ -275,7 +278,7 @@ export async function startTerminalApp(
     const projections = host.get('sessionProjections') as SessionProjectionsService | undefined
     const meter = readContextMeter(projections, active.agent.session, contextReserved)
     renderStatusRows({ header, status }, palette, {
-      title: config.title,
+      title,
       sessionId: active.id,
       cwd: summaryCwd() ?? config.cwd,
       running: active.agent.status === 'running',
@@ -603,6 +606,11 @@ export async function startTerminalApp(
       if (disposed) return
       renderer.setMaxEntries(maxEntries)
       tui.requestRender()
+    },
+    setTitle: next => {
+      if (disposed || next === title) return
+      title = next
+      renderStatus()
     },
     dispose: async () => {
       await dispose()

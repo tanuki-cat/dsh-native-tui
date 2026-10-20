@@ -19,7 +19,7 @@ DeepSeek Harness 的 host-native 终端前端，基于 pi-tui。
 - 默认集成官方 `@deepseek-ai/dsh-computer-use`、`@deepseek-ai/dsh-experimental-computer-use-cua-driver-native`、`@deepseek-ai/dsh-mcp-client`（以及 mcp-resources）。
 - `/mcp add|list|remove` 配置 stdio / Streamable HTTP MCP 服务；配置持久化到 `mcp-manager.servers`。
 - Agent Presets：standard / ptc / minimal / cordis；/preset 可在首个 turn 前切换当前 Session，已开始的 Session 锁定并用于下一次 /new；选择同时写入 `agent-preset-registry.selectedDefault`，重启后继续使用。
-- Workspace 列表/创建/切换/pin/unpin/archive/unarchive；Schedule 列表/创建/删除；Settings 顶层/嵌套对象/数组字段编辑与 JSON 写入；Plugins 列表/官方市场/检查/安装/移除/启停（带确认，实时应用）。
+- Workspace 列表/创建/切换/pin/unpin/archive/unarchive；Schedule 列表/创建/删除；Settings 引导式 TUI 配置页（全部 native-tui 字段：显示模式、transcript、theme/fullscreen、title、cwd、sessionId、agentPreset，带即时/重启/下次启动标注与暂存 diff）与 Host 命名空间内嵌编辑器（搜索、类型化编辑、数组增删/JSON、secret 保护、revision 冲突重试）；Plugins 列表/官方市场/检查/安装/移除/启停（带确认，实时应用）。
 - 可选 `fullscreen`：TuiAltScreen + ScrollView，header/status/editor 固定，鼠标滚轮滚动、文本选择复制。
 - Transcript 层次：参考 pi agent 使用全宽背景带（用户消息、reasoning、tool 输出）、assistant/context 标签、notice 图标、turn 分隔线；本地命令输出按 durable event sequence 插入，不会一律堆在 transcript 末尾。reasoning 块按 live chunk 增量刷新；若网关只在完成时回传整块 reasoning（Responses 路径常见），reasoning `block-start` 会先显示 `thinking …` 占位，完整块再按字素展开。展开按 wall clock 推进（`elapsed × rate`，rate 自适应保证 3000 字素预览约 600ms 内完成），帧率掉到 10fps 也只是跳步更快，不会把动画拉长；grapheme 切分按块缓存，长 reasoning 不会每帧重新分词。展开期间只暂缓其后真正“由该 reasoning 触发”的行：tool/step 卡片与 info notice 等 reveal 完成，`compact`/`hidden` 模式不参与展开；新的 user 消息、warning/error notice 以及同一 assistant 块的 answer 文本照常实时显示，避免整段答案最后一帧突然出现。delta 路径没有本地展开，但 assistant 行最后一段内容与紧随其后的 tool 卡片之间保留一个渲染间隔的 settle grace，二者不会落在同一帧。reveal 进度按 step 记录并在重试（`assistant/attempt` 或同 step 的新 live 块）时清除，重试的 reasoning 从第一个 grapheme 重新展开，不会继承上一次的完成度。这是 TUI 本地平滑，不等同于 Web 端：Web 在 block-end 到达时直接显示完整 reasoning，不暂缓后续节点。
 - 等待行 `⟳ waiting for API response · Ns` 在请求超过 1 秒后出现，首个可渲染的 text/reasoning chunk 或 durable assistant/tool 事件到达时消失；裸 `block-start` 不会提前清除，避免等待行先消失但内容尚未出现。
@@ -82,7 +82,7 @@ dsh --profile tui --resume <session-id>
 | /workspaces [new <path>|use <id|path>|pin|unpin|archive|unarchive] | 列出/创建/切换/固定/归档 workspace 会话 |
 | /schedule [add <seconds> <title>|delete <id>] | 列出/创建/删除一次性提醒 |
 | /plugins [list|market [query]|inspect <spec>|install <spec>|remove <bundle>|enable <entryId>|disable <entryId>] | 列出、浏览官方市场、检查/安装/移除 bundle，或启停插件项 |
-| /settings [tui|host|edit <ns>|items <ns> <field>|set <ns> <json>] | `tui` 打开基础显示/终端配置弹窗（thinking、code execution、transcript、theme、fullscreen）；`host`/`edit`/`items`/`set` 进入高级 Host settings |
+| /settings [tui\|host\|edit [ns]\|items <ns> <field>\|set <ns> <json>] | 默认打开引导式 TUI 配置页（全部 native-tui 字段，暂存后一次保存）；`host`/`edit [ns]` 打开 Host 命名空间内嵌编辑器（搜索、类型化编辑、数组增删/JSON、secret 保护、冲突重试）；`items`/`set` 保留脚本化入口 |
 | /export [path|zip [path]|html [path]] | 导出 JSONL、ZIP bundle，或静态 HTML transcript（不覆盖已有文件） |
 | /open <path> | 预览文本（16 KiB 上限）；Markdown 渲染为样式化分页 |
 | /files [path] | 目录浏览：Enter 进入目录/预览文件，Esc 退出，含 ../ |
@@ -115,13 +115,15 @@ Enter 发送；运行中 Enter 作为 steer；Ctrl+C 取消/退出；Ctrl+D 退�
     title: DeepSeek Harness
 ~~~
 
+以上字段全部注册为 native-tui 的 live settings（volatile），`/settings` 引导页写入 profile patch；schema 中的 description 同时用于 TUI 与 Host 设置页的字段说明。
+
 显示模式：
 
 - `hidden`：不渲染 reasoning / `run_code` / `bash` / `pwsh` 块。
 - `compact`：reasoning 只显示首行摘要；代码执行工具只显示状态 + description/command/code 单行摘要。
 - `detailed`：当前完整 reasoning 区带与代码执行工具 args/result 卡片。
 
-`/settings` 默认打开 **TUI settings** 独立弹窗，可修改 thinking/code execution 显示模式、transcript entries，以及 theme/fullscreen；显示模式和 transcript entries 立即生效，theme/fullscreen 保存后重启生效。`/settings host` 查看高级 Host settings 命名空间，原有的 `/settings edit|items|set` 仍可用。
+`/settings` 默认打开 **TUI settings** 引导页，覆盖全部 native-tui 字段：thinking / code execution 显示模式、Show reasoning（legacy）、transcript entries、theme、fullscreen、header title、cwd、resume session、agent preset。每行显示当前有效值、字段说明和生效时机；编辑先暂存，`Save and apply` 以一次 path-addressed mutation 写入（revision 冲突自动按新 revision 重试一次）后关闭页面并输出保存回执，`Discard changes` 丢弃暂存。thinking / code execution / Show reasoning / transcript entries / title 立即生效；theme / fullscreen 重启后生效；cwd / sessionId / agentPreset 下次启动生效。保存回执按生效时机分组说明。`/settings host` 或 `/settings edit [ns]` 打开 Host 命名空间内嵌编辑器：按 schema 列出可编辑路径（支持嵌套对象、动态 record、数组 item、JSON 值），可搜索、类型化编辑、append/remove 数组项、reset 到继承值；secret 字段只显示不可编辑，含 secret 的对象不允许整体 JSON 覆盖；每次写入使用路径操作，避免重述并删除被 redact 的 secret。`/settings items` 打开对应命名空间编辑器作为兼容入口，`/settings set` 保留 JSON merge 写入。
 
 默认模型来自 Host 的 ctx.agentDefaultModel（Base 默认 deepseek-official/deepseek-flash）。没有凭据时首个请求会显示 MISSING_CREDENTIAL。
 

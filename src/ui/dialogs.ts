@@ -36,7 +36,7 @@ function localeText(value: { readonly en: string; readonly [locale: string]: str
 }
 
 /** Render a full-width, opaque dialog surface so the transcript cannot bleed through. */
-function dialogFrame(lines: readonly string[], width: number, palette: Palette): string[] {
+export function dialogFrame(lines: readonly string[], width: number, palette: Palette): string[] {
   const outer = Math.max(20, width)
   const inner = Math.max(1, outer - 4)
   const content = lines.map((line) => {

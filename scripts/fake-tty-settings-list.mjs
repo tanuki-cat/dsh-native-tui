@@ -13,7 +13,7 @@ const tick = setInterval(() => {
   if (!sent && text.includes('enter send')) {
     sent = true
     try { child.stdin.write('/settings\r') } catch {}
-  } else if (sent && text.includes('Settings namespaces')) {
+  } else if (sent && text.includes('TUI settings')) {
     setTimeout(() => { try { child.stdin.write('\x04') } catch {} }, 500)
   }
 }, 300)

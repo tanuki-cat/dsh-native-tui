@@ -11,8 +11,16 @@ let phase = 0
 const tick = setInterval(() => {
   const text = out.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
   if (phase === 0 && text.includes('enter send')) { phase = 1; try { child.stdin.write('/settings items llm-deepseek models\r') } catch {} }
-  else if (phase === 1 && text.includes('Array · llm-deepseek.models')) {
+  else if (phase === 1 && text.includes('Settings · llm-deepseek')) {
     phase = 2
+    try { child.stdin.write('models') } catch {}
+  }
+  else if (phase === 2 && text.includes('search: models')) {
+    phase = 3
+    try { child.stdin.write('\r') } catch {}
+  }
+  else if (phase === 3 && text.includes('Host settings · models')) {
+    phase = 4
     setTimeout(() => { try { child.stdin.write('\x1b') } catch {} }, 700)
     setTimeout(() => { try { child.stdin.write('\x04') } catch {} }, 1400)
   }

@@ -15,9 +15,12 @@ const tick = setInterval(() => {
     try { child.stdin.write('/settings edit llm-pi-ai\r') } catch {}
   } else if (phase === 1 && text.includes('Settings · llm-pi-ai')) {
     phase = 2
-    try { child.stdin.write('\r') } catch {}
-  } else if (phase === 2 && (text.includes('Settings · llm-pi-ai.providers') || text.includes('Set llm-pi-ai.providers'))) {
+    try { child.stdin.write('providers') } catch {}
+  } else if (phase === 2 && text.includes('search: providers')) {
     phase = 3
+    try { child.stdin.write('\r') } catch {}
+  } else if (phase === 3 && text.includes('Host settings · providers')) {
+    phase = 4
     setTimeout(() => { try { child.stdin.write('\x1b') } catch {} }, 400)
     setTimeout(() => { try { child.stdin.write('\x04') } catch {} }, 1000)
   }

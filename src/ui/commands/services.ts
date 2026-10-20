@@ -59,6 +59,10 @@ export interface SettingsService {
     user?: unknown
     schema: unknown
     revision: number
+    /** Whether the Host may generate a generic page for this namespace. */
+    autoGenerate: boolean
+    /** When the owner applies the edit; live is the only value the Host reports. */
+    applies: 'live'
     secrets?: readonly { path: readonly string[]; set: boolean }[]
   }[]
   update(ns: string, patch: object, expectedRevision?: number): Promise<void>
@@ -222,7 +226,7 @@ export interface CredentialsService {
 
 /** The agent-preset registry. */
 export interface AgentPresetsService {
-  list(): Promise<readonly { readonly id: string; readonly title?: string; readonly description?: string }[]>
+  list(): Promise<readonly { readonly id: string; readonly name?: string; readonly description?: string }[]>
   composedPreset(ctx: unknown): string | undefined
   select(agent: unknown, id: string): Promise<string>
   readonly defaultId?: string

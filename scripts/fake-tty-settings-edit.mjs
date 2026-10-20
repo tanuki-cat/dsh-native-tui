@@ -13,14 +13,20 @@ const tick = setInterval(() => {
   if (phase === 0 && text.includes('enter send')) {
     phase = 1
     try { child.stdin.write('/settings edit agent-loop\r') } catch {}
-  } else if (phase === 1 && text.includes('maxParallelToolCalls')) {
+  } else if (phase === 1 && text.includes('Settings · agent-loop')) {
     phase = 2
-    try { child.stdin.write('\r') } catch {}
-  } else if (phase === 2 && text.includes('Set agent-loop.maxParallelToolCalls')) {
+    try { child.stdin.write('maxParallelToolCalls') } catch {}
+  } else if (phase === 2 && text.includes('search: maxParallelToolCalls')) {
     phase = 3
-    try { child.stdin.write('\x159\r') } catch {}
-  } else if (phase === 3 && text.includes('Updated agent-loop.maxParallelToolCalls')) {
+    try { child.stdin.write('\r') } catch {}
+  } else if (phase === 3 && text.includes('Host settings · maxParallelToolCalls')) {
     phase = 4
+    try { child.stdin.write('\r') } catch {}
+  } else if (phase === 4 && text.includes('Set agent-loop.maxParallelToolCalls')) {
+    phase = 5
+    setTimeout(() => { try { child.stdin.write('\x159\r') } catch {} }, 250)
+  } else if (phase === 5 && text.includes('Updated agent-loop.maxParallelToolCalls')) {
+    phase = 6
     try { child.stdin.write('\x04') } catch {}
   }
 }, 250)

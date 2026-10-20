@@ -20,7 +20,7 @@ export const HELP_LINES: readonly string[] = [
   '/plugins [list|market [q]|inspect <spec>|install <spec>|remove <bundle>|enable <id>|disable <id>] · /exit',
   '/workspaces [new|use|pin|unpin|archive|unarchive] · /schedule [add|delete]',
   '/schedule [add <seconds> <title>|delete <id>] · /plugins · /exit',
-  '/settings [tui|host|edit <ns>|items <ns> <field>|set <ns> <json>] · /export [path|zip|html] · /open <path> · /preview <image>',
+  '/settings [tui|host|edit [ns]|items <ns> <field>|set <ns> <json>] · /export [path|zip|html] · /open <path> · /preview <image>',
   '/files [path] · /changes [diff <index>] · /deliverables [panel|open|reveal <index>]',
   '/tools · /tool <index> · /diff [index] · /exit',
   '/attach <path>|paste|preview <i>|list|clear · /attachments · /exit',
@@ -67,11 +67,11 @@ export const LOCAL_COMMANDS: readonly CommandSuggestion[] = [
     { name: 'enable', description: 'enable one entry', hint: '<entryId>' },
     { name: 'disable', description: 'disable one entry', hint: '<entryId>' },
   ] },
-  { name: 'settings', description: 'TUI base settings wizard, or advanced host settings', input: { hint: '[tui|host|edit <ns>|items <ns> <field>|set <ns> <json>]' }, subcommands: [
-    { name: 'tui', description: 'open the base TUI settings wizard' },
-    { name: 'host', description: 'list advanced host settings namespaces' },
-    { name: 'edit', description: 'edit a settings namespace', hint: '<ns>' },
-    { name: 'items', description: 'edit an array item', hint: '<ns> <field>' },
+  { name: 'settings', description: 'guided terminal settings, inline Host editor, or scripted writes', input: { hint: '[tui|host|edit [ns]|items <ns> <field>|set <ns> <json>]' }, subcommands: [
+    { name: 'tui', description: 'open the guided terminal settings page' },
+    { name: 'host', description: 'open the inline Host namespace editor' },
+    { name: 'edit', description: 'open the inline editor for one namespace', hint: '[ns]' },
+    { name: 'items', description: 'open a namespace to manage array items', hint: '<ns> <field>' },
     { name: 'set', description: 'merge JSON into a namespace', hint: '<ns> <json>' },
   ] },
   { name: 'mcp', description: 'configure MCP servers', input: { hint: '[add|list|remove <name>]' }, subcommands: [

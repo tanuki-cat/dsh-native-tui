@@ -163,3 +163,60 @@ describe('command handler argument paths', () => {
     expect(allText(ctx)).toContain('Usage: /jobs kill <job-id>')
   })
 })
+
+describe('settings command routing', () => {
+  const descriptor = {
+    ns: 'mcp-manager',
+    value: { servers: {} },
+    schema: { type: 'object', dict: { servers: { type: 'object' } } },
+    revision: 3,
+    applies: 'live' as const,
+    autoGenerate: true,
+    secrets: [],
+  }
+
+  it('rejects an unknown edit namespace without opening the editor', async () => {
+    const ctx = contextOf({ settings: { describe: () => [descriptor], update: async () => undefined, mutate: async () => undefined } })
+    await settingsCommand(ctx, 'edit ghost')
+    expect(allText(ctx)).toContain('No active settings namespace "ghost".')
+  })
+
+  it('prints the /settings items usage when the field is missing', async () => {
+    const ctx = contextOf({ settings: { describe: () => [descriptor], update: async () => undefined, mutate: async () => undefined } })
+    await settingsCommand(ctx, 'items mcp-manager')
+    expect(allText(ctx)).toContain('Usage: /settings items <namespace> <array-field>')
+  })
+
+  it('refuses an undeclared array field', async () => {
+    const ctx = contextOf({ settings: { describe: () => [descriptor], update: async () => undefined, mutate: async () => undefined } })
+    await settingsCommand(ctx, 'items mcp-manager missing')
+    expect(allText(ctx)).toContain('is not declared')
+  })
+
+  it('applies a scripted settings patch through update with its revision', async () => {
+    const calls: { ns: string; patch: object; revision?: number }[] = []
+    const ctx = contextOf({
+      settings: {
+        describe: () => [descriptor],
+        update: async (ns: string, patch: object, revision?: number) => { calls.push({ ns, patch, revision }) },
+        mutate: async () => undefined,
+      },
+    })
+    await settingsCommand(ctx, 'set mcp-manager {"servers":{"demo":{}}}')
+    expect(calls).toEqual([{ ns: 'mcp-manager', patch: { servers: { demo: {} } }, revision: 3 }])
+    expect(allText(ctx)).toContain('Settings updated: mcp-manager')
+  })
+
+  it('summarizes namespaces for /settings list', async () => {
+    const ctx = contextOf({ settings: { describe: () => [descriptor], update: async () => undefined, mutate: async () => undefined } })
+    await settingsCommand(ctx, 'list')
+    expect(allText(ctx)).toContain('Host settings namespaces:')
+    expect(allText(ctx)).toContain('mcp-manager')
+  })
+
+  it('prints usage for an unknown subcommand', async () => {
+    const ctx = contextOf({ settings: { describe: () => [descriptor], update: async () => undefined, mutate: async () => undefined } })
+    await settingsCommand(ctx, 'nonsense')
+    expect(allText(ctx)).toContain('Usage: /settings')
+  })
+})
