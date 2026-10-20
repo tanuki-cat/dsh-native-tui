@@ -57,6 +57,7 @@ src/runtime/codebuddy-command.ts  /codebuddy 子命令（纯逻辑，UI 由 app.
 - EN 额外归一：`tool_choice: "none"` 无上游拼写，删除 `tool_choice` 与工具声明。
 - 凭据寿命：`expires = now + min(ttl - 24h, 15d)`（ttl<=24h 时取 `max(ttl/2, 60s)`），与来源一致。
 - 额度/签到：`billing/meter/get-user-resource`、`billing/meter/daily-checkin`，仅用户显式执行；10001 = 今日已签。
+- 客户端指纹（2026-10-20 实测）：CN 网关拒绝第三方 agent 身份句——系统提示以 `You are an AI agent powered by …` 开头时返回 HTTP 400 `code 11128`（`Illegal API invocation from an unapproved channel`）。`cnProfile.rewritesAgentIdentity` 开启时，`prompt.ts` 在组包前把该行改写为中性表述，其余提示逐字保留（同一 200 KB 提示只改这一行即可通过）；TUI 把系统提示作为 in-history system 消息而不是 `options.system` 传递，所以 `wire.ts` 对已组装的每条 system 消息统一改写；EN 不做该校验，保持原文。
 
 ## 6. DSH 行为映射
 

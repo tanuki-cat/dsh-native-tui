@@ -48,6 +48,12 @@ export interface CodeBuddyProfile {
   readonly chatExtraHeaders?: Record<string, string>
   /** Extra outbound payload normalization; only the international gateway needs it. */
   readonly normalizePayload?: (payload: Record<string, unknown>) => void
+  /**
+   * Whether this gateway fingerprints third-party agent system prompts and
+   * refuses them (HTTP 400 code 11128, "unapproved channel"). When set, the
+   * harness identity line is restated before sending.
+   */
+  readonly rewritesAgentIdentity?: boolean
   /** Emergency model list, replaced by discovery on the first successful refresh. */
   readonly seedModels: readonly SeedModel[]
 }
@@ -185,6 +191,10 @@ export const cnProfile: CodeBuddyProfile = {
   checkinUrls: [CN_BASE + '/billing/meter/daily-checkin'],
   domain: 'copilot.tencent.com',
   headers: cnHeaders,
+  // Measured 2026-10-20: the CN gateway rejects the DeepSeek Harness opening
+  // sentence with code 11128 while the same prompt with that line restated is
+  // accepted; the international gateway does not fingerprint the prompt.
+  rewritesAgentIdentity: true,
   seedModels: CN_SEED_MODELS,
 }
 

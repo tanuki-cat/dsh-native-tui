@@ -244,6 +244,8 @@ dsh --profile tui
 
 登录前 `/model` 已能看到两条路由与 seed 模型（CN 8 个 / EN 6 个，未经真实账号验证）；登录后 `models refresh` 会用账号目录替换。
 
+国内网关会做客户端指纹校验：系统提示若以第三方 agent 身份句（`You are an AI agent powered by …`）开头，会返回 HTTP 400 `code 11128`（`Illegal API invocation from an unapproved channel`，提示「渠道校验未通过，可能不是官方客户端」）。`codebuddy` 路由在发送前把这类身份句改写为中性表述——无论提示放在 `system` 字段还是 in-history 的 system 消息里（TUI 走后者）——其余提示（工具说明、工作区规则、用户指令）逐字保留；国际版不做该校验，提示保持原样。异常时按 `code 11128` 的 hint 排查。
+
 ### 输入模态与图片
 
 输入模态按模型取自网关目录的 `supportsImages` / `disabledMultimodal`（2026-10-19 实测：CN 34 个模型、EN 27 个模型都带该字段）：

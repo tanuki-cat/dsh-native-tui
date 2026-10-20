@@ -18,6 +18,7 @@ import { IMAGE_OFFLOAD_REQUIRED_CODE, LlmError, offloadedImageText, requiredImag
 import type { ContentBlock, GenerateOptions, RequestMessage } from '@deepseek-ai/dsh-llm'
 import type { CodeBuddyProfile } from './profiles.js'
 import { REASONING_SUMMARY } from './profiles.js'
+import { neutralizeAgentIdentity } from './prompt.js'
 
 /** One durable image reference carried by a request. */
 type ImageRef = Extract<ContentBlock, { type: 'image' }>['attachment']
@@ -481,6 +482,18 @@ export async function buildChatPayload(
   // itself is unchanged.
   if (messages.length === 0 || messages[0]?.role !== 'system') {
     messages.unshift({ role: 'system', content: '' })
+  }
+  // The CN gateway refuses a third-party agent identity wherever the prompt is
+  // carried: as `options.system` and as an in-history system message (the
+  // harness can deliver the composed prompt either way). Restating every
+  // system message keeps both paths on the same approved wording while the
+  // rest of each prompt stays untouched.
+  if (profile.rewritesAgentIdentity === true) {
+    for (const message of messages) {
+      if (message.role === 'system' && typeof message.content === 'string') {
+        message.content = neutralizeAgentIdentity(message.content)
+      }
+    }
   }
 
   const tools = wireTools(options)

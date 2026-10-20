@@ -62,6 +62,51 @@ describe('codebuddy profiles', () => {
     expect(withSystemMessages).toHaveLength(2)
   })
 
+  it('restates the harness identity on the CN route only', async () => {
+    const options = {
+      provider: 'codebuddy',
+      model: 'deepseek-v4.1-flash',
+      system: 'You are an AI agent powered by DeepSeek Harness.\n\nWorkspace rules.',
+      messages: [{ role: 'user' as const, content: [{ type: 'text' as const, text: 'Say OK' }] }],
+    }
+    const cn = await buildChatPayload(options, cnProfile)
+    expect((cn.messages as { role: string; content: unknown }[])[0]).toEqual({
+      role: 'system',
+      content: 'You are a software engineering assistant.\n\nWorkspace rules.',
+    })
+    const en = await buildChatPayload(options, enProfile)
+    expect((en.messages as { role: string; content: unknown }[])[0]).toEqual({
+      role: 'system',
+      content: options.system,
+    })
+
+    // The harness may deliver the composed prompt as an in-history system
+    // message instead of `system`; that path must be restated too.
+    const inHistory = {
+      provider: 'codebuddy',
+      model: 'deepseek-v4.1-flash',
+      messages: [
+        {
+          role: 'system',
+          content: [{ type: 'text', text: 'You are an AI agent powered by DeepSeek Harness.\n\nWorkspace rules.' }],
+          source: { kind: 'system-prompt' },
+          id: 's',
+        },
+        { role: 'user', content: [{ type: 'text', text: 'Say OK' }], source: { kind: 'user' }, id: 'u' },
+      ],
+    } as unknown as Parameters<typeof buildChatPayload>[0]
+    const cnHistory = await buildChatPayload(inHistory, cnProfile)
+    expect((cnHistory.messages as { role: string; content: unknown }[])[0]).toEqual({
+      role: 'system',
+      content: 'You are a software engineering assistant.\n\nWorkspace rules.',
+    })
+    const enHistory = await buildChatPayload(inHistory, enProfile)
+    expect((enHistory.messages as { role: string; content: unknown }[])[0]).toEqual({
+      role: 'system',
+      content: 'You are an AI agent powered by DeepSeek Harness.\n\nWorkspace rules.',
+    })
+  })
+
   it('expresses tool_choice none by dropping the declarations', () => {
     const body: Record<string, unknown> = { tool_choice: 'none', tools: [1], functions: [2] }
     normalizeEnPayload(body)
