@@ -39,10 +39,15 @@ const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme
 
 /** Process-local progress of one completed-reasoning reveal. */
 export interface RevealProgress {
-  /** Wall clock at the first reveal render. */
+  /** Wall clock of the first frame of the burst being revealed. */
   start: number
   /** Graphemes already shown. */
   visible: number
+  /**
+   * Characters per frame for the answer burst being revealed. Absent once the
+   * burst is drained, so the next chunk is planned on its own.
+   */
+  step?: number
 }
 
 /** Process-local grapheme cache for one reasoning text. */
@@ -136,21 +141,21 @@ export const REASONING_LIVE_PROGRESS_PREFIX = 'reasoning-live:'
  */
 export const STREAM_TEXT_MAX_BACKLOG = 600
 
-/** Baseline answer reveal rate, in characters per millisecond. */
-export const STREAM_TEXT_CHARS_PER_MS = 1.2
+/**
+ * Frames one burst is spread over. The step is planned once per burst instead
+ * of taking a share of what is left every frame: a share shrinks with the
+ * backlog and ends in a long tail of one-character frames.
+ */
+export const STREAM_TEXT_REVEAL_FRAMES = 6
+
+/** Largest advance of one reveal frame, in characters. */
+export const STREAM_TEXT_MAX_STEP = 24
 
 /**
- * Share of the remaining backlog one frame may consume as catch-up. Kept well
- * below a full line: a first frame that eats a large share of a 200-character
- * burst paints a line-shaped block instead of a smooth prefix.
+ * Backlog small enough to paint with its chunk. A provider delta of this size
+ * is already the model's own granularity; splitting it would only add latency.
  */
-export const STREAM_TEXT_CATCH_UP_RATIO = 0.15
-
-/** Hard cap for the very first reveal frame, in characters. */
-export const STREAM_TEXT_FIRST_FRAME_MAX = 24
-
-/** Wall-clock window in which the first frame still counts as an initial paint. */
-export const STREAM_TEXT_FIRST_FRAME_MS = 100
+export const STREAM_TEXT_INSTANT_BACKLOG = 12
 
 /** Whether one UTF-16 unit opens a surrogate pair. */
 function isHighSurrogate(code: number): boolean {
@@ -162,13 +167,17 @@ function isHighSurrogate(code: number): boolean {
  * chunk at once.
  *
  * Providers hand text over in bursts: one event can carry a whole sentence, so
- * painting each batch makes the answer appear in jumps. The reveal advances by
- * wall clock — so a slow frame catches up instead of stretching the animation —
- * and takes a share of the backlog each frame, which drains a burst within a
- * few frames while never lagging far behind the model.
+ * painting each batch makes the answer appear in jumps. A burst is planned once
+ * and then revealed at a constant step, so the reader sees a flow instead of a
+ * block.
+ *
+ * The step is a frame budget, not elapsed wall clock. Pacing by wall clock makes
+ * the size of a paint depend on how long the previous frame happened to take,
+ * and — because a chunk usually arrives after an idle gap — paints the whole
+ * chunk at once. That is the block-shaped jump this exists to avoid.
  * @param text - all answer text received for the step so far.
  * @param progress - reveal state for this step; advanced in place.
- * @param now - current wall clock.
+ * @param now - current wall clock, used for diagnostics and the burst clock.
  * @returns the prefix to render and whether more text is still waiting.
  */
 export function revealStreamText(
@@ -179,6 +188,8 @@ export function revealStreamText(
   const total = text.length
   if (total === 0) return { text, pending: false }
   if (progress.visible >= total) {
+    progress.visible = total
+    progress.step = undefined
     progress.start = now
     return { text, pending: false }
   }
@@ -186,18 +197,31 @@ export function revealStreamText(
   // A whole-block settlement is not a stream: show it, do not animate it.
   if (backlog > STREAM_TEXT_MAX_BACKLOG) {
     progress.visible = total
+    progress.step = undefined
     progress.start = now
     return { text, pending: false }
   }
-  const elapsed = Math.max(0, now - progress.start)
-  const paced = Math.floor(elapsed * STREAM_TEXT_CHARS_PER_MS)
-  const catchUp = Math.ceil(backlog * STREAM_TEXT_CATCH_UP_RATIO)
-  let advance = Math.min(backlog, Math.max(1, paced, catchUp))
-  // A delayed first frame (for example, one that starts 500ms late) still
-  // catches up by wall clock; only an immediate first paint is capped.
-  if (progress.visible === 0 && elapsed < STREAM_TEXT_FIRST_FRAME_MS) {
-    advance = Math.min(advance, STREAM_TEXT_FIRST_FRAME_MAX)
+  // A token-sized delta is already the provider's own granularity.
+  if (progress.step === undefined && backlog <= STREAM_TEXT_INSTANT_BACKLOG) {
+    progress.visible = total
+    progress.start = now
+    return { text, pending: false }
   }
+  if (progress.step === undefined) {
+    progress.step = Math.max(1, Math.min(STREAM_TEXT_MAX_STEP, Math.ceil(backlog / STREAM_TEXT_REVEAL_FRAMES)))
+    // A new burst starts its own clock: the idle gap before it says nothing
+    // about how fast this burst should be revealed.
+    progress.start = now
+  }
+  else if (backlog > progress.step * STREAM_TEXT_REVEAL_FRAMES * 2) {
+    // The burst outgrew the plan by more than a whole plan, so the model is
+    // faster than the current step; widen it. Nothing here is paced by wall
+    // clock: a slow terminal must not turn one frame into a block-shaped jump.
+    progress.step = Math.max(1, Math.min(STREAM_TEXT_MAX_STEP, Math.ceil(backlog / STREAM_TEXT_REVEAL_FRAMES)))
+  }
+  const elapsed = Math.max(0, now - progress.start)
+  const step = progress.step ?? 1
+  const advance = Math.min(backlog, step)
   let next = progress.visible + advance
   // Never cut a surrogate pair: a lone half renders as a replacement glyph.
   if (next < total && isHighSurrogate(text.charCodeAt(next - 1))) next += 1
@@ -209,7 +233,8 @@ export function revealStreamText(
   progress.visible = next
   progress.start = now
   const pending = next < total
-  debug(`reveal text: backlog=${String(backlog)} advance=${String(advance)} visible=${String(next)}/${String(total)} elapsed=${String(Math.round(elapsed))}ms pending=${String(pending)}`)
+  if (!pending) progress.step = undefined
+  debug(`reveal text: backlog=${String(backlog)} advance=${String(advance)} step=${String(progress.step ?? 0)} visible=${String(next)}/${String(total)} elapsed=${String(Math.round(elapsed))}ms pending=${String(pending)}`)
   return pending ? { text: text.slice(0, next), pending: true } : { text, pending: false }
 }
 

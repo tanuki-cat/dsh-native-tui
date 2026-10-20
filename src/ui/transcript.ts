@@ -996,14 +996,9 @@ export function reduceTranscriptWindow(
       }
     }
   }
-  // A finalized live row whose text is fully revealed still needs one more
-  // frame: that frame replaces it with the durable assistant block.
-  const finalTextWaiting = [...liveByStep].some(([key, live]) =>
-    finalizedSteps.has(key) && live.textFinal && live.text !== '')
   const revealPending = durableRevealPending
     || textRevealPending
     || reasoningLivePending
-    || finalTextWaiting
     || [...liveByStep.values()].some(live => live.revealing)
   const visible: TranscriptBlock[] = []
   const visibleSources: number[] = []

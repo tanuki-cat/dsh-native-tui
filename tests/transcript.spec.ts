@@ -1253,7 +1253,8 @@ describe('revealStreamText', () => {
     const text = 'x'.repeat(200)
     const state = progress()
     let shown = 0
-    for (let frame = 0; frame < 8; frame += 1) {
+    // 200 characters at the 24-character frame cap need nine frames.
+    for (let frame = 0; frame < 10; frame += 1) {
       const reveal = advance(text, state, frame * 33)
       shown = reveal.text.length
       if (!reveal.pending) break
@@ -1261,12 +1262,26 @@ describe('revealStreamText', () => {
     expect(shown).toBe(200)
   })
 
-  it('catches up by wall clock when frames are slow', () => {
+  it('spreads a burst that follows an idle gap instead of painting it at once', () => {
     const text = 'x'.repeat(200)
     const state = progress()
+    // The previous chunk drained long ago. The gap must not count as reveal
+    // time, or every chunk of a slow provider would snap in whole.
     const reveal = advance(text, state, 500)
-    expect(reveal.pending).toBe(false)
-    expect(reveal.text).toBe(text)
+    expect(reveal.pending).toBe(true)
+    expect(reveal.text.length).toBeLessThan(text.length)
+  })
+
+  it('never turns a late frame into a jump', () => {
+    const text = 'x'.repeat(200)
+    const state = progress()
+    advance(text, state, 0)
+    advance(text, state, 33)
+    // How long the previous frame took must not change the frame's step; that
+    // wall-clock pacing is what painted whole chunks at once.
+    const late = advance(text, state, 500)
+    expect(late.pending).toBe(true)
+    expect(late.text.length).toBe(72)
   })
 
   it('shows a whole-block settlement at once', () => {
@@ -1280,29 +1295,34 @@ describe('revealStreamText', () => {
   it('keeps a settled block visible and resumes after it', () => {
     const revealProgress = new Map()
     const options = { ...optionsBase, revealProgress } as never
+    const first = 'a'.repeat(60)
     const entries: TranscriptEntry[] = [
-      liveChunk(1, 1, 1, { type: 'text-delta', index: 0, text: 'abc' }),
-      liveChunk(2, 1, 1, { type: 'block-end', index: 0, block: { type: 'text', text: 'abc' } }),
+      liveChunk(1, 1, 1, { type: 'text-delta', index: 0, text: first }),
+      liveChunk(2, 1, 1, { type: 'block-end', index: 0, block: { type: 'text', text: first } }),
     ]
     const settled = reduceTranscriptWindow(entries, options, 1_000)
     const settledBlock = settled.blocks.at(-1)
     expect(settledBlock?.kind).toBe('assistant')
     // The block-end keeps revealing instead of snapping the settled text in.
-    expect(settledBlock?.kind === 'assistant' ? settledBlock.text : '').toBe('a')
+    expect(settledBlock?.kind === 'assistant' ? settledBlock.text.length : 0).toBeGreaterThan(0)
+    expect(settledBlock?.kind === 'assistant' ? settledBlock.text.length : 0).toBeLessThan(first.length)
     expect(settled.revealPending).toBe(true)
 
-    const revealed = reduceTranscriptWindow(entries, options, 1_100)
+    let revealed = settled
+    for (let frame = 1; frame <= 8 && revealed.revealPending; frame += 1) {
+      revealed = reduceTranscriptWindow(entries, options, 1_000 + frame * 33)
+    }
     const revealedBlock = revealed.blocks.at(-1)
-    expect(revealedBlock?.kind === 'assistant' ? revealedBlock.text : '').toBe('abc')
+    expect(revealedBlock?.kind === 'assistant' ? revealedBlock.text : '').toBe(first)
 
-    entries.push(liveChunk(3, 1, 1, { type: 'text-delta', index: 1, text: 'def' }, 1_110))
-    const resumed = reduceTranscriptWindow(entries, options, 1_120)
+    entries.push(liveChunk(3, 1, 1, { type: 'text-delta', index: 1, text: 'def' }, 1_210))
+    const resumed = reduceTranscriptWindow(entries, options, 1_220)
     const resumedBlock = resumed.blocks.at(-1)
     const text = resumedBlock?.kind === 'assistant' ? resumedBlock.text : ''
     // A later block in the same step resumes from the settled text instead of
     // re-revealing it from the first character.
-    expect(text.startsWith('abc')).toBe(true)
-    expect(text.length).toBeGreaterThan(3)
+    expect(text.startsWith(first)).toBe(true)
+    expect(text.length).toBeGreaterThan(first.length)
   })
 
   it('reveals a settled text block over frames instead of snapping it', () => {
@@ -1319,7 +1339,11 @@ describe('revealStreamText', () => {
     expect(firstBlock?.kind === 'assistant' ? firstBlock.text.length : 0).toBeLessThan(text.length)
     expect(first.revealPending).toBe(true)
 
-    const done = reduceTranscriptWindow(entries, options, 1_500)
+    // 200 characters at the 24-character frame cap need nine frames.
+    let done = first
+    for (let frame = 1; frame <= 10 && done.revealPending; frame += 1) {
+      done = reduceTranscriptWindow(entries, options, 1_000 + frame * 33)
+    }
     const doneBlock = done.blocks.at(-1)
     expect(doneBlock?.kind === 'assistant' ? doneBlock.text : '').toBe(text)
     expect(done.revealPending).toBe(false)
@@ -1345,13 +1369,17 @@ describe('revealStreamText', () => {
     expect(firstBlock?.kind === 'assistant' ? firstBlock.text.length : 0).toBeLessThan(text.length)
     expect(first.revealPending).toBe(true)
 
-    const revealed = reduceTranscriptWindow(entries, options, 1_500)
+    let revealed = first
+    for (let frame = 1; frame <= 10 && revealed.revealPending; frame += 1) {
+      revealed = reduceTranscriptWindow(entries, options, 1_000 + frame * 33)
+    }
     const revealedBlock = revealed.blocks.at(-1)
     expect(revealedBlock?.kind === 'assistant' ? revealedBlock.text : '').toBe(text)
-    // One more frame is still needed to replace the transient row.
-    expect(revealed.revealPending).toBe(true)
+    // The frame that paints the last character clears the pending flag, so the
+    // stream loop can settle instead of holding a frame open forever.
+    expect(revealed.revealPending).toBe(false)
 
-    const final = reduceTranscriptWindow(entries, options, 1_510)
+    const final = reduceTranscriptWindow(entries, options, 1_400)
     const finalBlock = final.blocks.at(-1)
     expect(finalBlock?.kind).toBe('assistant')
     expect(finalBlock?.kind === 'assistant' ? finalBlock.text : '').toBe(text)
@@ -1378,12 +1406,15 @@ describe('revealStreamText', () => {
     expect(firstBlock?.kind === 'assistant' ? firstBlock.text.length : 0).toBeLessThan(text.length)
     expect(first.revealPending).toBe(true)
 
-    const revealed = reduceTranscriptWindow(entries, options, 1_500)
+    let revealed = first
+    for (let frame = 1; frame <= 10 && revealed.revealPending; frame += 1) {
+      revealed = reduceTranscriptWindow(entries, options, 1_000 + frame * 33)
+    }
     const revealedBlock = revealed.blocks.at(-1)
     expect(revealedBlock?.kind === 'assistant' ? revealedBlock.text : '').toBe(text)
-    expect(revealed.revealPending).toBe(true)
+    expect(revealed.revealPending).toBe(false)
 
-    const final = reduceTranscriptWindow(entries, options, 1_510)
+    const final = reduceTranscriptWindow(entries, options, 1_400)
     const finalBlock = final.blocks.at(-1)
     expect(finalBlock?.kind === 'assistant' ? finalBlock.text : '').toBe(text)
     expect(final.revealPending).toBe(false)
@@ -1403,7 +1434,10 @@ describe('revealStreamText', () => {
     expect(firstBlock?.kind === 'assistant' ? firstBlock.reasoning?.length ?? 0 : 0).toBeLessThan(reasoning.length)
     expect(first.revealPending).toBe(true)
 
-    const done = reduceTranscriptWindow(entries, options, 1_500)
+    let done = first
+    for (let frame = 1; frame <= 10 && done.revealPending; frame += 1) {
+      done = reduceTranscriptWindow(entries, options, 1_000 + frame * 33)
+    }
     const doneBlock = done.blocks.at(-1)
     expect(doneBlock?.kind === 'assistant' ? doneBlock.reasoning : '').toBe(reasoning)
     expect(done.revealPending).toBe(false)
@@ -1417,26 +1451,41 @@ describe('revealStreamText', () => {
     expect([...reveal.text].every(character => character === '😀')).toBe(true)
   })
 
-  it('keeps an emoji pair whole after a capped first frame', () => {
+  it('keeps an emoji pair whole on a small reveal', () => {
     const state = progress()
-    expect(advance('a😀', state, 0)).toEqual({ text: 'a', pending: true })
-    expect(advance('a😀', state, 33)).toEqual({ text: 'a😀', pending: false })
+    // A delta below the instant threshold paints at once, pair included.
+    expect(advance('a😀', state, 0)).toEqual({ text: 'a😀', pending: false })
+  })
+
+  it('never cuts an emoji pair out of a long burst', () => {
+    const state = progress()
+    const text = 'a'.repeat(20) + '😀'
+    let shown = ''
+    for (let frame = 0; frame < 10; frame += 1) {
+      const reveal = advance(text, state, frame * 33)
+      expect(isWellFormed(reveal.text)).toBe(true)
+      shown = reveal.text
+      if (!reveal.pending) break
+    }
+    expect(shown).toBe(text)
   })
 
   it('holds a pair cut by the chunk boundary until the rest arrives', () => {
-    const state = progress()
-    // The provider closed a chunk after the high half: paint the ASCII text and
-    // wait for the low half instead of rendering a replacement glyph.
-    expect(advance('ab\uD83D', state, 100)).toEqual({ text: 'ab', pending: true })
-    expect(advance('ab😀', state, 116)).toEqual({ text: 'ab😀', pending: false })
+    // Mid-burst: this step reveals the high half at the end of the chunk.
+    const state = { visible: 16, start: 100, step: 4 }
+    const cut = 'a'.repeat(19) + '\uD83D'
+    expect(advance(cut, state, 100)).toEqual({ text: 'a'.repeat(19), pending: true })
+    expect(advance(cut + '\uDE00', state, 116)).toEqual({ text: 'a'.repeat(19) + '😀', pending: false })
   })
 
   it('stops holding a pair the stream never completes', () => {
-    const state = progress()
-    // A lone high surrogate cannot pair, so the reveal must settle rather than
-    // repaint the same prefix forever.
-    expect(advance('ab\uD83D', state, 100)).toEqual({ text: 'ab', pending: true })
-    expect(advance('ab\uD83D', state, 200)).toEqual({ text: 'ab\uD83D', pending: false })
+    const state = { visible: 16, start: 100, step: 4 }
+    const cut = 'a'.repeat(19) + '\uD83D'
+    expect(advance(cut, state, 100)).toEqual({ text: 'a'.repeat(19), pending: true })
+    // A lone high surrogate cannot pair, so the reveal settles rather than
+    // repainting the same prefix forever.
+    expect(advance(cut, state, 133)).toEqual({ text: cut, pending: false })
+    expect(advance(cut, state, 166)).toEqual({ text: cut, pending: false })
   })
 })
 
@@ -1544,14 +1593,15 @@ describe('TranscriptRenderer component reuse', () => {
 
   it('reports the trailing live block size for frame pacing', () => {
     const renderer = new TranscriptRenderer(options)
-    const entries = [liveChunk(1, 1, 1, { type: 'text-delta', text: 'hello' })]
+    const text = 'hello there, this is a live answer'
+    const entries = [liveChunk(1, 1, 1, { type: 'text-delta', text })]
     // Text is revealed over frames, so the first frame paints a prefix; the
     // size reported for pacing is what that frame will actually render.
     renderer.set(entries, [])
     expect(renderer.liveContentLength).toBeGreaterThan(0)
-    expect(renderer.liveContentLength).toBeLessThan(5)
-    for (let frame = 0; frame < 6; frame += 1) renderer.set(entries, [])
-    expect(renderer.liveContentLength).toBe(5)
+    expect(renderer.liveContentLength).toBeLessThan(text.length)
+    for (let frame = 0; frame < 8; frame += 1) renderer.set(entries, [])
+    expect(renderer.liveContentLength).toBe(text.length)
     renderer.set([durable('assistant/message', { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'final' }] } }, 2)], [])
     expect(renderer.liveContentLength).toBe(0)
   })

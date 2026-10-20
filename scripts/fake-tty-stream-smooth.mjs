@@ -95,10 +95,14 @@ child.on('exit', (code, signal) => {
   const clean = strip(out)
   const chunkLog = err.includes('stream chunk: text-delta 212 chars')
   const revealLines = err.split(String.fromCharCode(10)).filter(line => line.includes('reveal text:'))
-  const firstAdvance = Number(revealLines[0]?.match(/advance=(\d+)/)?.[1] ?? NaN)
+  const advances = revealLines.map(line => Number(line.match(/advance=(\d+)/)?.[1] ?? NaN))
+  const firstAdvance = advances[0]
+  // A 212-character chunk must be spread over several bounded frames, not one
+  // block-shaped paint.
+  const maxAdvance = advances.length === 0 ? NaN : Math.max(...advances)
   const finalVisible = clean.includes('smooth-') && clean.includes('-done')
-  const pass = code === 0 && chunkLog && finalVisible && revealLines.length > 1 && firstAdvance <= 24
-  console.log('EXIT', code, signal, 'sent', sent, 'chunkLog', chunkLog, 'revealLines', revealLines.length, 'firstAdvance', firstAdvance, 'finalVisible', finalVisible, 'pass', pass)
+  const pass = code === 0 && chunkLog && finalVisible && advances.length >= 6 && firstAdvance <= 24 && maxAdvance <= 24
+  console.log('EXIT', code, signal, 'sent', sent, 'chunkLog', chunkLog, 'revealLines', revealLines.length, 'firstAdvance', firstAdvance, 'maxAdvance', maxAdvance, 'finalVisible', finalVisible, 'pass', pass)
   console.log(revealLines.slice(0, 6).join(String.fromCharCode(10)))
   console.log('--- STDERR tail ---')
   console.log(err.slice(-1500))
