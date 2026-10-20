@@ -197,7 +197,7 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 
 ## 9. 剩余事项（2026-10-17 审查记录）
 
-当前代码与 463 个测试通过（41 个测试文件）；以下按优先级保留，不再混入已完成项。
+当前代码与 473 个测试通过（42 个测试文件）；以下按优先级保留，不再混入已完成项。
 
 ### P1
 
@@ -229,6 +229,7 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - [x] computer-use 用户侧实机可用。
 - [x] approval dialog allow/reject 与显式 Cancel 行、reason 渲染测试（Esc 与 Cancel 行同样 settlement 为 cancelled）。
 - [x] MCP fiber 激活失败 Loader row 清理。
+- [x] 运行期 Node warning 不再覆盖画面（2026-10-20）：PTC 首次 `run_code` 调用 `stripTypeScriptTypes` 时 Node 会把 ExperimentalWarning 直接写到 stderr，落点正好在输入栏上，下一次按行 diff 也不会修复该行。新增 `ui/warnings.ts`：TUI 启动前接管 `process.emitWarning`，warning 暂存（最多 20 条），`tui.stop()` 之后再以 `(node warning)` 前缀输出，终端恢复前不产生 stderr 写入。验证：`pnpm check` 42 files / 473 tests；`scripts/fake-tty-ptc-diff.mjs` 中 stderr 仅剩退出时的 `(node warning) ExperimentalWarning: stripTypeScriptTypes…`，会话期间无 Node 默认 warning 输出。
 - [x] 流式正文逐帧展开（2026-10-20）：provider 回传的是 chunk 突发（可能整句/整段），旧实现每次绘制直接跳到最新全文，观感是"跳字"。新增 `revealStreamText`：live 文本按 wall clock（`STREAM_TEXT_CHARS_PER_MS = 1.2`）推进，并每帧额外消化 40% 积压；200 字突发分摊到约 5 帧（~165 ms），实测 40 字/20 ms 的高频流不增加延迟（仍跟随到达速率）。超过 `STREAM_TEXT_MAX_BACKLOG`(600) 视为整块返回，直接显示；surrogate pair 不会被截断；`block-end` 的文本立即结算并记入 `settledLength`，同一步后续 block 从该长度继续展开；`assistant/attempt`（重试）与 `assistant/message`（结算）清理进度。仅交互渲染器（带 `revealProgress`）启用，直接 reducer / 导出仍输出全文。单测 +6（前缀、积压排空、慢帧追赶、整块直出、代理对、结算后续接），`pnpm check` 41 files / 463 tests。
 - [x] 流式渲染节拍与空帧修复（2026-10-20）：① `scheduleTranscript` 原先只在 chunk 到达时重新计时，且固定等满一个 `transcriptInterval`，chunk 突发使帧间隔在 33/66/100 ms 之间跳变；改为按上次绘制时刻对齐（`nextFrameDelay`）。② 增加内容签名（修订号 + 等待行文本），无变化的帧跳过 `requestRender`，避免空转重绘（2026-10-20 修订：修订号改由 rebuild 的实际行变化驱动，原先在 `scheduleTranscript` 中自增使该分支不可达）。mock SSE 实测（1200 chunks × 8 字符 / 12 ms）：14.0 fps → 26.5 fps，gap p50 44 → 34 ms、p90 51 → 41 ms、max 151 → 61 ms。③ 顺带确认闪烁的结构性来源：main-screen 下换行时其后的状态区/编辑器/footer 整体位移，pi-tui 按行 diff 会重写约 15 行（488 帧中 96 帧 >3× 中位数）；alt-screen（`fullscreen: true`）每帧通常只重写 1 行、无尖峰。④ `TranscriptRenderer` 复用无状态的 `Spacer`/`Rule` 实例，不再每帧为每个 block 新建组件。新增 `nextFrameDelay` / `transcriptFrameChanged` 单测（transcript 测试 +6），`pnpm check` 41 files / 457 tests。
 - [x] 宽松排版与状态区分区（2026-10-20）：header 改为三行（标题、Session id、cwd）；transcript 用 `Box(2, 1)` 做左右 2 列/上下 1 行留白；transcript 与状态区之间加 `Rule`，状态块改为 `● state   model …   think …` + 空行 + preset/快捷键；编辑器用 `Box(2, 0)` 包住使上下边框与内容同宽内缩；新增 prompt 下方两行 footer（`↳ usage` + `ctx`），指标从状态块移入 footer。新增 `tests/status-line.spec.ts`（6 例）与 `scripts/fake-tty-layout.mjs` 真实 Host 探针；`pnpm check` 41 files / 451 tests。

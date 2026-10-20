@@ -34,6 +34,7 @@ import { subscribeSessionEvents } from './session-events.js'
 import { liveChunkHasOutput, nextFrameDelay, nextStreamInterval, STREAM_MIN_INTERVAL_MS, STREAM_MS_PER_CHAR, transcriptFrameChanged, type TranscriptBlock, type TranscriptEntry } from './transcript.js'
 import { TranscriptRenderer } from './transcript-renderer.js'
 import { WAIT_ROW_DELAY_MS, waitingText, waitingVisible, type WaitRetry } from './waiting.js'
+import { holdProcessWarnings, type WarningGuard } from './warnings.js'
 import { Rule } from './rule.js'
 
 
@@ -167,6 +168,8 @@ export async function startTerminalApp(
   editor.setAutocompleteProvider(autocomplete)
 
   let disposed = false
+  /** Holds Node warnings while the UI owns the screen; released once it is restored. */
+  let warningGuard: WarningGuard | undefined
   let reportedSession = false
   let exiting = false
   let switching = false
@@ -585,6 +588,17 @@ export async function startTerminalApp(
     catch {
       // The terminal may already be gone; restoration is best-effort here.
     }
+    // Warnings were kept off the screen while it was live; with the terminal
+    // restored they can be reported where a raw stderr write is harmless.
+    for (const warning of warningGuard?.restore() ?? []) {
+      try {
+        process.stderr.write('(node warning) ' + warning + '\n')
+      }
+      catch {
+        // A closed stderr must not turn a normal exit into a failure.
+      }
+    }
+    warningGuard = undefined
     if (!reportedSession) {
       reportedSession = true
       try {
@@ -620,6 +634,7 @@ export async function startTerminalApp(
   process.once('SIGTERM', onSignal)
   process.once('SIGHUP', onSignal)
   try {
+    warningGuard = holdProcessWarnings()
     registerInteractions()
     subscribeActive()
     tui.start()
