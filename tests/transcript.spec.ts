@@ -772,7 +772,8 @@ describe('reduceTranscript', () => {
     const renderer = new TranscriptRenderer(options)
     renderer.set(entries, [])
     const output = renderer.container.render(80).join('\n')
-    expect(output).toContain('Context compacted')
+    expect(output).toContain('◆ compaction')
+    expect(output).toContain('✓ done')
     expect(output).toContain('3 item(s)')
     expect(output).toContain('condensed checkpoint')
     expect(output).toContain('Tool output pruned')
@@ -802,9 +803,9 @@ describe('reduceTranscript', () => {
     const renderer = new TranscriptRenderer(options)
     renderer.set(closedByTurn, [])
     const output = renderer.container.render(80).join('\n')
-    expect(output).toContain('Compaction interrupted')
-    expect(output).not.toContain('Compacting context…')
-    expect(output).not.toContain('Compaction failed')
+    expect(output).toContain('⚠ interrupted')
+    expect(output).not.toContain('⟳ compacting…')
+    expect(output).not.toContain('✕ failed')
 
     // The resume marker alone closes it too: a log whose turn already ended
     // before the crash still holds the compaction lock until the seed marker.
@@ -977,6 +978,37 @@ describe('reduceTranscript', () => {
     expect(reduceTranscript(entries.slice(reduction.retainedFrom), options)).toEqual(reduction.blocks)
   })
 
+  it('keeps a saturated window stable between batched trims', () => {
+    // Main-screen repaints the whole transcript when the window top changes,
+    // so a large window only trims once a whole batch has overflowed. Between
+    // trims the overflow rows stay visible and the notice text never rewrites
+    // its number.
+    const capped = { ...options, maxEntries: 100 }
+    const entries: TranscriptEntry[] = []
+    for (let seq = 1; seq <= 130; seq += 1) {
+      entries.push(durable('user/message', { content: [{ type: 'text', text: 'm' + String(seq) }], source: { kind: 'user' } }, seq))
+    }
+    const first = reduceTranscriptWindow(entries, capped)
+    expect(first.blocks).toHaveLength(130)
+    expect(first.blocks[0]).toMatchObject({ kind: 'user', text: 'm1' })
+
+    // Overflow below the batch: nothing is dropped, so the newest row is kept.
+    entries.push(durable('user/message', { content: [{ type: 'text', text: 'm131' }], source: { kind: 'user' } }, 131))
+    const beforeBatch = reduceTranscriptWindow(entries, capped)
+    expect(beforeBatch.blocks.at(-1)).toMatchObject({ kind: 'user', text: 'm131' })
+    expect(beforeBatch.blocks[0]).toMatchObject({ kind: 'user', text: 'm1' })
+
+    // The batch overflows: the trim lands in one step and the notice stays.
+    for (let seq = 132; seq <= 160; seq += 1) {
+      entries.push(durable('user/message', { content: [{ type: 'text', text: 'm' + String(seq) }], source: { kind: 'user' } }, seq))
+    }
+    const afterBatch = reduceTranscriptWindow(entries, capped)
+    expect(afterBatch.blocks[0]).toMatchObject({ kind: 'notice', tone: 'info' })
+    expect(afterBatch.blocks[0]?.kind === 'notice' ? afterBatch.blocks[0].text : '').not.toMatch(/\d/)
+    expect(afterBatch.blocks).toHaveLength(101)
+    expect(afterBatch.retainedFrom).toBeGreaterThan(first.retainedFrom)
+  })
+
   it('reports the first retained row once the window is capped', () => {
     const entries: TranscriptEntry[] = [1, 2, 3].map(seq =>
       durable('user/message', { content: [{ type: 'text', text: 'm' + String(seq) }], source: { kind: 'user' } }, seq))
@@ -1085,6 +1117,42 @@ describe('TranscriptRenderer', () => {
     renderer.set(entries, [])
     const full = renderer.container.render(80).join('\n')
     expect(full).toContain('final answer')
+  })
+
+  it('keeps tool and compaction head rows identical across their lifecycle', () => {
+    // Main-screen pi-tui repaints the whole transcript when a row above the
+    // viewport changes, so card heads must never encode run state. The state
+    // lives on the tail row, which main-screen patches or extends safely.
+    const pending = renderTranscriptBlock({ kind: 'tool', callId: 'c1', name: 'write', args: '{}', pending: true }, options)
+    const settled = renderTranscriptBlock({ kind: 'tool', callId: 'c1', name: 'write', args: '{}', result: 'ok', pending: false }, options)
+    const failed = renderTranscriptBlock({ kind: 'tool', callId: 'c1', name: 'write', args: '{}', result: 'no', isError: true, pending: false }, options)
+    const pendingHead = pending.render(80)[0]
+    expect(pendingHead).toBe(settled.render(80)[0])
+    expect(pendingHead).toBe(failed.render(80)[0])
+    expect(pendingHead).not.toContain('running')
+    expect(settled.render(80).at(-1)).toContain('done')
+    expect(failed.render(80).at(-1)).toContain('error')
+
+    const running = renderTranscriptBlock({ kind: 'compaction', compactionId: 'k', state: 'running', seq: 1 }, options)
+    const done = renderTranscriptBlock({ kind: 'compaction', compactionId: 'k', state: 'done', shadowedItems: 1, shadowedTokens: 5, summary: 's', seq: 2 }, options)
+    const errored = renderTranscriptBlock({ kind: 'compaction', compactionId: 'k', state: 'error', error: 'x', seq: 3 }, options)
+    const runningHead = running.render(80)[0]
+    expect(runningHead).toBe(done.render(80)[0])
+    expect(runningHead).toBe(errored.render(80)[0])
+    expect(runningHead).not.toContain('compacting')
+    expect(done.render(80)).toContainEqual(expect.stringContaining('✓ done'))
+    expect(errored.render(80)).toContainEqual(expect.stringContaining('✕ failed'))
+  })
+
+  it('keeps the assistant head row identical when a live block settles', () => {
+    // A head row that changes after it scrolled above the viewport makes
+    // main-screen pi-tui clear the screen and the scrollback to repaint the
+    // transcript, so the label must not encode the live state.
+    const live = renderTranscriptBlock({ kind: 'assistant', text: 'streamed', live: true }, options)
+    const settled = renderTranscriptBlock({ kind: 'assistant', text: 'streamed', live: false }, options)
+    const liveHead = live.render(80)[0]
+    expect(liveHead).toBe(settled.render(80)[0])
+    expect(liveHead).not.toContain('streaming')
   })
 
   it('labels blocks and keeps reasoning with the answer', () => {

@@ -42,6 +42,12 @@ const STREAM_FRAME_BUDGET_MS = 8
  * the card appearing at once.
  */
 const ASSISTANT_SETTLE_MS = STREAM_MAX_INTERVAL_MS + 50
+/**
+ * Rows dropped per saturated-window trim. The window waits until a whole batch
+ * of rows has overflowed, then drops them at once: one full repaint per batch
+ * instead of one per arriving block.
+ */
+const TRIM_BATCH = 50
 
 /**
  * Nested PTC tools that always get their own card, including the pending row
@@ -1050,14 +1056,25 @@ export function reduceTranscriptWindow(
   if (visible.length <= options.maxEntries) {
     return { blocks: visible, retainedFrom: visibleSources[0] ?? 0, revealPending: pending }
   }
-  const start = visible.length - options.maxEntries
-  const hidden = visible.length - options.maxEntries
+  // Trim in one big step and only when the overflow grew past a whole batch:
+  // main-screen pi-tui repaints the full transcript when a row above the
+  // viewport changes, so a per-block top trim (or a hidden-count notice that
+  // rewrites its number every frame) would clear the screen on every new
+  // block. A static notice plus hysteresis turns that into one repaint per
+  // TRIM_BATCH dropped rows.
+  const overflow = visible.length - options.maxEntries
+  // A small cap (an explicit setting) trims exactly at its bound: waiting for a
+  // whole batch there would let the window grow far past what was asked for.
+  const batched = options.maxEntries >= TRIM_BATCH
+  const hidden = batched && overflow < TRIM_BATCH ? 0 : overflow
+  const trimmed: TranscriptBlock[] = []
+  // The notice carries no count: a number that changed every frame would
+  // rewrite this top row and repaint the transcript on every arrival.
+  if (hidden > 0) trimmed.push({ kind: 'notice', tone: 'info', text: '… earlier transcript entries hidden …' })
+  trimmed.push(...visible.slice(hidden))
   return {
-    blocks: [
-      { kind: 'notice', tone: 'info', text: `… ${String(hidden)} earlier transcript entries hidden …` },
-      ...visible.slice(start),
-    ],
-    retainedFrom: visibleSources[start] ?? 0,
+    blocks: trimmed,
+    retainedFrom: visibleSources[hidden] ?? 0,
     revealPending: pending,
   }
 }

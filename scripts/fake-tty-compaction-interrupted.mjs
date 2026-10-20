@@ -129,9 +129,9 @@ child.on('exit', (code, signal) => {
   clearInterval(tick)
   clearTimeout(hard)
   const text = strip(out)
-  const interrupted = text.includes('Compaction interrupted')
-  const running = text.includes('Compacting context')
-  const failed = text.includes('Compaction failed')
+  const interrupted = text.includes('⚠ interrupted')
+  const running = text.includes('⟳ compacting…')
+  const failed = text.includes('✕ failed')
   const turnNotice = text.includes('Turn interrupted before it finished')
   const pass = interrupted && !running && !failed && turnNotice
   console.log('EXIT', code, signal, 'loaded', loaded, 'after', Date.now() - started, 'ms')

@@ -22,13 +22,13 @@ DeepSeek Harness 的 host-native 终端前端，基于 pi-tui。
 - Workspace 列表/创建/切换/pin/unpin/archive/unarchive；Schedule 列表/创建/删除；Settings 引导式 TUI 配置页（全部 native-tui 字段：显示模式、transcript、theme/fullscreen、title、cwd、sessionId、agentPreset，带即时/重启/下次启动标注与暂存 diff）与 Host 命名空间内嵌编辑器（搜索、类型化编辑、数组增删/JSON、secret 保护、revision 冲突重试）；Plugins 列表/官方市场/检查/安装/移除/启停（带确认，实时应用）。
 - 可选 `fullscreen`：TuiAltScreen + ScrollView，header/status/editor 固定，鼠标滚轮滚动、文本选择复制。
 - Transcript 层次：参考 pi agent 使用全宽背景带（用户消息、reasoning、tool 输出）、assistant/context 标签、notice 图标、turn 分隔线；本地命令输出按 durable event sequence 插入，不会一律堆在 transcript 末尾。reasoning 块按 live chunk 增量刷新，并和 answer delta 一样走本地 reveal；若网关只在完成时回传整块 reasoning（Responses 路径常见），reasoning `block-start` 会先显示 `thinking …` 占位，完整块再按字素展开。展开按 wall clock 推进（`elapsed × rate`，rate 自适应保证 3000 字素预览约 600ms 内完成），帧率掉到 10fps 也只是跳步更快，不会把动画拉长；grapheme 切分按块缓存，长 reasoning 不会每帧重新分词。展开期间只暂缓其后真正“由该 reasoning 触发”的行：tool/step 卡片与 info notice 等 reveal 完成，`compact`/`hidden` 模式不参与展开；新的 user 消息、warning/error notice 以及同一 assistant 块的 answer 文本照常实时显示，避免整段答案最后一帧突然出现。answer/reasoning 最后一段内容与紧随其后的 tool 卡片之间保留一个渲染间隔的 settle grace，二者不会落在同一帧。reveal 进度按 step 记录并在重试（`assistant/attempt` 或同 step 的新 live 块）时清除，重试的 reasoning 从第一个 grapheme 重新展开，不会继承上一次的完成度。这是 TUI 本地平滑，不等同于 Web 端：Web 在 block-end 到达时直接显示完整 reasoning，不暂缓后续节点。
-- 流式节拍：帧间隔按**上次绘制时刻**对齐（`nextFrameDelay`），chunk 突发不会把帧间隔拉成 33/66 ms 交替；内容签名（修订号 + 等待行文本）未变的帧直接跳过重绘。mock SSE（1200 chunks × 8 字符 / 12 ms）实测 26 fps、gap p50 34 ms / p90 41 ms（修复前 14 fps、44–51 ms）；fullscreen（alt-screen）下每帧通常只重写 1 行，main-screen 因整屏 diff 会在换行时重写尾部区域，推荐开启 `fullscreen`。
+- 流式节拍：帧间隔按**上次绘制时刻**对齐（`nextFrameDelay`），chunk 突发不会把帧间隔拉成 33/66 ms 交替；内容签名（修订号 + 等待行文本）未变的帧直接跳过重绘。mock SSE（1200 chunks × 8 字符 / 12 ms）实测 26 fps、gap p50 34 ms / p90 41 ms（修复前 14 fps、44–51 ms）；fullscreen（alt-screen）下每帧通常只重写 1 行，main-screen 因整屏 diff 会在换行时重写尾部区域，推荐开启 `fullscreen`。main-screen 只能 patch 可见行：已滚入 scrollback 的行一旦变化，pi-tui 会清屏 + 清 scrollback 并重写整份 transcript，所以块首行（`◆ assistant`、`⚙ name`、`◆ compaction`）在块创建后保持不变，运行状态由状态行或卡片尾行表达。
 - 流式正文逐帧展开：provider 一帧可能带回整句/整段，直接绘制会让答案"跳"出来。每个突发在开始展开时规划一次步长（backlog / 6 帧，单帧最多 24 字），之后每帧按该步长推进；步长只由帧数决定，不随帧间隔或 chunk 到达间隔变化。此前按 wall clock（1.2 字/ms）推进时，chunk 总是在上一轮 reveal 排空后的空闲期到达，第一帧的 elapsed 就是整段空闲时间，于是 100 字以上的 chunk 仍然一帧整块画出——这是 main-screen 下跳字明显的主因。≤12 字的 token 级 delta 直接跟随到达速率；突发超过当前步长可排空量的 2 倍时放宽步长；单个 chunk 超过 600 字视为整块返回，直接显示。`block-end` 和 `assistant/message` 不再立即补全：backlog ≤ 600 时按步长继续展开，完成的那一帧 `revealPending` 立刻归零，不会留下每秒 30 帧的空转；同一步后续 block 从已结算长度继续展开，不会回退重放。reasoning delta 也走同一 reveal；`DSH_NATIVE_TUI_DEBUG=1` 会输出每个 chunk 的字符数、帧间隔与本帧 reveal 的 advance/step/visible。
 - 等待行 `⟳ waiting for API response · Ns` 在请求超过 1 秒后出现，首个可渲染的 text/reasoning chunk 或 durable assistant/tool 事件到达时消失；裸 `block-start` 不会提前清除，避免等待行先消失但内容尚未出现。
 - 运行中 `Esc` / `Ctrl+C` 取消 turn；输入框有草稿时 `Esc` 先清空草稿，空输入才取消 turn（overlay 聚焦时不触发）。长文本和 tool 输出按行保持左侧色条。
-- 上下文压缩：默认 preset 启用 `compaction-basic` 自动压力压缩与 context-overflow 恢复，以及 tool-result pruner；TUI 渲染 compaction start/summary/end；prune 会隐藏对应 tool 卡片并保留 prune notice；session 级 tool memory 会忽略同一 callId 的晚到/重复 call/result，即使原始事件已离开 retained window；`compact-checkpoint` 在匹配的 compaction 卡片已存在时不再重复渲染完整 checkpoint。进程在 `compaction/start` 与 `compaction/end` 之间崩溃时，resume 写入的 `turn/end{interrupted}` / `session/end-seed` 会释放 Host 的压缩锁，卡片随之显示 `⚠ Compaction interrupted` 而不是一直停在 running；同一 resume 的 `Turn interrupted before it finished` 也会作为 notice 显示。`/compact` 作为 Host command 可手动触发。
+- 上下文压缩：默认 preset 启用 `compaction-basic` 自动压力压缩与 context-overflow 恢复，以及 tool-result pruner；TUI 渲染 compaction start/summary/end；prune 会隐藏对应 tool 卡片并保留 prune notice；session 级 tool memory 会忽略同一 callId 的晚到/重复 call/result，即使原始事件已离开 retained window；`compact-checkpoint` 在匹配的 compaction 卡片已存在时不再重复渲染完整 checkpoint。进程在 `compaction/start` 与 `compaction/end` 之间崩溃时，resume 写入的 `turn/end{interrupted}` / `session/end-seed` 会释放 Host 的压缩锁，卡片尾行随之显示 `⚠ interrupted` 而不是一直停在 `⟳ compacting…`；同一 resume 的 `Turn interrupted before it finished` 也会作为 notice 显示。`/compact` 作为 Host command 可手动触发。
 - 显示密度可配置：`thinkingDisplay` 与 `runCodeDisplay` 均支持 `hidden | compact | detailed`；后者覆盖 `run_code`、`bash`、`pwsh` 等代码执行工具卡。
-- 工具卡片来源与配色：`ptc` 预设的 `run_code` 内嵌 `write`/`edit` 由 `tool/ptc-dispatch-start` / `tool/ptc-dispatch` 建独立卡片；`standard` / `cordis` 等 native 预设直接走 `tool/call` / `tool/result` 顶层卡片，`minimal` 不暴露 write/edit。两条路径共用同一 diff 渲染，不按预设分支。背景带使用中性暗灰 `48;5;237`（dark）/ 浅灰 `48;5;253`（light），状态色只出现在 `⚙`、`done`、`error` 等标签上。
+- 工具卡片来源与配色：`ptc` 预设的 `run_code` 内嵌 `write`/`edit` 由 `tool/ptc-dispatch-start` / `tool/ptc-dispatch` 建独立卡片；`standard` / `cordis` 等 native 预设直接走 `tool/call` / `tool/result` 顶层卡片，`minimal` 不暴露 write/edit。两条路径共用同一 diff 渲染，不按预设分支。背景带使用中性暗灰 `48;5;237`（dark）/ 浅灰 `48;5;253`（light），状态色只出现在 `⚙` 与卡片尾行的 `└ running…/done/error` 上。卡片首行（`⚙ name`、`◆ assistant`、`◆ compaction`）在卡片创建后不再变化：main-screen 只能 patch 可见行，改写已滚入 scrollback 的首行会让 pi-tui 清屏并重写整份 transcript，因此运行状态一律放在卡片尾行或底部状态行。
 - 宽松排版：header 三行（产品标题、Session id、cwd）；transcript 左右各 2 列留白并带上下留白；状态区独立成块（`● idle   model provider/model   think max` + 空行 + preset/快捷键），编辑器上下边框与内容同宽内缩；reasoning effort 同时决定 `think` 标签、状态栏上分隔线和编辑器上下边框的颜色（low 暗绿 / medium 浅蓝 / high 粉红 / max 红；未设置或未知 effort 保持 dim，`plain` 主题不着色）。状态栏其余部分：provider 蓝色、model 青色、preset 紫色、attached 数量青色；footer 的 `ctx` 在自动压缩触发点前 20 个百分点内转黄、达到触发点转红。Prompt 下方 footer 两行分别显示 `↳ turns · steps · tok/s · tok · cache` 和 `ctx ...`。context 与 Web 端同口径：读 token meter 的 `contextPressure` 投影（最近一次 provider 采样 + 此后 surface 增减，compaction 的影响已含在内），渲染为 `ctx 42%  (~420K / 1M · compact at 80%)`，其中 `compact at` 是按 `compaction-basic` 的 `thresholdRatio`、`headroomTokens` 与该请求预留输出复算出的自动压缩触发点；首次 provider 采样之前显示 `ctx —`，不猜占用（与 Web ContextMeter 一致）。token 用量与 cache 命中率同样按 Web 口径：总量取四桶之和、部分命中不会显示成 100%，数字格式与 Web 统计 pill 一致。tok/s 为整段 Session 的累计 decode 速率（Host `sessionStats` 的 `decodeTokens / (decodeMs / 1000)`，与 Web 统计 pill 同式），不是瞬时速率；低于 10 时保留一位小数。未挂载 `sessionStats` 投影时，从 `assistant/message` 的 stream 首 token 与 output tokens 回退计算。未挂载 token meter 时，日志回退只在被 shadow 的事件已属于最近一次 provider 采样时，扣除 `compaction/summary` / `compaction/prune` 的 `shadowedTokenCount`；采样后新增再被裁剪的结果不会被重复扣除。
 - `@@<query>` 自动补全其他 Session 的 canonical mention；发送时 Host session-reference 自动注入快照。
 - `/export [path]` 导出 Session JSONL；`/export zip [path]` 导出含 manifest、attachments、deliverables 的 ZIP bundle；`/export html [path]` 导出静态 HTML transcript；`/open` 预览文本文件，Markdown 以 pi-tui Markdown 样式分页渲染；`/preview` 渲染 PNG/JPEG/GIF/WebP 图片；`/files` 浏览目录并预览；`/attach` 暂存文件/图片或剪贴板图片并随下一条 prompt 发送（8 MiB 上限），`/attach preview <i>` 可内联预览暂存项，`/attachments` 打开暂存附件管理器（预览/移除）；`/deliverables` 可列出、打开 panel、预览或用系统文件管理器定位 present 交付文件；`/tools` 列出工具调用，`/tool <index>` 分页查看完整参数/结果，`/diff [index]` 查看 write/edit 的独立 diff。
@@ -372,6 +372,19 @@ node scripts/fake-tty-reload.mjs
 ~~~sh
 node scripts/fake-tty-stream-smooth.mjs
 node scripts/fake-tty-stream-chunks.mjs
+~~~
+
+`fullscreen: false`（main-screen）下长 transcript 的流式渲染另用探针验证：assistant 块结算时头部不再变化，因此不会触发 pi-tui 的整屏重绘（清屏 + 清 scrollback），流式答案按帧推进并完整落地：
+
+~~~sh
+node scripts/fake-tty-main-screen-scroll.mjs
+node scripts/fake-tty-card-head.mjs
+~~~
+
+卡片首行不变量与饱和窗口的批量裁切由离线用例直接驱动真实 `TuiMainScreen`（假终端，断言 `fullRedraws === 0`），不需要 Host：
+
+~~~sh
+pnpm vitest run tests/main-screen-cards.spec.ts
 ~~~
 
 内置 CodeBuddy 插件（两条路由挂载、`/codebuddy status|doctor`、`/model` seed 模型）用真实 Host 冒烟，离线可跑：

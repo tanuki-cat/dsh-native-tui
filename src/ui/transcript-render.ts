@@ -51,8 +51,12 @@ export function renderTranscriptBlock(block: TranscriptBlock, options: Transcrip
     }
     case 'assistant': {
       const container = new Container()
+      // The head line must not change after the block exists. In main-screen
+      // mode pi-tui can only patch rows inside the viewport, so a change to a
+      // row that already scrolled into scrollback makes it clear the screen
+      // (and the scrollback) and repaint the whole transcript. The live state
+      // is reported by the status row instead.
       const label = palette.bold(palette.accent('◆ assistant'))
-        + (block.live === true ? '  ' + palette.warning('streaming') : '')
       container.addChild(new Text(label, 0, 0))
       const mode = options.thinkingDisplay ?? 'detailed'
       if (block.starting === true) {
@@ -97,14 +101,19 @@ export function renderTranscriptBlock(block: TranscriptBlock, options: Transcrip
       return container
     }
     case 'tool': {
-      const status = block.pending ? palette.warning('running') : block.isError === true ? palette.error('error') : palette.success('done')
-      if (isCodeExecutionTool(block.name) && (options.runCodeDisplay ?? 'detailed') === 'compact') {
-        const preview = compactCodeExecutionPreview(block)
-        return new Text(palette.bold(palette.accent('⚙ ' + block.name)) + '  ' + status
-          + (preview === '' ? '' : '  ·  ' + palette.dim(preview)), 0, 0)
-      }
+      // The head line must stay identical for the block's whole life: a change
+      // above the main-screen viewport makes pi-tui clear the screen and the
+      // scrollback to repaint the transcript. The run state is reported by the
+      // status row appended last, which main-screen can patch or extend safely.
+      const status = '└ ' + (block.pending ? palette.warning('running…') : block.isError === true ? palette.error('error') : palette.success('done'))
+      const compact = isCodeExecutionTool(block.name) && (options.runCodeDisplay ?? 'detailed') === 'compact'
       const container = new Container()
-      container.addChild(new Text(palette.bold(palette.accent('⚙ ' + block.name)) + '  ' + status, 0, 0))
+      container.addChild(new Text(palette.bold(palette.accent('⚙ ' + block.name)), 0, 0))
+      if (compact) {
+        const preview = compactCodeExecutionPreview(block)
+        container.addChild(new Text((preview === '' ? '' : palette.dim('├ ' + preview) + '\n') + status, 0, 0))
+        return container
+      }
       if (block.args.trim() !== '') {
         container.addChild(new Text(palette.dim('├ args'), 0, 0))
         container.addChild(new BarText(formatToolArguments(block.args), '│ ', palette.dim, palette.dim))
@@ -130,27 +139,38 @@ export function renderTranscriptBlock(block: TranscriptBlock, options: Transcrip
         }
         container.addChild(new Text(lines.join('\n'), 0, 0))
       }
+      container.addChild(new Text(status, 0, 0))
       return band(container, palette.toolBand)
     }
     case 'compaction': {
+      // The head line stays fixed like the tool card head: the compaction
+      // state lands on the tail row, which main-screen can patch safely while
+      // the card is still inside the viewport or after it scrolled away.
       const container = new Container()
+      container.addChild(new Text(palette.bold(palette.accent('◆ compaction')), 0, 0))
       const meta = [
         block.shadowedItems === undefined ? undefined : String(block.shadowedItems) + ' item(s)',
         block.shadowedTokens === undefined ? undefined : '~' + String(block.shadowedTokens) + ' tokens',
       ].filter((value): value is string => value !== undefined)
-      const title = block.state === 'error'
-        ? '✕ Compaction failed'
-        : block.state === 'interrupted'
-          ? '⚠ Compaction interrupted'
-          : block.state === 'running' ? '⟳ Compacting context…' : '✓ Context compacted'
-      container.addChild(new Text(palette.bold(palette.accent(title)) + (meta.length === 0 ? '' : '  ' + palette.dim(meta.join(' · '))), 0, 0))
+      if (meta.length > 0) container.addChild(new Text(palette.dim(meta.join(' · ')), 0, 0))
       if (block.summary !== undefined && block.summary.trim() !== '') {
-        container.addChild(new BarText(clip(block.summary, 800), '│ ', palette.dim, palette.dim))
+        // Keep the card shorter than a typical viewport: main-screen can only
+        // patch visible rows, so a card that grows past the viewport after its
+        // head scrolled away forces a full repaint of the transcript.
+        container.addChild(new BarText(clip(block.summary, 240), '│ ', palette.dim, palette.dim))
       }
       if (block.state === 'interrupted') {
         container.addChild(new Text(palette.warning(clip('Stopped before it committed; the session reopened after it.', 600)), 0, 0))
       }
       if (block.error !== undefined) container.addChild(new Text(palette.error(clip(block.error, 600)), 0, 0))
+      // State is the last row: a compaction that finishes after its card scrolled
+      // away still only touches the card's tail, never a row above the viewport.
+      const state = block.state === 'error'
+        ? palette.error('✕ failed')
+        : block.state === 'interrupted'
+          ? palette.warning('⚠ interrupted')
+          : block.state === 'running' ? palette.accent('⟳ compacting…') : palette.success('✓ done')
+      container.addChild(new Text(state, 0, 0))
       return container
     }
     case 'waiting': {
