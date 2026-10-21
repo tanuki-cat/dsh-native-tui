@@ -14,6 +14,47 @@ import { Rule } from './rule.js'
 import type { DisplayMode } from '../config.js'
 import { reduceTranscriptWindow, type TranscriptBlock, type TranscriptEntry, type TranscriptOptions } from './transcript.js'
 import { renderTranscriptBlock } from './transcript-render.js'
+import { STREAM_SETTLE_MIN_MS } from './stream-pacing.js'
+
+/**
+ * One transcript row component, memoized on the width it last painted at.
+ *
+ * pi-tui caches inside each leaf (parsed Markdown, padded Text) but always walks
+ * the whole subtree: a Box re-renders its children before its own cache can
+ * match. That walk is what makes a long transcript cost O(retained rows) per
+ * paint — measured at 45 ms for 2000 rows — and it runs on the same event loop
+ * that reads the model stream, so it also stretched the timestamps the decode
+ * rate is measured from.
+ *
+ * The component itself is the memo key: {@link TranscriptRenderer.rebuild}
+ * reuses the component exactly when its block value did not change, so a kept
+ * component may keep its lines until the width moves. A rebuilt row gets a new
+ * component and therefore a cold cache.
+ */
+class MemoBlock implements Component {
+  private readonly inner: Component
+  private width = -1
+  private lines: string[] | undefined
+
+  constructor(inner: Component) {
+    this.inner = inner
+  }
+
+  render(width: number): string[] {
+    const cached = this.lines
+    if (cached !== undefined && this.width === width) return cached
+    const lines = this.inner.render(width)
+    this.width = width
+    this.lines = lines
+    return lines
+  }
+
+  invalidate(): void {
+    this.lines = undefined
+    this.width = -1
+    this.inner.invalidate?.()
+  }
+}
 
 /**
  * Whether a rebuilt block renders exactly what its predecessor rendered.
@@ -84,6 +125,7 @@ function blockKey(block: TranscriptBlock): string | undefined {
 
 /** Pi-tui renderer for one reduced transcript. */
 export class TranscriptRenderer {
+  /** The row container: every reduced block, plus the separators between them. */
   readonly container = new Container()
   private entries: readonly TranscriptEntry[] = []
   private extra: readonly TranscriptBlock[] = []
@@ -95,6 +137,8 @@ export class TranscriptRenderer {
   private retained = 0
   private liveChars = 0
   private revealPending = false
+  /** Grace before rows after an assistant block, paced to the frame interval by {@link set}. */
+  private settleMs = STREAM_SETTLE_MIN_MS
   private options: TranscriptOptions
   /**
    * Separators are stateless, so one instance each serves every block. Reusing
@@ -161,8 +205,16 @@ export class TranscriptRenderer {
     this.rebuild()
   }
 
-  /** Replace both the event window and local notices in one rebuild. */
-  set(entries: readonly TranscriptEntry[], notices: readonly TranscriptBlock[]): void {
+  /**
+   * Replace both the event window and local notices in one rebuild.
+   * @param entries - contiguous durable and transient event window.
+   * @param notices - local notices placed by durable sequence.
+   * @param settleMs - grace before rows after an assistant block; the app paces
+   *   it to the current frame interval so a backed-off window still shows the
+   *   final text on its own frame.
+   */
+  set(entries: readonly TranscriptEntry[], notices: readonly TranscriptBlock[], settleMs = STREAM_SETTLE_MIN_MS): void {
+    this.settleMs = settleMs
     this.entries = entries
     this.extra = notices
     this.rebuild()
@@ -197,7 +249,7 @@ export class TranscriptRenderer {
   }
 
   private rebuild(): void {
-    const reduction = reduceTranscriptWindow(this.entries, this.options)
+    const reduction = reduceTranscriptWindow(this.entries, this.options, Date.now(), this.settleMs)
     this.retained = reduction.retainedFrom
     this.revealPending = reduction.revealPending
     const durable = reduction.blocks
@@ -231,7 +283,7 @@ export class TranscriptRenderer {
       // and every block index just shifted by one.
       const component = previous !== undefined && sameTranscriptBlock(previous.block, block)
         ? previous.component
-        : renderTranscriptBlock(block, this.options)
+        : new MemoBlock(renderTranscriptBlock(block, this.options))
       if (key !== undefined) next.set(key, { block, component })
       this.container.addChild(component)
     }

@@ -4,6 +4,7 @@ import {
   collectSessionMetrics,
   compactionThresholdTokens,
   contextPressure,
+  createSessionMetricsMemo,
   formatCacheHitPercent,
   formatSessionMetrics,
   formatTokenCount,
@@ -172,6 +173,66 @@ describe('session metrics', () => {
     expect(formatTokenCount(1_450)).toBe('1.5K')
     expect(formatTokenCount(177_157_176)).toBe('177M')
     expect(formatTokenCount(1_200_000_000)).toBe('1200M')
+  })
+
+  it('memoizes the fold while its inputs are unchanged', () => {
+    const memo = createSessionMetricsMemo()
+    const events = [usageEvent(100, 20, 800, 0)]
+    const first = memo(events, undefined, 1_000_000, { tokens: 400_000 })
+    expect(memo(events, undefined, 1_000_000, { tokens: 400_000 })).toBe(first)
+  })
+
+  it('misses when any folded input changes', () => {
+    const events = [usageEvent(100, 20, 800, 0)]
+    const base = { stats: undefined, window: 1_000_000, meter: { tokens: 400_000 } }
+    /** Warm a fresh memo with the baseline, then report whether the variant missed. */
+    const misses = (run: (memo: ReturnType<typeof createSessionMetricsMemo>) => unknown): boolean => {
+      const memo = createSessionMetricsMemo()
+      const first = memo(events, base.stats, base.window, base.meter)
+      return run(memo) !== first
+    }
+    // A new log snapshot, a new projection value, a new window, and a moved
+    // meter reading must each miss. Every case warms its own memo, so one miss
+    // cannot explain the next assertion.
+    expect(misses(memo => memo([...events], base.stats, base.window, base.meter))).toBe(true)
+    expect(misses(memo => memo(events, { turns: 1, steps: 1, decodeMs: 1_000, decodeTokens: 50 }, base.window, base.meter))).toBe(true)
+    expect(misses(memo => memo(events, base.stats, 200_000, base.meter))).toBe(true)
+    expect(misses(memo => memo(events, base.stats, base.window, { tokens: 400_001 }))).toBe(true)
+    expect(misses(memo => memo(events, base.stats, base.window, { tokens: 400_000, reservedTokens: 8_192 }))).toBe(true)
+    expect(misses(memo => memo(events, base.stats, base.window, undefined))).toBe(true)
+  })
+
+  it('hits when the projection hands out an equal state object', () => {
+    // The Host may return a fresh object per call; keying on its identity would
+    // defeat the memo, so the counters the fold reads are the key instead.
+    const memo = createSessionMetricsMemo()
+    const events = [usageEvent(100, 20, 800, 0)]
+    const stats = { turns: 1, steps: 1, decodeMs: 1_000, decodeTokens: 50 }
+    const first = memo(events, stats, 1_000_000, { tokens: 400_000 })
+    expect(memo(events, { ...stats }, 1_000_000, { tokens: 400_000 })).toBe(first)
+  })
+
+  it('misses when a projection counter moves but the object is reused', () => {
+    // Callers may mutate their state in place; the counters, not the reference,
+    // decide whether the log has to be folded again.
+    const memo = createSessionMetricsMemo()
+    const events = [usageEvent(100, 20, 800, 0)]
+    const stats = { turns: 1, steps: 1, decodeMs: 1_000, decodeTokens: 50 }
+    const first = memo(events, stats, 1_000_000, { tokens: 400_000 })
+    stats.decodeTokens = 51
+    expect(memo(events, stats, 1_000_000, { tokens: 400_000 })).not.toBe(first)
+  })
+
+  it('folds again once the log grew even though the array was reused in place', () => {
+    // The Host hands out a frozen snapshot per log length, but a caller may
+    // append to its own array; a memo keyed on identity alone would then go
+    // stale, so the length is part of the key.
+    const memo = createSessionMetricsMemo()
+    const events: SessionEvent[] = [usageEvent(100, 20, 0, 0)]
+    const first = memo(events)
+    events.push(usageEvent(100, 20, 0, 0, 1, 2))
+    expect(memo(events)).not.toBe(first)
+    expect(memo(events).totalTokens).toBe(240)
   })
 
   it('falls back to event turn and step counts without the projection', () => {

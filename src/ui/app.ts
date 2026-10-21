@@ -20,7 +20,7 @@ import type { DisplayMode, ResolvedConfig } from '../config.js'
 import { createHostSession, readContextMeter, resumeHostSession, sessionAgentPreset, sessionModelSelection, type AgentPresetService, type HostSession } from '../runtime/agent.js'
 import { findLauncher, parseProfileArg, resumeHint } from '../runtime/launcher.js'
 import { reloadArgs } from '../runtime/reload.js'
-import type { SessionStats } from '../runtime/metrics.js'
+import { createSessionMetricsMemo, type SessionStats } from '../runtime/metrics.js'
 import { showApproval, showQuestionBatch } from './dialogs.js'
 import type { PendingAttachment } from '../runtime/attachments.js'
 import { TuiAutocompleteProvider, type SessionReferenceService, type SkillSuggestion } from './autocomplete.js'
@@ -35,7 +35,8 @@ import type { AgentDefaultModelService, LLM, SessionProjectionsService, SkillsCa
 import { openTuiSettings, showHostSettings } from './commands/settings.js'
 import { errorMessage } from './commands/shared.js'
 import { subscribeSessionEvents } from './session-events.js'
-import { liveChunkHasOutput, nextFrameDelay, nextStreamInterval, STREAM_MIN_INTERVAL_MS, STREAM_MS_PER_CHAR, transcriptFrameChanged, type TranscriptBlock, type TranscriptEntry } from './transcript.js'
+import { liveChunkHasOutput, type TranscriptBlock, type TranscriptEntry } from './transcript.js'
+import { frameCostMs, frameOverrunMs, nextFrameDelay, nextStreamInterval, settleGraceMs, STREAM_MIN_INTERVAL_MS, transcriptFrameChanged } from './stream-pacing.js'
 import { TranscriptRenderer } from './transcript-renderer.js'
 import { WAIT_ROW_DELAY_MS, waitSubjectAfter, waitingText, waitingVisible, type WaitRetry, type WaitSubject } from './waiting.js'
 import { holdProcessWarnings, type WarningGuard } from './warnings.js'
@@ -224,6 +225,8 @@ export async function startTerminalApp(
   let localNotices: TranscriptBlock[] = []
   let pendingAttachments: PendingAttachment[] = []
   let transcriptTimer: ReturnType<typeof setTimeout> | undefined
+  /** When the pending frame is due, so a late one can measure what held the loop. */
+  let frameDueAt: number | undefined
   let transcriptInterval = STREAM_MIN_INTERVAL_MS
   /** Bumped whenever a rebuild changes the rows the transcript paints. */
   let transcriptRevision = 0
@@ -276,19 +279,39 @@ export async function startTerminalApp(
    */
   const renderTranscript = (): void => {
     if (disposed) return
+    // Measured before anything runs, so it covers only time the loop spent on
+    // work other than this frame: delivery of other events, timers, and above
+    // all the previous paint. Taking it after the rebuild would charge that
+    // work twice.
+    const slippedMs = frameOverrunMs(frameDueAt, performance.now())
+    frameDueAt = undefined
     const started = performance.now()
     const pending = waitingBlock()
     const pendingText = pending === undefined ? '' : pending.text
-    renderer.set(entries, pending === undefined ? localNotices : [...localNotices, pending])
+    // The grace has to outlast the gap to this content's first paint, which is
+    // the interval the frame was scheduled on. A fixed grace would let a
+    // backed-off window paint the final text and the next tool card together.
+    renderer.set(entries, pending === undefined ? localNotices : [...localNotices, pending], settleGraceMs(transcriptInterval))
     if (renderer.contentChanged) transcriptRevision += 1
     const revision = transcriptRevision
-    // Bound the next rebuild, then pace it: the rebuild excludes pi-tui's later
-    // container render, whose dominant cost is the growing live Markdown.
+    // Bound the next rebuild before pacing it.
     if (renderer.retainedFrom > 0) entries = entries.slice(renderer.retainedFrom)
-    const frameMs = performance.now() - started + renderer.liveContentLength * STREAM_MS_PER_CHAR
+    const rebuildMs = performance.now() - started
     const sincePaint = performance.now() - lastPaintAt
+    // The previous frame's whole cost is the slip plus this rebuild: pi-tui's
+    // cursor resolution, line resets and differential write all happen after
+    // this function returns, so the only way to see them is the next frame's
+    // lateness. That lateness also contains unrelated loop work, so the pacer
+    // caps it at the interval the frame ran on; one stall doubles the interval
+    // once instead of commanding an arbitrary backoff, while a paint that keeps
+    // overrunning still doubles it every frame until twice its cost fits.
+    // Pacing on the rebuild alone let a 2000-row window paint every 33 ms at
+    // ~90 ms a paint, which starved the loop that reads the model stream and
+    // stretched the timings the decode rate is measured from — the fall a long
+    // session showed in tok/s.
+    const frameMs = frameCostMs(rebuildMs, slippedMs, transcriptInterval)
     transcriptInterval = nextStreamInterval(transcriptInterval, frameMs)
-    debug(`stream frame: rebuild=${frameMs.toFixed(1)}ms sincePaint=${sincePaint.toFixed(1)}ms interval=${String(transcriptInterval)}ms live=${String(renderer.liveContentLength)} reveal=${String(renderer.liveRevealPending)}`)
+    debug(`stream frame: rebuild=${rebuildMs.toFixed(1)}ms slipped=${slippedMs.toFixed(1)}ms cost=${frameMs.toFixed(1)}ms sincePaint=${sincePaint.toFixed(1)}ms interval=${String(transcriptInterval)}ms live=${String(renderer.liveContentLength)} reveal=${String(renderer.liveRevealPending)}`)
     const revealing = renderer.liveRevealPending
     const mark = { revision, wait: pendingText }
     if (transcriptFrameChanged(painted, mark, revealing)) {
@@ -314,14 +337,24 @@ export async function startTerminalApp(
         clearTimeout(transcriptTimer)
         transcriptTimer = undefined
       }
+      // Painted inline. A burst's first frame is what starts a local reveal, so
+      // deferring it lets a gateway that sends the whole block together with its
+      // settlement settle the step first, and the reveal of a live entry that
+      // never existed is dropped. There is no scheduled due time, so this frame
+      // charges no slip to the next interval.
+      frameDueAt = undefined
       renderTranscript()
       return
     }
     if (transcriptTimer !== undefined) return
+    const delay = nextFrameDelay(transcriptInterval, elapsed)
+    // Due time, so the frame can tell scheduling from blocking: anything past
+    // it is work that held the loop between two frames.
+    frameDueAt = performance.now() + delay
     transcriptTimer = setTimeout(() => {
       transcriptTimer = undefined
       renderTranscript()
-    }, nextFrameDelay(transcriptInterval, elapsed))
+    }, delay)
   }
 
   /** Stop the one-second repaint that keeps the wait row's elapsed time live. */
@@ -362,7 +395,29 @@ export async function startTerminalApp(
     scheduleTranscript(true)
   }
 
+  /** One fold per application, so a repaint over an unchanged log is free. */
+  const metricsFold = createSessionMetricsMemo()
+
+  /**
+   * Coalesce status repaints.
+   *
+   * One durable event per model step arrives in bursts — a settlement, its tool
+   * call, the step end — and each used to repaint the row and request a full
+   * screen render. Painting once per burst keeps the event loop free for the
+   * stream reads that the decode timing is measured from.
+   */
+  let statusScheduled = false
+
   const renderStatus = (): void => {
+    if (disposed || statusScheduled) return
+    statusScheduled = true
+    setImmediate(() => {
+      statusScheduled = false
+      paintStatus()
+    })
+  }
+
+  const paintStatus = (): void => {
     if (disposed) return
     reasoningEffort = modelSelection.current?.reasoningEffort
     const options = active.agent.options
@@ -384,7 +439,7 @@ export async function startTerminalApp(
       contextMeter: meter.reading,
       stats: projections?.stateOf(active.agent.session, 'sessionStats') as SessionStats | undefined,
       events: active.agent.session.snapshotEvents(),
-    })
+    }, metricsFold)
     tui.requestRender()
   }
 

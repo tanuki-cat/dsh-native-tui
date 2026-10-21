@@ -38,6 +38,29 @@ describe('resultFileDiffs', () => {
     expect(resultFileDiffs({ operation: 'create', diffs: [] }, 'not json')).toBeUndefined()
     expect(resultFileDiffs({ operation: 'create' }, JSON.stringify({ file_path: 'a.txt' }))).toBeUndefined()
   })
+
+  it('returns the same create diff for the same result metadata', () => {
+    // The reducer runs on every stream frame and a transcript row is only
+    // reused while its block is identical, so a fresh array here would rebuild
+    // that card on every frame of a long session.
+    const meta = { operation: 'create', path: 'new.txt', diffs: [] }
+    const args = JSON.stringify({ file_path: 'new.txt', content: 'one' })
+    expect(resultFileDiffs(meta, args)).toBe(resultFileDiffs(meta, args))
+    expect(resultFileDiffs({ operation: 'create', diffs: [] }, args)).not.toBe(resultFileDiffs({ operation: 'create', diffs: [] }, args))
+  })
+
+  it('rebuilds the create diff when the same metadata arrives with new arguments', () => {
+    // The content comes from the arguments, so metadata identity alone is not a
+    // valid cache key: rewritten arguments must not serve the previous file.
+    const meta = { operation: 'create', path: 'new.txt', diffs: [] }
+    const firstArgs = JSON.stringify({ file_path: 'new.txt', content: 'one' })
+    const secondArgs = JSON.stringify({ file_path: 'new.txt', content: 'two' })
+    const first = resultFileDiffs(meta, firstArgs)
+    const second = resultFileDiffs(meta, secondArgs)
+    expect(second).not.toBe(first)
+    expect(second).toEqual([{ path: 'new.txt', oldText: null, newText: 'two' }])
+    expect(resultFileDiffs(meta, secondArgs)).toBe(second)
+  })
 })
 
 describe('diffLines', () => {

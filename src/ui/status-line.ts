@@ -9,7 +9,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { AgentPresetService } from '../runtime/agent.js'
-import type { ContextMeterReading, SessionStats } from '../runtime/metrics.js'
+import type { ContextMeterReading, SessionMetrics, SessionStats } from '../runtime/metrics.js'
 import { collectSessionMetrics, formatSessionMetrics } from '../runtime/metrics.js'
 import type { Palette } from './theme.js'
 
@@ -58,13 +58,30 @@ export function splitSessionMetrics(text: string): { readonly usage: string; rea
   return { usage: text, context: undefined }
 }
 
+/** Fold the status-bar metrics from one repaint's inputs. */
+export type MetricsFold = (
+  events: readonly never[],
+  stats: SessionStats | undefined,
+  contextWindow: number | undefined,
+  meter: ContextMeterReading | undefined,
+) => SessionMetrics
+
 /**
  * Repaint the header, status block, and footer.
+ *
+ * The fold runs on every Session event, so callers that repaint often pass a
+ * memoizing one; the plain fold is the default for one-shot renderers.
  * @param rows - the text components to update.
  * @param palette - colours.
  * @param input - the current session state.
+ * @param fold - metric fold, normally a memo over the whole event log.
  */
-export function renderStatusRows(rows: StatusRows, palette: Palette, input: StatusInput): void {
+export function renderStatusRows(
+  rows: StatusRows,
+  palette: Palette,
+  input: StatusInput,
+  fold?: MetricsFold,
+): void {
   rows.header.setText(
     palette.bold(palette.brand('◆ ' + input.title)) + '\n'
     + palette.dim(input.sessionId) + '\n'
@@ -83,7 +100,9 @@ export function renderStatusRows(rows: StatusRows, palette: Palette, input: Stat
     ? 'enter steer · esc cancel · ctrl+c cancel · ctrl+d exit'
     : 'enter send · /help · ctrl+d exit'
   metaBits.push(palette.dim(hint))
-  const metrics = collectSessionMetrics(input.events as never, input.stats, input.contextWindow, input.contextMeter)
+  const metrics = fold === undefined
+    ? collectSessionMetrics(input.events as never, input.stats, input.contextWindow, input.contextMeter)
+    : fold(input.events as never, input.stats, input.contextWindow, input.contextMeter)
   const split = splitSessionMetrics(formatSessionMetrics(metrics))
   const model = palette.dim('model ')
     + palette.bold(palette.brand(input.provider))

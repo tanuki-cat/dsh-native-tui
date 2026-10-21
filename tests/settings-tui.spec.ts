@@ -81,7 +81,7 @@ describe('terminal setting defaults', () => {
   it('falls back to runtime defaults for absent profile values', () => {
     const empty = descriptorOf({})
     expect(settingOf('runCodeDisplay').fallback(empty, config)).toBe('detailed')
-    expect(settingOf('maxTranscriptEntries').fallback(empty, config)).toBe(2000)
+    expect(settingOf('maxTranscriptEntries').fallback(empty, config)).toBe(600)
     expect(settingOf('theme').fallback(empty, config)).toBe('auto')
     expect(settingOf('fullscreen').fallback(empty, config)).toBe(false)
     expect(settingOf('title').fallback(empty, config)).toBe('DeepSeek Harness')

@@ -32,6 +32,19 @@ export function asFileDiffs(meta: unknown): FileDiff[] | undefined {
 }
 
 /**
+ * Synthetic create diff, remembered per result metadata and call arguments.
+ *
+ * The reducer runs on every stream frame and a block is only reused while its
+ * value is identical, so building a fresh array for an unchanged create would
+ * rebuild that card on every frame. A WeakMap keyed by the metadata keeps the
+ * array stable for as long as the result does and lets it be collected with the
+ * event it belongs to. The arguments are part of the entry because the written
+ * content comes from them: the same metadata paired with rewritten arguments
+ * must not serve the previous content.
+ */
+const createDiffs = new WeakMap<object, { readonly args: string; readonly diff: FileDiff[] }>()
+
+/**
  * Read a result's diffs, falling back to the call arguments for a created
  * file. The Host records an empty diff list for creates (there is no prior
  * content to compare) and exposes the written content in the arguments.
@@ -45,6 +58,8 @@ export function resultFileDiffs(meta: unknown, args: string): FileDiff[] | undef
   if (meta === null || typeof meta !== 'object') return undefined
   const record = meta as { readonly operation?: unknown; readonly path?: unknown }
   if (record.operation !== 'create') return undefined
+  const cached = createDiffs.get(record)
+  if (cached !== undefined && cached.args === args) return cached.diff
   let parsed: unknown
   try {
     parsed = JSON.parse(args)
@@ -59,7 +74,9 @@ export function resultFileDiffs(meta: unknown, args: string): FileDiff[] | undef
     : typeof record.path === 'string' ? record.path : undefined
   const content = typeof call.content === 'string' ? call.content : undefined
   if (path === undefined || content === undefined) return undefined
-  return [{ path, oldText: null, newText: content }]
+  const created: FileDiff[] = [{ path, oldText: null, newText: content }]
+  createDiffs.set(record, { args, diff: created })
+  return created
 }
 
 /**

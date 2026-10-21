@@ -7,7 +7,7 @@ describe('resolveConfig', () => {
     expect(config.showReasoning).toBe(true)
     expect(config.thinkingDisplay).toBe('detailed')
     expect(config.runCodeDisplay).toBe('detailed')
-    expect(config.maxTranscriptEntries).toBe(2000)
+    expect(config.maxTranscriptEntries).toBe(600)
     expect(config.fullscreen).toBe(false)
     expect(config.theme).toBe('auto')
     expect(config.cwd).toBe(process.cwd())

@@ -389,6 +389,73 @@ export function collectSessionMetrics(
 }
 
 /**
+ * Memoizing wrapper around {@link collectSessionMetrics}.
+ *
+ * The status row repaints on every durable Session event while the fold is
+ * linear in the whole log, so a long session pays it thousands of times. The
+ * Host hands out one frozen event snapshot per log length, so the array
+ * identity changes exactly when the log does; the length is part of the key so
+ * a caller that appends in place still misses.
+ *
+ * The projection and the meter are keyed by the values the fold reads rather
+ * than by object identity: the Host may hand out a fresh state object per call,
+ * and a new object with the same counters must not refold the log. The stats
+ * presence is part of the key because the event fallback only runs when no
+ * projection exists.
+ * @returns a fold that returns the previous result while its inputs are equal.
+ */
+export function createSessionMetricsMemo(): (
+  events: readonly SessionEvent[],
+  stats?: SessionStats,
+  contextWindow?: number,
+  meter?: ContextMeterReading,
+) => SessionMetrics {
+  let last: {
+    readonly events: readonly SessionEvent[]
+    readonly length: number
+    readonly hasStats: boolean
+    readonly turns: number | undefined
+    readonly steps: number | undefined
+    readonly decodeMs: number | undefined
+    readonly decodeTokens: number | undefined
+    readonly contextWindow: number | undefined
+    readonly tokens: number | undefined
+    readonly reserved: number | undefined
+    readonly metrics: SessionMetrics
+  } | undefined
+  return (events, stats, contextWindow, meter) => {
+    if (last !== undefined
+      && last.events === events
+      && last.length === events.length
+      && last.hasStats === (stats !== undefined)
+      && last.turns === stats?.turns
+      && last.steps === stats?.steps
+      && last.decodeMs === stats?.decodeMs
+      && last.decodeTokens === stats?.decodeTokens
+      && last.contextWindow === contextWindow
+      && last.tokens === meter?.tokens
+      && last.reserved === meter?.reservedTokens) {
+      return last.metrics
+    }
+    const metrics = collectSessionMetrics(events, stats, contextWindow, meter)
+    last = {
+      events,
+      length: events.length,
+      hasStats: stats !== undefined,
+      turns: stats?.turns,
+      steps: stats?.steps,
+      decodeMs: stats?.decodeMs,
+      decodeTokens: stats?.decodeTokens,
+      contextWindow,
+      tokens: meter?.tokens,
+      reserved: meter?.reservedTokens,
+      metrics,
+    }
+    return metrics
+  }
+}
+
+/**
  * Compact token count used in the status bar, matching `formatTokens` in
  * `@deepseek-ai/dsh-client-ui-chat`: one decimal below 100 units, whole numbers
  * from there up, and no unit above millions (a billion tokens reads as 1200M).

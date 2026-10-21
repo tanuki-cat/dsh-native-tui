@@ -15,6 +15,14 @@
  * one more row re-parsed every retained Markdown because index alignment lost
  * every predecessor - 9.6 ms/frame at 200 entries and 64.9 ms at 2000. Keying
  * the reuse window by block identity moved those to 0.6 ms and 2.0 ms.
+ *
+ * 2026-10-21 baseline, before the per-row paint memo: pi-tui walks every child
+ * on every paint even when each leaf has its own cache, so the container render
+ * grew with the retained window - 45.6 ms for 2000 rows on a real session. That
+ * walk ran on the loop that reads the model stream, so a long session stretched
+ * its chunk timestamps and reported a falling tok/s while the Web, whose host
+ * is a separate process, did not. Memoizing each row on its width moved the
+ * container render to 0.15 ms and the whole frame to 10 ms at 2000 rows.
  */
 import { createPalette, markdownTheme } from '../src/ui/theme.js'
 import { reduceTranscriptWindow, type TranscriptEntry } from '../src/ui/transcript.js'
@@ -141,4 +149,18 @@ console.log('=== D. large completed-reasoning reveal frame (reduce only) ===')
     reduceTranscriptWindow(entries, revealOptions, now)
     now += 33
   }, 9)
+}
+
+console.log('')
+console.log('=== E. repeat paint of an unchanged window (the per-row memo) ===')
+for (const turns of [200, 600, 2000]) {
+  const entries = makeEntries(turns)
+  const renderer = new TranscriptRenderer(options)
+  renderer.set(entries, [])
+  renderer.container.render(120)
+  // The rows are unchanged, so this is what one streaming frame pays for the
+  // retained transcript: without the memo it walked every child again.
+  measure(turns + ' turns repainted at the same width', () => {
+    renderer.container.render(120)
+  })
 }

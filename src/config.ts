@@ -100,7 +100,7 @@ export const Config = z.object({
   runCodeDisplay: z.union(['hidden', 'compact', 'detailed'] as const)
     .description('How run_code/bash/pwsh calls render: hidden, a summary, or full arguments and output.')
     .volatile(),
-  maxTranscriptEntries: z.number().step(1).min(50).default(2000)
+  maxTranscriptEntries: z.number().step(1).min(50).default(600)
     .description('Maximum transcript entries kept in the terminal view. Applies immediately.')
     .volatile(),
   fullscreen: z.boolean().default(false)
@@ -140,7 +140,7 @@ export function resolveConfig(config: Config | undefined): ResolvedConfig {
     showReasoning,
     thinkingDisplay: resolveDisplayMode(config?.thinkingDisplay) ?? (showReasoning ? 'detailed' : 'hidden'),
     runCodeDisplay: resolveDisplayMode(config?.runCodeDisplay) ?? 'detailed',
-    maxTranscriptEntries: resolveVolatileValue(config?.maxTranscriptEntries) ?? 2000,
+    maxTranscriptEntries: resolveVolatileValue(config?.maxTranscriptEntries) ?? 600,
     fullscreen: resolveVolatileValue(config?.fullscreen) ?? false,
     theme: resolveVolatileValue(config?.theme) ?? 'auto',
     agentPreset: resolveVolatileValue(config?.agentPreset),

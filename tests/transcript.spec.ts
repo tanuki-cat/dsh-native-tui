@@ -4,7 +4,8 @@ import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import { Rule } from '../src/ui/rule.js'
 import { createPalette, markdownTheme } from '../src/ui/theme.js'
-import { contentText, liveChunkHasOutput, nextFrameDelay, nextStreamInterval, reduceTranscript, reduceTranscriptWindow, STREAM_MIN_INTERVAL_MS, transcriptFrameChanged, type TranscriptBlock, type TranscriptEntry } from '../src/ui/transcript.js'
+import { contentText, liveChunkHasOutput, reduceTranscript, reduceTranscriptWindow, type TranscriptBlock, type TranscriptEntry } from '../src/ui/transcript.js'
+import { frameCostMs, frameOverrunMs, nextFrameDelay, nextStreamInterval, settleGraceMs, STREAM_MIN_INTERVAL_MS, STREAM_PAINT_CEILING_MS, transcriptFrameChanged } from '../src/ui/stream-pacing.js'
 import { renderTranscriptBlock } from '../src/ui/transcript-render.js'
 import { REASONING_REVEAL_MAX_MS, revealStreamText, STREAM_TEXT_MAX_BACKLOG } from '../src/ui/reasoning-reveal.js'
 import { sameTranscriptBlock, TranscriptRenderer } from '../src/ui/transcript-renderer.js'
@@ -409,6 +410,26 @@ describe('reduceTranscript', () => {
     const nextPaint = reduceTranscriptWindow(entries, options, 1_250)
     expect(nextPaint.blocks.map(block => block.kind)).toEqual(['assistant', 'tool'])
     expect(nextPaint.revealPending).toBe(false)
+  })
+
+  it('keeps a delayed paint from settling the tool row with the content', () => {
+    // Backed-off pacing can put the first paint 500 ms after the content. A
+    // fixed 150 ms grace has already expired by then, so the final text and the
+    // tool card would share that frame; the grace has to follow the interval.
+    const entries: TranscriptEntry[] = [
+      liveChunk(1, 1, 1, { type: 'reasoning-delta', index: 0, text: 'thought' }, 1_000),
+      liveChunk(2, 1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: 'thought' } }, 1_002),
+      durable('tool/call', { turn: 1, step: 1, callId: 'call-1', name: 'run_code', arguments: '{}' }, 3),
+    ]
+    const fixed = reduceTranscriptWindow(entries, options, 1_502)
+    expect(fixed.blocks.map(block => block.kind)).toEqual(['assistant', 'tool'])
+
+    const paced = reduceTranscriptWindow(entries, options, 1_502, settleGraceMs(STREAM_PAINT_CEILING_MS))
+    expect(paced.blocks.map(block => block.kind)).toEqual(['assistant'])
+    expect(paced.revealPending).toBe(true)
+
+    const nextPaint = reduceTranscriptWindow(entries, options, 1_552, settleGraceMs(STREAM_PAINT_CEILING_MS))
+    expect(nextPaint.blocks.map(block => block.kind)).toEqual(['assistant', 'tool'])
   })
 
   it('holds a tool row behind the reveal but still shows a following failure', () => {
@@ -1306,23 +1327,98 @@ describe('liveChunkHasOutput', () => {
   })
 })
 
+describe('frameOverrunMs', () => {
+  it('measures lateness against the due time', () => {
+    expect(frameOverrunMs(1_000, 1_012)).toBe(12)
+    expect(frameOverrunMs(1_000, 990)).toBe(0)
+  })
+
+  it('reports zero for an inline frame or an unusable clock', () => {
+    expect(frameOverrunMs(undefined, 1_000)).toBe(0)
+    expect(frameOverrunMs(Number.NaN, 1_000)).toBe(0)
+    expect(frameOverrunMs(1_000, Number.POSITIVE_INFINITY)).toBe(0)
+  })
+})
+
+describe('frameCostMs', () => {
+  it('adds the rebuild to the measured slip', () => {
+    expect(frameCostMs(4, 20, 33)).toBe(24)
+  })
+
+  it('caps the slip at the interval the frame ran on', () => {
+    // A 300 ms stall unrelated to the paint doubles the interval once instead
+    // of commanding a 600 ms backoff.
+    expect(frameCostMs(0, 300, 33)).toBe(33)
+  })
+
+  it('still backs off a genuinely expensive paint to twice its cost', () => {
+    // The cap moves with the interval, so each late frame doubles it until the
+    // paint fits in half of the loop.
+    let interval = STREAM_MIN_INTERVAL_MS
+    for (const expected of [66, 132, 264, 500]) {
+      interval = nextStreamInterval(interval, frameCostMs(0, 250, interval))
+      expect(interval).toBe(expected)
+    }
+  })
+
+  it('ignores non-finite measurements', () => {
+    expect(frameCostMs(Number.NaN, Number.NaN, 33)).toBe(0)
+  })
+})
+
+describe('settleGraceMs', () => {
+  it('keeps the floor for the streaming cadence', () => {
+    expect(settleGraceMs(STREAM_MIN_INTERVAL_MS)).toBe(150)
+  })
+
+  it('follows a backed-off interval', () => {
+    expect(settleGraceMs(STREAM_PAINT_CEILING_MS)).toBe(550)
+  })
+})
+
 describe('nextStreamInterval', () => {
   it('holds the streaming floor for a cheap frame', () => {
     expect(nextStreamInterval(STREAM_MIN_INTERVAL_MS, 0)).toBe(STREAM_MIN_INTERVAL_MS)
-  })
-
-  it('widens the interval for an over-budget frame', () => {
-    expect(nextStreamInterval(STREAM_MIN_INTERVAL_MS, 40)).toBe(50)
+    expect(nextStreamInterval(STREAM_MIN_INTERVAL_MS, 2)).toBe(STREAM_MIN_INTERVAL_MS)
   })
 
   it('narrows back toward the floor after a cheap frame', () => {
     expect(nextStreamInterval(100, 1)).toBe(75)
   })
 
-  it('clamps the widened interval', () => {
+  it('holds the interval to twice the measured frame cost', () => {
+    // A frame may occupy half the loop; the reader that turns model bytes into
+    // events — and stamps the timestamps the decode rate is measured from —
+    // gets the other half. A frame that just cost 90 ms is followed by a 180 ms
+    // interval immediately, not one frame later.
+    expect(nextStreamInterval(STREAM_MIN_INTERVAL_MS, 90)).toBe(180)
+    expect(nextStreamInterval(400, 300)).toBe(STREAM_PAINT_CEILING_MS)
+  })
+
+  it('recovers toward the floor one step at a time', () => {
+    // One cheap frame inside a heavy window must not snap the interval back and
+    // paint the loop back to back; it earns a quarter of the distance.
+    expect(nextStreamInterval(400, 10)).toBe(300)
+    expect(nextStreamInterval(120, 40)).toBe(90)
+  })
+
+  it('converges on the measured frame cost instead of running to the ceiling', () => {
+    // 20 ms frames want a 40 ms interval. Starting from the floor it must settle
+    // near there rather than climb: over-pacing discards streaming frames for no
+    // gain once the loop already has enough room.
     let interval = STREAM_MIN_INTERVAL_MS
-    for (let frame = 0; frame < 20; frame += 1) interval = nextStreamInterval(interval, 40)
-    expect(interval).toBe(100)
+    for (let frame = 0; frame < 40; frame += 1) interval = nextStreamInterval(interval, 20)
+    expect(interval).toBe(40)
+  })
+
+  it('keeps widening on a sustained budget overrun until the ceiling', () => {
+    let interval = STREAM_MIN_INTERVAL_MS
+    for (let frame = 0; frame < 40; frame += 1) interval = nextStreamInterval(interval, 600)
+    expect(interval).toBe(STREAM_PAINT_CEILING_MS)
+  })
+
+  it('caps the paint-bound interval so a pathological frame cannot stall the stream', () => {
+    expect(nextStreamInterval(STREAM_MIN_INTERVAL_MS, 10_000)).toBe(STREAM_PAINT_CEILING_MS)
   })
 })
 
@@ -1746,6 +1842,84 @@ describe('TranscriptRenderer component reuse', () => {
     renderer.clear()
     renderer.set([], [])
     expect(renderer.contentChanged).toBe(true)
+  })
+})
+
+describe('TranscriptRenderer paint memo', () => {
+  const user = (seq: number, text: string): TranscriptEntry =>
+    durable('user/message', { content: [{ type: 'text', text }], source: { kind: 'user' } }, seq)
+
+  /** First row component, which is where the memo lives. */
+  const firstRow = (renderer: TranscriptRenderer): { render(width: number): string[] } =>
+    renderer.container.children[0] as unknown as { render(width: number): string[] }
+
+  it('paints the same lines array while a row is unchanged at one width', () => {
+    const renderer = new TranscriptRenderer(options)
+    renderer.set([user(1, 'hello')], [])
+    const row = firstRow(renderer)
+    const first = row.render(80)
+    expect(row.render(80)).toBe(first)
+  })
+
+  it('repaints a row at a new width', () => {
+    const renderer = new TranscriptRenderer(options)
+    renderer.set([user(1, 'a long line that wraps differently at each width '.repeat(3))], [])
+    const row = firstRow(renderer)
+    const wide = row.render(80)
+    expect(row.render(40)).not.toBe(wide)
+  })
+
+  it('repaints the row whose block changed', () => {
+    const renderer = new TranscriptRenderer(options)
+    renderer.set([user(1, 'hello')], [])
+    const before = renderer.container.render(80)
+    renderer.set([user(1, 'hello again')], [])
+    expect(renderer.container.render(80)).not.toBe(before)
+    expect(renderer.container.render(80).join(String.fromCharCode(10))).toContain('hello again')
+  })
+
+  it('keeps a row memoized across a rebuild that reuses it', () => {
+    const renderer = new TranscriptRenderer(options)
+    const entries = [user(1, 'hello'), user(2, 'world')]
+    renderer.set(entries, [])
+    const row = firstRow(renderer)
+    const painted = row.render(80)
+    renderer.set(entries, [])
+    expect(firstRow(renderer)).toBe(row)
+    expect(row.render(80)).toBe(painted)
+  })
+
+  it('drops the memo when the display density changes', () => {
+    const renderer = new TranscriptRenderer(options)
+    renderer.set([user(1, 'hello')], [])
+    const before = firstRow(renderer)
+    const painted = before.render(80)
+    renderer.setDisplayModes('compact', 'compact')
+    const after = firstRow(renderer)
+    expect(after).not.toBe(before)
+    // The previous component would otherwise keep rendering its old density.
+    expect(after.render(80)).not.toBe(painted)
+  })
+})
+
+describe('TranscriptRenderer settle grace', () => {
+  it('paces the grace from set() into the reduction', () => {
+    // The renderer owns the clock the reducer sees, so a paint that lands 500 ms
+    // after the content must pass an interval-scaled grace through, or the card
+    // joins the frame that first shows the final text.
+    vi.useFakeTimers()
+    vi.setSystemTime(1_502)
+    const entries: TranscriptEntry[] = [
+      liveChunk(1, 1, 1, { type: 'reasoning-delta', index: 0, text: 'thought' }, 1_000),
+      liveChunk(2, 1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: 'thought' } }, 1_002),
+      durable('tool/call', { turn: 1, step: 1, callId: 'call-1', name: 'run_code', arguments: '{}' }, 3),
+    ]
+    const renderer = new TranscriptRenderer(options)
+    const text = (): string => renderer.container.render(120).join(String.fromCharCode(10))
+    renderer.set(entries, [])
+    expect(text()).toContain('run_code')
+    renderer.set(entries, [], settleGraceMs(STREAM_PAINT_CEILING_MS))
+    expect(text()).not.toContain('run_code')
   })
 })
 

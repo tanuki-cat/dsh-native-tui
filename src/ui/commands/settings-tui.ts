@@ -106,11 +106,11 @@ export const TUI_SETTINGS: readonly TuiSetting[] = [
     key: 'maxTranscriptEntries',
     label: 'Transcript entries',
     section: 'Display',
-    description: 'Maximum entries kept in the terminal view; older entries scroll out of the retained window.',
+    description: 'Maximum entries kept in the terminal view; older entries scroll out of the retained window. Higher values cost a slower stream frame.',
     apply: 'live',
     kind: 'number',
     placeholder: 'integer >= 50',
-    fallback: () => 2000,
+    fallback: () => 600,
     validate: value => {
       const parsed = Number(value)
       if (!Number.isSafeInteger(parsed) || parsed < 50) return 'Enter a whole number >= 50.'

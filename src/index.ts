@@ -57,7 +57,7 @@ export async function apply(ctx: Context, config: TuiConfig): Promise<void> {
     const runCode = resolveDisplayMode(config.runCodeDisplay) ?? 'detailed'
     resolved.title = resolveVolatileValue(config.title) ?? 'DeepSeek Harness'
     app?.setDisplayModes(thinking, runCode)
-    app?.setMaxEntries(resolveVolatileValue(config.maxTranscriptEntries) ?? 2000)
+    app?.setMaxEntries(resolveVolatileValue(config.maxTranscriptEntries) ?? 600)
     app?.setTitle(resolved.title)
   }
   ctx.inject(['settings'], (child) => {

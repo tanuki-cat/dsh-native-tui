@@ -28,26 +28,8 @@ import { clip } from './tool-preview.js'
 import { REASONING_LIVE_PROGRESS_PREFIX, REASONING_REVEAL_RECENT_MS, reasoningRevealFrom, rememberRevealProgress, revealCompletedReasoning, revealDurableReasoning, revealStreamText, STREAM_TEXT_MAX_BACKLOG, STREAM_TEXT_PROGRESS_PREFIX, type RevealProgress } from './reasoning-reveal.js'
 import { debug } from '../debug.js'
 import { isCodeExecutionTool } from './transcript-render.js'
-
-/** Streaming frame interval bounds, in milliseconds. */
-export const STREAM_MIN_INTERVAL_MS = 33
-const STREAM_MAX_INTERVAL_MS = 100
-/** Estimated frame cost above which the stream interval backs off. */
-const STREAM_FRAME_BUDGET_MS = 8
-/**
- * Grace after an assistant block's last content before the rows that follow it
- * are shown. One paint interval is at most {@link STREAM_MAX_INTERVAL_MS}, so a
- * shorter grace would let the final thinking text and the tool card that
- * follows it land on the same frame, which reads as the thinking ending and
- * the card appearing at once.
- */
-const ASSISTANT_SETTLE_MS = STREAM_MAX_INTERVAL_MS + 50
-/**
- * Rows dropped per saturated-window trim. The window waits until a whole batch
- * of rows has overflowed, then drops them at once: one full repaint per batch
- * instead of one per arriving block.
- */
-const TRIM_BATCH = 50
+import { STREAM_SETTLE_MIN_MS } from './stream-pacing.js'
+import { trimTranscriptWindow } from './transcript-window.js'
 
 /**
  * Nested PTC tools that always get their own card, including the pending row
@@ -56,67 +38,6 @@ const TRIM_BATCH = 50
  */
 const PTC_CARD_TOOLS: ReadonlySet<string> = new Set(['write', 'edit'])
 
-/**
- * Estimated milliseconds pi-tui spends re-rendering one character of streaming
- * Markdown. The reducer cannot measure that render, so the caller estimates it
- * from the live block's size to decide the next frame interval.
- */
-export const STREAM_MS_PER_CHAR = 0.00025
-
-/**
- * Next streaming frame interval for one measured rebuild. A frame that runs
- * over budget widens the interval so later frames stay complete on a busy
- * terminal; a cheap frame narrows it back toward the streaming floor.
- * @param current - the interval the measured frame used.
- * @param frameMs - estimated cost of that frame, including the live Markdown render.
- * @returns the interval to use for the next stream frame.
- */
-export function nextStreamInterval(current: number, frameMs: number): number {
-  const scaled = frameMs > STREAM_FRAME_BUDGET_MS ? current * 1.5 : current * 0.75
-  return Math.max(STREAM_MIN_INTERVAL_MS, Math.min(STREAM_MAX_INTERVAL_MS, Math.round(scaled)))
-}
-
-/**
- * Delay before the next streaming frame.
- *
- * The delay is measured from the previous paint, not from the chunk that
- * requested it. Chunk arrivals are bursty, so re-arming a full interval on
- * every arrival makes frames alternate between one and two intervals — a
- * rhythm that reads as stutter even when each frame is cheap.
- * @param interval - the current adaptive frame interval.
- * @param elapsedSincePaint - milliseconds since the last painted frame.
- * @returns milliseconds to wait before painting.
- */
-export function nextFrameDelay(interval: number, elapsedSincePaint: number): number {
-  return Math.max(0, interval - Math.max(0, elapsedSincePaint))
-}
-
-/** What the last painted frame showed, for skipping identical repaints. */
-export interface TranscriptPaintMark {
-  /** Revision of the rows the rebuild produced, bumped when they change. */
-  readonly revision: number
-  /** The wait row text that frame drew, empty when it drew none. */
-  readonly wait: string
-}
-
-/**
- * Whether a rebuild has anything new to paint.
- *
- * Frames are scheduled on a cadence, so some rebuild the same rows as the last
- * one. Repainting an identical screen only costs terminal writes; a local
- * reveal is the one case with no incoming data that still needs frames.
- * @param painted - state the last painted frame reflected.
- * @param current - state the rebuild just produced.
- * @param revealing - whether a completed reasoning block is still expanding.
- * @returns true when the frame must be painted.
- */
-export function transcriptFrameChanged(
-  painted: TranscriptPaintMark,
-  current: TranscriptPaintMark,
-  revealing: boolean,
-): boolean {
-  return revealing || current.revision !== painted.revision || current.wait !== painted.wait
-}
 /** One rendered transcript row. */
 export type TranscriptBlock = ({
   readonly kind: 'user'; readonly text: string
@@ -330,14 +251,16 @@ export interface TranscriptReduction {
  * @param entries - contiguous durable and transient event window.
  * @param options - display limits and palette.
  * @param now - wall clock for revealing a completed reasoning block; defaults to now.
+ * @param settleMs - grace before rows that follow an assistant block are shown.
  * @returns rendered transcript blocks, oldest first.
  */
 export function reduceTranscript(
   entries: readonly TranscriptEntry[],
   options: TranscriptOptions,
   now = Date.now(),
+  settleMs = STREAM_SETTLE_MIN_MS,
 ): TranscriptBlock[] {
-  return reduceTranscriptWindow(entries, options, now).blocks
+  return reduceTranscriptWindow(entries, options, now, settleMs).blocks
 }
 
 /**
@@ -345,12 +268,16 @@ export function reduceTranscript(
  * @param entries - contiguous durable and transient event window.
  * @param options - display limits and palette.
  * @param now - wall clock for revealing a completed reasoning block; defaults to now.
+ * @param settleMs - grace before rows that follow an assistant block are shown.
+ *   The renderer passes one paced to the current frame interval, so a backed-off
+ *   window cannot paint the final text and the next tool card together.
  * @returns the rendered blocks and the oldest entry a retained block needs.
  */
 export function reduceTranscriptWindow(
   entries: readonly TranscriptEntry[],
   options: TranscriptOptions,
   now = Date.now(),
+  settleMs = STREAM_SETTLE_MIN_MS,
 ): TranscriptReduction {
   const blocks: TranscriptBlock[] = []
   /** Entry index that created each block, parallel to `blocks`; every event appends at most one. */
@@ -1027,12 +954,14 @@ export function reduceTranscriptWindow(
     // A delta path has no local reveal, yet its final thinking text and the
     // tool call that follows it arrive within milliseconds, so without this
     // grace the two land on the same paint and the card looks like it appeared
-    // the instant the thinking finished.
+    // the instant the thinking finished. The grace outlasts the current frame
+    // interval: with painting backed off, the first paint after the content can
+    // be a whole interval later, and a fixed grace would let the card into it.
     const previousAssistantAt = lastAssistantAt
     if (previousAssistantAt !== undefined
       && (block.kind === 'tool' || block.kind === 'compaction'
         || (block.kind === 'notice' && block.tone === 'info'))
-      && now - previousAssistantAt < ASSISTANT_SETTLE_MS) {
+      && now - previousAssistantAt < settleMs) {
       settleHeld = true
       continue
     }
@@ -1053,28 +982,6 @@ export function reduceTranscriptWindow(
     else lastAssistantAt = undefined
   }
   const pending = revealPending || settleHeld
-  if (visible.length <= options.maxEntries) {
-    return { blocks: visible, retainedFrom: visibleSources[0] ?? 0, revealPending: pending }
-  }
-  // Trim in one big step and only when the overflow grew past a whole batch:
-  // main-screen pi-tui repaints the full transcript when a row above the
-  // viewport changes, so a per-block top trim (or a hidden-count notice that
-  // rewrites its number every frame) would clear the screen on every new
-  // block. A static notice plus hysteresis turns that into one repaint per
-  // TRIM_BATCH dropped rows.
-  const overflow = visible.length - options.maxEntries
-  // A small cap (an explicit setting) trims exactly at its bound: waiting for a
-  // whole batch there would let the window grow far past what was asked for.
-  const batched = options.maxEntries >= TRIM_BATCH
-  const hidden = batched && overflow < TRIM_BATCH ? 0 : overflow
-  const trimmed: TranscriptBlock[] = []
-  // The notice carries no count: a number that changed every frame would
-  // rewrite this top row and repaint the transcript on every arrival.
-  if (hidden > 0) trimmed.push({ kind: 'notice', tone: 'info', text: '… earlier transcript entries hidden …' })
-  trimmed.push(...visible.slice(hidden))
-  return {
-    blocks: trimmed,
-    retainedFrom: visibleSources[hidden] ?? 0,
-    revealPending: pending,
-  }
+  const trimmed = trimTranscriptWindow(visible, visibleSources, options.maxEntries)
+  return { blocks: trimmed.blocks, retainedFrom: trimmed.retainedFrom, revealPending: pending }
 }
