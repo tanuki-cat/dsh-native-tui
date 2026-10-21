@@ -10,7 +10,7 @@ DeepSeek Harness 的 host-native 终端前端，基于 pi-tui。
 ## 特性
 
 - 新建/恢复 Session，owned root Agent。
-- 流式文本、Markdown、reasoning（含网关只在完成时回传的完整块）、工具卡片（write/edit 结果渲染 ± diff 行，含 `run_code` 内嵌子调用与 native 直接调用）、turn 失败提示。
+- 流式文本、Markdown、reasoning（含网关只在完成时回传的完整块）、工具卡片（write/edit 结果渲染 ± diff 行，diff 卡片头显示产生它的工具与文件，如 `⚙ edit · src/file.ts`；含 `run_code` 内嵌子调用与 native 直接调用）、turn 失败提示。
 - 本地命令与宿主命令执行（compact/feedback/goal/permission/plan）；slash 命令支持子命令补全，例如 `/provider` 显示 add/list/edit/models/input/remove，`/reasoning` 后输入空格显示 map；子命令已完整输入时回车直接执行；从补全中选中时，如果当前过滤结果只包含无参数子命令则直接执行；混有带参数子命令时保持插入，继续输入参数。
 - 审批与问答 waterfall；所有独立 overlay（Choice/TextInput/Approval、Markdown/Text Pager、Image）统一使用带边框和全宽背景的 opaque dialog frame，长内容自动换行/补齐。问答面板支持单选与多选：多选用 Space 勾选、Enter 提交，Other 提供自由文本（多选时会与已勾选项一并返回）；每题统一提供 `Skip this question` 行（无选项文本题为 `Answer… / Skip this question` 菜单），跳过只返回 `{ id, selected: [] }` 并继续批次；Esc 或请求 signal 中止则以 `UserQuestionError(ASK_ABORTED)` 取消整个批次。
 - 模型选择器（LLM catalog 为空时明确提示）、reasoning effort 切换与映射编辑、权限预设、后台任务、子代理列表。

@@ -78,13 +78,15 @@ export function renderTranscriptBlock(block: TranscriptBlock, options: Transcrip
       const status = '└ ' + (block.pending ? palette.warning('running…') : block.isError === true ? palette.error('error') : palette.success('done'))
       const diffs = block.diffs ?? []
       const filePath = fileToolPath(block.name, block.args)
+      // The header names the tool call that produced the change, then the file.
+      const diffHead = (path: string): string => palette.bold(palette.accent('⚙ ' + block.name + ' · ' + path))
       if (diffs.length > 0 || filePath !== undefined) {
         const lines: string[] = []
-        if (diffs.length === 0) lines.push(palette.bold(palette.accent('diff ' + filePath)))
+        if (diffs.length === 0 && filePath !== undefined) lines.push(diffHead(filePath))
         for (const diff of diffs) {
           // Keep native single-file headers stable from call through settlement.
           const path = diffs.length === 1 ? filePath ?? diff.path : diff.path
-          lines.push(palette.bold(palette.accent('diff ' + path)))
+          lines.push(diffHead(path))
           for (const row of diffLines(diff.oldText, diff.newText, 60)) {
             lines.push(row.kind === 'add'
               ? palette.success('│ + ' + row.text)

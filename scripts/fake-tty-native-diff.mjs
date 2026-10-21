@@ -140,8 +140,8 @@ child.on('exit', (code, signal) => {
   const pass = code === 0 && signal === null && phase === 5
     && collapsedInitially && expanded && collapsedAgain
     && clean.includes('write .tmp/native-diff-demo.txt')
-    && clean.includes('diff .tmp/native-diff-demo.txt')
-    && !clean.includes('⚙ write') && !clean.includes('⚙ edit')
+    && clean.includes('⚙ edit · .tmp/native-diff-demo.txt')
+    && !clean.includes('⚙ write')
     && !clean.includes('├ args') && !clean.includes('├ result')
     && !clean.includes('│ + before')
     && clean.includes('│ - before')

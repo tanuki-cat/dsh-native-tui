@@ -105,7 +105,7 @@ describe('write content cards', () => {
     renderer.toggleWritePreview()
     expect(renderer.container.children.at(-1)).toBe(editComponent)
     expect(output()).toContain('CODE_LINE_29')
-    expect(output()).toContain('diff edit.ts')
+    expect(output()).toContain('⚙ edit · edit.ts')
     expect(output()).toContain('│ + new')
     renderer.toggleWritePreview()
     expect(output()).not.toContain('CODE_LINE_29')

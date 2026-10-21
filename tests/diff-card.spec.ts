@@ -17,10 +17,10 @@ const render = (block: TranscriptBlock, width = 100): string => renderTranscript
 describe('file diff cards', () => {
   it.each(['edit', 'custom-tool'])('renders only file and diff rows for %s', name => {
     const output = render(card({ name }))
-    expect(output).toContain('diff src/example.ts')
+    expect(output).toContain('⚙ ' + name + ' · src/example.ts')
     expect(output).toContain('│ - before')
     expect(output).toContain('│ + after')
-    for (const hidden of ['⚙', '├ args', '├ result', '├ diff', 'Successfully updated', '└ done', 'old_string', 'new_string']) {
+    for (const hidden of ['├ args', '├ result', '├ diff', 'Successfully updated', '└ done', 'old_string', 'new_string']) {
       expect(output).not.toContain(hidden)
     }
   })
@@ -64,11 +64,11 @@ describe('file diff cards', () => {
       { path: 'one.ts', oldText: null, newText: Array.from({ length: 100 }, (_, index) => 'line ' + index).join('\n') },
       { path: 'two.ts', oldText: 'old', newText: 'new' },
     ] }))
-    expect(output).toContain('diff one.ts')
-    expect(output).toContain('diff two.ts')
+    expect(output).toContain('⚙ edit · one.ts')
+    expect(output).toContain('⚙ edit · two.ts')
     expect(output).toContain('lines omitted')
     expect(output).toContain('│ + new')
-    expect(output).not.toContain('diff src/example.ts')
+    expect(output).not.toContain('⚙ edit · src/example.ts')
   })
 
   it('leaves non-file tools and malformed-argument fallbacks readable', () => {

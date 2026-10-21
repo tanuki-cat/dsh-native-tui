@@ -225,7 +225,7 @@ describe('reduceTranscript', () => {
       diffs: [{ path: 'a.ts', oldText: 'old', newText: 'new' }],
     })
     const output = renderTranscriptBlock(blocks[1]!, options).render(100).join('\n')
-    expect(output).toContain('diff a.ts')
+    expect(output).toContain('⚙ edit · a.ts')
     expect(output).not.toContain('├ args')
     expect(output).not.toContain('updated a.ts')
     expect(output).toContain('│ - old')

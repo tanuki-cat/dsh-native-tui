@@ -124,8 +124,8 @@ child.on('exit', (code, signal) => {
   const clean = strip(out)
   const pass = code === 0 && signal === null && phase === 3
     && clean.includes('write ' + file)
-    && clean.includes('diff ' + file)
-    && !clean.includes('⚙ write') && !clean.includes('⚙ edit')
+    && clean.includes('⚙ edit · ' + file)
+    && !clean.includes('⚙ write')
     && !clean.includes('│ + before')
     && clean.includes('│ - before')
     && clean.includes('│ + after')
