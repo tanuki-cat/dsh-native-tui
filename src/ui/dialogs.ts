@@ -1,5 +1,6 @@
 import {
   Container,
+  Editor,
   Image,
   Input,
   Markdown,
@@ -302,6 +303,98 @@ export function showTextInput(
       }
       dialog.input.onEscape = () => { finish(undefined) }
     } catch (error) {
+      reject(error)
+      return
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
+/** Multi-line editor dialog; the focused dialog forwards keys to its editor. */
+class MultilineInputDialog implements Component {
+  readonly editor: Editor
+  onCancel?: () => void
+  constructor(
+    tui: TUI,
+    private readonly title: string,
+    initialValue: string,
+    private readonly hint: string,
+    private readonly palette: Palette,
+  ) {
+    this.editor = new Editor(tui, {
+      borderColor: text => palette.dim(text),
+      selectList: selectTheme(palette),
+    }, { paddingX: 0 })
+    this.editor.setText(initialValue)
+    this.editor.focused = true
+  }
+
+  render(width: number): string[] {
+    const inner = Math.max(20, width - 4)
+    return dialogFrame([
+      ...new Text(this.title, 0, 0).render(inner),
+      '',
+      ...this.editor.render(inner),
+      '',
+      ...new Text(this.palette.dim(this.hint), 0, 0).render(inner),
+    ], width, this.palette)
+  }
+
+  handleInput(data: string): void {
+    if (data === String.fromCharCode(27)) {
+      this.onCancel?.()
+      return
+    }
+    this.editor.handleInput(data)
+  }
+
+  invalidate(): void { this.editor.invalidate() }
+}
+
+/**
+ * Show one multi-line editor.
+ *
+ * Enter submits and Shift+Enter or Ctrl+J inserts a newline, matching the main
+ * prompt editor. A bare Escape closes without saving; cursor and paste keys stay
+ * with the editor.
+ * @param tui - terminal surface.
+ * @param palette - active palette.
+ * @param title - dialog heading.
+ * @param initialValue - text the editor opens with.
+ * @param hint - key and semantics hint below the editor.
+ * @param signal - cancellation for the dialog.
+ * @returns the submitted text, including an empty string, or undefined on cancel.
+ */
+export function showMultilineInput(
+  tui: TUI,
+  palette: Palette,
+  title: string,
+  initialValue: string,
+  hint: string,
+  signal?: AbortSignal,
+): Promise<string | undefined> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted === true) {
+      resolve(undefined)
+      return
+    }
+    let handle: ReturnType<TUI['showOverlay']> | undefined
+    let settled = false
+    const finish = (value: string | undefined): void => {
+      if (settled) return
+      settled = true
+      signal?.removeEventListener('abort', onAbort)
+      handle?.hide()
+      resolve(value)
+    }
+    const onAbort = (): void => { finish(undefined) }
+    try {
+      const dialog = new MultilineInputDialog(tui, title, initialValue, hint, palette)
+      handle = tui.showOverlay(dialog, { width: 96, maxHeight: '85%', anchor: 'center' })
+      dialog.editor.onSubmit = text => { finish(text) }
+      dialog.onCancel = () => { finish(undefined) }
+    }
+    catch (error) {
       reject(error)
       return
     }

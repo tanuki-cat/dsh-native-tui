@@ -22,6 +22,31 @@
 /** Restatement that the gateway accepts in place of a harness identity line. */
 export const NEUTRAL_IDENTITY = 'You are a software engineering assistant.'
 
+/**
+ * Placeholder an operator-configured system prompt may carry to keep the
+ * harness prompt in place.
+ *
+ * The harness prompt is assembled per request — workspace rules, skills and
+ * tool notes can make it hundreds of kilobytes — so a custom opening sentence
+ * cannot reasonably be written by copying it. The placeholder lets a configured
+ * prompt wrap that text instead.
+ */
+export const PROMPT_PLACEHOLDER = '{prompt}'
+
+/**
+ * Expand one configured system prompt template.
+ *
+ * Expansion happens once and is not recursive: a literal placeholder inside the
+ * harness prompt stays text. The replacement is not subject to `String.replace`
+ * patterns either, because harness prompts can contain `$&` and similar runs.
+ * @param template - operator-configured system prompt.
+ * @param harnessPrompt - system text the harness assembled for this request.
+ * @returns the text to send as the leading system message.
+ */
+export function expandSystemPrompt(template: string, harnessPrompt: string): string {
+  return template.split(PROMPT_PLACEHOLDER).join(harnessPrompt)
+}
+
 /** One line that presents the harness itself as the agent's runtime. */
 const AGENT_IDENTITY = /^You are an AI agent powered by .+$/i
 

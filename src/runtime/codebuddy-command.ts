@@ -22,6 +22,7 @@ import {
   type ProfileId,
 } from '../codebuddy/profiles.js'
 import { REQUEST_SHAPE } from '../codebuddy/profiles.js'
+import { PROMPT_PLACEHOLDER } from '../codebuddy/prompt.js'
 
 /** One authorization flow as the terminal drives it. */
 interface AuthorizationLike {
@@ -41,6 +42,32 @@ interface AuthorizationLike {
   }): Promise<{ readonly status: string }>
 }
 
+/** One choice row in the guided system-prompt flow. */
+export interface CodeBuddyPromptChoice {
+  readonly value: string
+  readonly label: string
+  readonly description?: string
+}
+
+/**
+ * The Host settings slice the system-prompt wizard writes through.
+ *
+ * `systemPrompt` is declared volatile on the plugin row, so the Host applies a
+ * write live and the adapter reads it on the next request.
+ */
+export interface CodeBuddyPromptSettings {
+  describe(options?: { redactSecrets?: boolean }): readonly {
+    readonly ns: string
+    readonly value: Record<string, unknown>
+    readonly user?: unknown
+    readonly revision: number
+  }[]
+  mutate(ns: string, ops: readonly (
+    | { readonly op: 'set'; readonly path: readonly string[]; readonly value: unknown }
+    | { readonly op: 'unset'; readonly path: readonly string[] }
+  )[], expectedRevision?: number): Promise<void>
+}
+
 /** Everything the command needs from the terminal and the host. */
 export interface CodeBuddyCommandDeps {
   /** The adapter service mounted by the codebuddy plugin, when present. */
@@ -51,6 +78,8 @@ export interface CodeBuddyCommandDeps {
   readonly credentials: CredentialStoreLike | undefined
   /** Open an authorization URL in the platform browser; undefined when unsupported. */
   readonly openUrl?: (url: string) => boolean
+  /** Host settings service, for reading and writing the volatile system prompt. */
+  readonly settings?: CodeBuddyPromptSettings
   /** Cancellation for the whole command. */
   readonly signal: AbortSignal
   /** Render one notice line. */
@@ -61,6 +90,14 @@ export interface CodeBuddyCommandDeps {
     readonly placeholder?: string
     readonly secret?: boolean
   }) => Promise<string | undefined>
+  /** Show a keyboard-selected list; absent on surfaces without overlays. */
+  readonly choose?: (
+    title: string,
+    items: readonly CodeBuddyPromptChoice[],
+    hint: string,
+  ) => Promise<string | undefined>
+  /** Edit multi-line text; absent on surfaces without overlays. */
+  readonly editText?: (title: string, initialValue: string, hint: string) => Promise<string | undefined>
 }
 
 /** Shared placeholder for command runs that are not part of a streaming turn. */
@@ -78,6 +115,9 @@ export const CODEBUDDY_USAGE = [
   '  models refresh [cn|en]  force a catalogue refresh (default: both)',
   '  quota [cn|en]           remaining credits reported by the gateway',
   '  checkin [cn|en]         claim today credits (one request, no schedule)',
+  '  prompt                  guided system-prompt setup (custom template or default)',
+  '  prompt show             print the configured system prompt',
+  '  prompt reset            remove the custom template',
   '  doctor                  connectivity and capability probe, no secrets',
   '  help                    this text',
 ].join('\n')
@@ -401,6 +441,208 @@ async function doctor(deps: CodeBuddyCommandDeps): Promise<void> {
   report(deps, lines)
 }
 
+/** Profile entry id whose volatile `systemPrompt` the wizard writes. */
+export const CODEBUDDY_PROMPT_NS = 'codebuddy'
+
+/** One settings descriptor as the prompt flow reads it. */
+type PromptDescriptor = ReturnType<CodeBuddyPromptSettings['describe']>[number]
+
+/** Locate the codebuddy settings entry, or undefined when the Host does not expose it. */
+function promptDescriptorOf(settings: CodeBuddyPromptSettings): PromptDescriptor | undefined {
+  return settings.describe({ redactSecrets: true }).find(row => row.ns === CODEBUDDY_PROMPT_NS)
+}
+
+/** The custom template the user section carries, or undefined for the default. */
+function configuredPromptOf(descriptor: PromptDescriptor | undefined): string | undefined {
+  const user = descriptor?.user
+  if (user === null || typeof user !== 'object') return undefined
+  const value = (user as Record<string, unknown>).systemPrompt
+  return typeof value === 'string' && value !== '' ? value : undefined
+}
+
+/** Whether a failed settings write is the Host's stale-revision refusal. */
+function isSettingsConflict(error: unknown): boolean {
+  return error !== null && typeof error === 'object'
+    && (error as { readonly code?: unknown }).code === 'SETTINGS_CONFLICT'
+}
+
+/** Key and semantics hint shared by the editor and the confirmation. */
+const PROMPT_EDIT_HINT = 'Enter saves · Shift+Enter/Ctrl+J newline · Esc cancels · {prompt} keeps the harness prompt · empty clears'
+
+/** Human label for how a template affects the harness prompt. */
+function promptModeOf(template: string): string {
+  return template.includes(PROMPT_PLACEHOLDER) ? 'keeps the harness prompt' : 'replaces the whole system prompt'
+}
+
+/**
+ * Write the volatile `systemPrompt`, retrying once against a fresh revision.
+ * @param settings - Host settings service.
+ * @param template - template to set, or undefined to restore the default.
+ * @param revision - revision the descriptor was read at.
+ */
+async function writePromptSetting(
+  settings: CodeBuddyPromptSettings,
+  template: string | undefined,
+  revision: number,
+): Promise<void> {
+  const op = template === undefined
+    ? { op: 'unset' as const, path: ['systemPrompt'] as const }
+    : { op: 'set' as const, path: ['systemPrompt'] as const, value: template }
+  try {
+    await settings.mutate(CODEBUDDY_PROMPT_NS, [op], revision)
+  }
+  catch (error) {
+    if (!isSettingsConflict(error)) throw error
+    const fresh = promptDescriptorOf(settings)
+    if (fresh === undefined) throw new Error('the codebuddy configuration entry disappeared while saving')
+    await settings.mutate(CODEBUDDY_PROMPT_NS, [op], fresh.revision)
+  }
+}
+
+/** Persist one template (or its removal) and report what the next request sends. */
+async function savePrompt(
+  deps: CodeBuddyCommandDeps,
+  settings: CodeBuddyPromptSettings,
+  template: string | undefined,
+  revision: number,
+): Promise<void> {
+  await writePromptSetting(settings, template, revision)
+  if (template === undefined) {
+    deps.notice('info', 'CodeBuddy system prompt reset to the default. Applies to the next request.')
+    return
+  }
+  deps.notice('info', 'CodeBuddy system prompt saved (' + String(template.length) + ' chars, '
+    + promptModeOf(template) + '). Applies to the next request.')
+}
+
+/** Print the configured template without opening an overlay. */
+function showPromptSetting(deps: CodeBuddyCommandDeps, descriptor: PromptDescriptor | undefined): void {
+  if (descriptor === undefined) {
+    report(deps, ['the codebuddy configuration entry is not exposed to the settings service in this profile'], 'warning')
+    return
+  }
+  const custom = configuredPromptOf(descriptor)
+  if (custom === undefined) {
+    report(deps, [
+      'CodeBuddy system prompt: default',
+      '  CN restates the harness identity line; every other line is sent unchanged.',
+      '  Run /codebuddy prompt to add a custom template.',
+    ])
+    return
+  }
+  report(deps, [
+    'CodeBuddy system prompt: custom template (' + String(custom.length) + ' chars, ' + promptModeOf(custom) + ')',
+    ...custom.split('\n').map(line => '  ' + line),
+  ])
+}
+
+/** Guided template editor: edit, confirm a whole-prompt replacement, then save. */
+async function promptWizard(deps: CodeBuddyCommandDeps, settings: CodeBuddyPromptSettings): Promise<void> {
+  const choose = deps.choose
+  const editText = deps.editText
+  if (choose === undefined || editText === undefined) {
+    report(deps, ['this surface has no interactive editor; use /codebuddy prompt show|reset'], 'warning')
+    return
+  }
+  const descriptor = promptDescriptorOf(settings)
+  if (descriptor === undefined) {
+    report(deps, ['the codebuddy configuration entry is not exposed to the settings service in this profile'], 'warning')
+    return
+  }
+  const custom = configuredPromptOf(descriptor)
+  const current = custom === undefined
+    ? 'default (CN restates the identity line; everything else unchanged)'
+    : 'custom template · ' + String(custom.length) + ' chars · ' + promptModeOf(custom)
+  const action = await choose(
+    'CodeBuddy system prompt\nCurrent: ' + current,
+    [
+      {
+        value: 'edit',
+        label: custom === undefined ? 'Add a custom template…' : 'Edit the custom template…',
+        description: 'Multi-line editor; {prompt} keeps tool instructions and workspace rules',
+      },
+      {
+        value: 'reset',
+        label: 'Use the default prompt',
+        description: 'Remove the custom template; CN only restates the identity line',
+      },
+    ],
+    'Enter selects · Esc cancels',
+  )
+  if (action === undefined) return
+  if (action === 'reset') {
+    if (custom === undefined) {
+      deps.notice('info', 'CodeBuddy already uses the default system prompt.')
+      return
+    }
+    await savePrompt(deps, settings, undefined, descriptor.revision)
+    return
+  }
+
+  let draft = custom ?? PROMPT_PLACEHOLDER
+  for (;;) {
+    const text = await editText('CodeBuddy system prompt', draft, PROMPT_EDIT_HINT)
+    if (text === undefined) return
+    if (text.trim() === '') {
+      await savePrompt(deps, settings, undefined, descriptor.revision)
+      return
+    }
+    if (!text.includes(PROMPT_PLACEHOLDER)) {
+      const confirm = await choose(
+        'No {prompt} placeholder\nThis template replaces the whole harness system prompt, including tool instructions and workspace rules.',
+        [
+          { value: 'save', label: 'Save anyway', description: 'Send only the configured text as the system prompt' },
+          { value: 'back', label: 'Back to the editor', description: 'Add {prompt} to keep the harness prompt' },
+        ],
+        'Enter selects · Esc cancels',
+      )
+      if (confirm === undefined) return
+      if (confirm === 'back') {
+        draft = text
+        continue
+      }
+    }
+    await savePrompt(deps, settings, text, descriptor.revision)
+    return
+  }
+}
+
+/** `prompt` sub-command: guided by default, with scripted show/reset escape hatches. */
+async function promptCommand(deps: CodeBuddyCommandDeps, action: string): Promise<void> {
+  const settings = deps.settings
+  if (settings === undefined) {
+    report(deps, ['the settings service is unavailable in this profile, so the system prompt cannot be changed here'], 'warning')
+    return
+  }
+  try {
+    const descriptor = promptDescriptorOf(settings)
+    if (action === 'show') {
+      showPromptSetting(deps, descriptor)
+      return
+    }
+    if (descriptor === undefined) {
+      report(deps, ['the codebuddy configuration entry is not exposed to the settings service in this profile'], 'warning')
+      return
+    }
+    if (action === 'reset') {
+      if (configuredPromptOf(descriptor) === undefined) {
+        deps.notice('info', 'CodeBuddy already uses the default system prompt.')
+        return
+      }
+      await savePrompt(deps, settings, undefined, descriptor.revision)
+      return
+    }
+    if (action !== '') {
+      report(deps, ['expected "/codebuddy prompt", "/codebuddy prompt show" or "/codebuddy prompt reset"', '', CODEBUDDY_USAGE], 'warning')
+      return
+    }
+    await promptWizard(deps, settings)
+  }
+  catch (error) {
+    report(deps, ['could not update the CodeBuddy system prompt — ' + redact(error instanceof Error ? error.message : String(error))], 'error')
+  }
+}
+
 /**
  * Run one /codebuddy invocation.
  * @param args - the text after the command name.
@@ -414,6 +656,7 @@ export async function runCodebuddyCommand(args: string, deps: CodeBuddyCommandDe
   if (sub === 'logout') { await logout(deps, rest[0] ?? ''); return }
   if (sub === 'quota') { await quota(deps, rest[0] ?? ''); return }
   if (sub === 'checkin') { await checkin(deps, rest[0] ?? ''); return }
+  if (sub === 'prompt') { await promptCommand(deps, rest[0] ?? ''); return }
   if (sub === 'doctor') { await doctor(deps); return }
   if (sub === 'models') {
     const [action = '', target = ''] = rest

@@ -107,6 +107,48 @@ describe('codebuddy profiles', () => {
     })
   })
 
+  it('sends a configured system prompt in place of the harness one', async () => {
+    const options = {
+      provider: 'codebuddy',
+      model: 'deepseek-v4.1-flash',
+      system: 'You are an AI agent powered by DeepSeek Harness.\n\nWorkspace rules.',
+      messages: [{ role: 'user' as const, content: [{ type: 'text' as const, text: 'Say OK' }] }],
+    }
+    const custom = 'You are CodeBuddy, the official coding assistant.'
+    type Messages = { role: string; content: unknown }[]
+
+    // Without a placeholder the template owns the opening system message.
+    const replaced = await buildChatPayload(options, enProfile, undefined, {}, { systemPrompt: custom })
+    expect((replaced.messages as Messages)[0]).toEqual({ role: 'system', content: custom })
+
+    // With the placeholder the harness prompt stays at that position.
+    const wrapped = await buildChatPayload(options, enProfile, undefined, {}, { systemPrompt: custom + '\n\n{prompt}' })
+    expect((wrapped.messages as Messages)[0]).toEqual({
+      role: 'system',
+      content: custom + '\n\n' + options.system,
+    })
+
+    // Empty keeps the default, including the CN identity restatement.
+    const untouched = await buildChatPayload(options, cnProfile, undefined, {}, { systemPrompt: '' })
+    expect((untouched.messages as Messages)[0]).toEqual({
+      role: 'system',
+      content: 'You are a software engineering assistant.\n\nWorkspace rules.',
+    })
+    const kept = await buildChatPayload(options, cnProfile, undefined, {}, { systemPrompt: '{prompt}' })
+    expect((kept.messages as Messages)[0]).toEqual({
+      role: 'system',
+      content: 'You are a software engineering assistant.\n\nWorkspace rules.',
+    })
+
+    // A request without a harness prompt still leads with the configured text.
+    const bare = await buildChatPayload({
+      provider: 'codebuddy-en',
+      model: 'deepseek-v4.1-flash',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'Say OK' }] }],
+    }, enProfile, undefined, {}, { systemPrompt: custom })
+    expect((bare.messages as Messages)[0]).toEqual({ role: 'system', content: custom })
+  })
+
   it('expresses tool_choice none by dropping the declarations', () => {
     const body: Record<string, unknown> = { tool_choice: 'none', tools: [1], functions: [2] }
     normalizeEnPayload(body)

@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { runCodebuddyCommand, type CodeBuddyCommandDeps } from '../src/runtime/codebuddy-command.js'
+import {
+  runCodebuddyCommand,
+  type CodeBuddyCommandDeps,
+  type CodeBuddyPromptSettings,
+} from '../src/runtime/codebuddy-command.js'
 
 afterEach(() => { vi.restoreAllMocks() })
 
@@ -50,6 +54,66 @@ function serviceOf(models: readonly {
     accessTokenFor: async () => '',
     logout: async () => {},
     credentialKey: () => '',
+  }
+}
+
+/** One settings write the prompt flow made. */
+interface PromptWrite {
+  readonly kind: 'set' | 'unset'
+  readonly value?: string
+}
+
+/** In-memory codebuddy settings namespace with revision accounting. */
+function settingsOf(initial?: string, conflictOnce = false): CodeBuddyPromptSettings & { readonly writes: PromptWrite[] } {
+  let custom = initial
+  let revision = 1
+  let conflict = conflictOnce
+  const writes: PromptWrite[] = []
+  return {
+    writes,
+    describe: () => [{
+      ns: 'codebuddy',
+      value: { systemPrompt: custom ?? '' },
+      user: custom === undefined ? {} : { systemPrompt: custom },
+      revision,
+    }],
+    mutate: async (_ns, ops, expected) => {
+      if (conflict) {
+        conflict = false
+        revision += 1
+        throw Object.assign(new Error('settings conflict'), { code: 'SETTINGS_CONFLICT' })
+      }
+      if (expected !== undefined && expected !== revision) {
+        throw Object.assign(new Error('settings conflict'), { code: 'SETTINGS_CONFLICT' })
+      }
+      for (const op of ops) {
+        if (op.op === 'unset') {
+          custom = undefined
+          writes.push({ kind: 'unset' })
+          continue
+        }
+        custom = typeof op.value === 'string' ? op.value : undefined
+        writes.push({ kind: 'set', value: String(op.value) })
+      }
+      revision += 1
+    },
+  }
+}
+
+/** Scripted overlay answers, recording the initial text each editor opened with. */
+function surfaceOf(
+  choices: readonly (string | undefined)[],
+  edits: readonly (string | undefined)[],
+  seen?: { readonly edits: string[] },
+): Pick<CodeBuddyCommandDeps, 'choose' | 'editText'> {
+  let choice = 0
+  let edit = 0
+  return {
+    choose: async () => choices[choice++],
+    editText: async (_title, initialValue) => {
+      seen?.edits.push(initialValue)
+      return edits[edit++]
+    },
   }
 }
 
@@ -190,5 +254,93 @@ describe('runCodebuddyCommand login', () => {
     const text = deps.notices.join('\n')
     expect(text).toContain('open this URL in a browser')
     expect(text).toContain('signed in')
+  })
+})
+
+describe('runCodebuddyCommand prompt', () => {
+  it('adds a template through the guided flow', async () => {
+    const settings = settingsOf()
+    const seen = { edits: [] as string[] }
+    const template = 'You are CodeBuddy, a coding assistant.\n\n{prompt}'
+    const deps = depsOf({ settings, ...surfaceOf(['edit'], [template], seen) })
+    await runCodebuddyCommand('prompt', deps)
+    expect(seen.edits).toEqual(['{prompt}'])
+    expect(settings.writes).toEqual([{ kind: 'set', value: template }])
+    const text = deps.notices.join('\n')
+    expect(text).toContain('saved')
+    expect(text).toContain('keeps the harness prompt')
+  })
+
+  it('confirms before saving a template without the placeholder', async () => {
+    const settings = settingsOf()
+    const seen = { edits: [] as string[] }
+    const deps = depsOf({ settings, ...surfaceOf(['edit', 'back', 'save'], ['Plain template.', 'Plain template.'], seen) })
+    await runCodebuddyCommand('prompt', deps)
+    // "Back" reopens the editor with the rejected draft.
+    expect(seen.edits).toEqual(['{prompt}', 'Plain template.'])
+    expect(settings.writes).toEqual([{ kind: 'set', value: 'Plain template.' }])
+    expect(deps.notices.join('\n')).toContain('replaces the whole system prompt')
+  })
+
+  it('resets the template from the menu', async () => {
+    const settings = settingsOf('Custom {prompt}')
+    const deps = depsOf({ settings, ...surfaceOf(['reset'], []) })
+    await runCodebuddyCommand('prompt', deps)
+    expect(settings.writes).toEqual([{ kind: 'unset' }])
+    expect(deps.notices.join('\n')).toContain('reset to the default')
+  })
+
+  it('clears the template when the editor is submitted empty', async () => {
+    const settings = settingsOf('Custom {prompt}')
+    const deps = depsOf({ settings, ...surfaceOf(['edit'], ['   ']) })
+    await runCodebuddyCommand('prompt', deps)
+    expect(settings.writes).toEqual([{ kind: 'unset' }])
+    expect(deps.notices.join('\n')).toContain('reset to the default')
+  })
+
+  it('retries once when the profile revision moved', async () => {
+    const settings = settingsOf(undefined, true)
+    const deps = depsOf({ settings, ...surfaceOf(['edit'], ['Retry {prompt}']) })
+    await runCodebuddyCommand('prompt', deps)
+    expect(settings.writes).toEqual([{ kind: 'set', value: 'Retry {prompt}' }])
+    expect(deps.notices.join('\n')).not.toContain('could not update')
+  })
+
+  it('prints the configured template and the default', async () => {
+    const custom = settingsOf('Line one\nLine two {prompt}')
+    const shown = depsOf({ settings: custom })
+    await runCodebuddyCommand('prompt show', shown)
+    const text = shown.notices.join('\n')
+    expect(text).toContain('custom template')
+    expect(text).toContain('Line one')
+    expect(text).toContain('Line two {prompt}')
+
+    const plain = depsOf({ settings: settingsOf() })
+    await runCodebuddyCommand('prompt show', plain)
+    expect(plain.notices.join('\n')).toContain('default')
+  })
+
+  it('reports a repeated reset without writing', async () => {
+    const settings = settingsOf()
+    const deps = depsOf({ settings })
+    await runCodebuddyCommand('prompt reset', deps)
+    expect(settings.writes).toEqual([])
+    expect(deps.notices.join('\n')).toContain('already uses the default')
+  })
+
+  it('refuses the wizard without the settings service or an editor', async () => {
+    const noSettings = depsOf()
+    await runCodebuddyCommand('prompt', noSettings)
+    expect(noSettings.notices.join('\n')).toContain('settings service is unavailable')
+
+    const noEditor = depsOf({ settings: settingsOf() })
+    await runCodebuddyCommand('prompt', noEditor)
+    expect(noEditor.notices.join('\n')).toContain('no interactive editor')
+  })
+
+  it('rejects an unknown prompt action', async () => {
+    const deps = depsOf({ settings: settingsOf() })
+    await runCodebuddyCommand('prompt bogus', deps)
+    expect(deps.notices.join('\n')).toContain('expected "/codebuddy prompt"')
   })
 })

@@ -239,12 +239,35 @@ dsh --profile tui
 /codebuddy models refresh    # 拉取 GET /v3/config 目录
 /codebuddy quota [cn|en]     # 剩余额度（只读，显式执行）
 /codebuddy checkin [cn|en]   # 显式签到（调用厂商自有端点，请自行确认条款）
+/codebuddy prompt            # 引导式配置系统提示词（自定义模板或恢复默认）
+/codebuddy prompt show|reset # 打印当前模板 / 删除自定义模板
 /codebuddy doctor            # 端点、请求形态与目录连通性探测，不含凭据
 ```
 
 登录前 `/model` 已能看到两条路由与 seed 模型（CN 8 个 / EN 6 个，未经真实账号验证）；登录后 `models refresh` 会用账号目录替换。
 
 国内网关会做客户端指纹校验：系统提示若以第三方 agent 身份句（`You are an AI agent powered by …`）开头，会返回 HTTP 400 `code 11128`（`Illegal API invocation from an unapproved channel`，提示「渠道校验未通过，可能不是官方客户端」）。`codebuddy` 路由在发送前把这类身份句改写为中性表述——无论提示放在 `system` 字段还是 in-history 的 system 消息里（TUI 走后者）——其余提示（工具说明、工作区规则、用户指令）逐字保留；国际版不做该校验，提示保持原样。异常时按 `code 11128` 的 hint 排查。
+
+### 系统提示词
+
+网关按系统提示做客户端指纹校验，规则可能变化。插件默认只把 harness 身份句改写为中性表述（见上），其余系统提示逐字保留；需要调整发往 CodeBuddy 的系统提示时，用 `/codebuddy prompt` 的引导界面：
+
+- **Add / Edit the custom template** 打开多行编辑器（Enter 保存，Shift+Enter 或 Ctrl+J 换行）。模板含 `{prompt}` 时，harness 当次组装的系统提示（工具说明、工作区规则、技能等）会在该位置展开，只展开一次；不含占位符则整段替换。
+- **Use the default prompt** 删除自定义模板，回到身份句改写。
+- 编辑器提交空内容等同恢复默认；不含 `{prompt}` 的模板保存前会二次确认。
+
+`/codebuddy prompt show` 打印当前模板，`/codebuddy prompt reset` 直接恢复默认。写入的是 profile patch 的 `codebuddy.systemPrompt`（volatile 字段），下一条请求即生效，无需重启。等价的配置写法：
+
+~~~yaml
+- id: codebuddy
+  name: dsh-native-tui/codebuddy
+  config:
+    systemPrompt: |
+      You are CodeBuddy, a coding assistant.
+      {prompt}
+~~~
+
+整段替换会同时丢掉工具说明与工作区规则，通常保留 `{prompt}`、只改写开头更稳妥。配置对 `codebuddy` 与 `codebuddy-en` 两条路由同时生效，CN 的身份句改写仍作用在最终文本上；其他 provider 的请求不经过本插件的 wire 层，系统提示仍由 Host 按默认规则组装，不受这里影响。
 
 ### 输入模态与图片
 
@@ -406,6 +429,17 @@ pnpm vitest run tests/main-screen-cards.spec.ts
 
 ~~~sh
 DSH_HOME=/tmp/dsh-native-tui-codebuddy-home node scripts/fake-tty-codebuddy.mjs
+~~~
+
+`/codebuddy prompt` 的引导流程（菜单 → 多行编辑器 → settings 写入 → show/reset）用同一套临时 profile 验证。探针会重置该 profile 的 `cordis.patch.yml`，只接受 `/tmp/dsh-native-tui-*` 下的 disposable home：
+
+~~~sh
+pnpm build
+pnpm pack --pack-destination .tmp
+cp -a /tmp/dsh-native-tui-codebuddy-home /tmp/dsh-native-tui-cb-prompt-home
+DSH_HOME=/tmp/dsh-native-tui-cb-prompt-home dsh plugin --profile tui remove dsh-native-tui
+DSH_HOME=/tmp/dsh-native-tui-cb-prompt-home dsh plugin --profile tui add "$PWD/.tmp/dsh-native-tui-0.2.1-rc.2.tgz"
+DSH_HOME=/tmp/dsh-native-tui-cb-prompt-home node scripts/fake-tty-codebuddy-prompt.mjs
 ~~~
 
 CodeBuddy 输入模态与图片收发用真实 Gateway 验证（有凭据时跑真实对话，无凭据时跳过联网检查）：

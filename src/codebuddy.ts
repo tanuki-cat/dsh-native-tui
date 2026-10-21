@@ -10,7 +10,8 @@
  */
 
 import z from '@deepseek-ai/schemastery'
-import type { Context } from '@deepseek-ai/cordis'
+import type { Context, Volatile } from '@deepseek-ai/cordis'
+import { resolveVolatileValue } from './config.js'
 import {
   CodeBuddyAdapter,
   type AttachmentImageService,
@@ -36,6 +37,23 @@ export interface Config {
    * image input and still read one.
    */
   models?: Record<string, ModelOverride>
+  /**
+   * System prompt template sent to both deployments.
+   *
+   * The gateway fingerprints the harness-composed prompt, so an operator needs
+   * a way to change what it says without rebuilding the plugin. `{prompt}`
+   * expands to that composed prompt — workspace rules, skills and tool notes
+   * included — so a custom opening line can keep the rest; without the
+   * placeholder the template replaces the prompt verbatim. Empty keeps the
+   * default (CN identity restated, everything else untouched).
+   *
+   * Volatile so `/codebuddy prompt` can rewrite it through the Host settings
+   * service and the next request reads the new value without a restart.
+   *
+   * Scoped to the two routes this adapter registers: the template is applied in
+   * the CodeBuddy wire layer, so no other provider's request can carry it.
+   */
+  systemPrompt?: string | Volatile<string>
 }
 
 /**
@@ -50,6 +68,8 @@ export const Config = z.object({
   models: z.dict(z.object({
     input: z.array(z.union(['text', 'image'] as const)),
   })).default({}),
+  systemPrompt: z.string().default('').volatile()
+    .description('System prompt sent to CodeBuddy. {prompt} expands to the harness-composed prompt; without it the text replaces that prompt verbatim. Empty keeps the default.'),
 }) as unknown as z<Config>
 
 /** The command and diagnostics surface the terminal reads from `host.get('codebuddy')`. */
@@ -119,6 +139,9 @@ export function apply(ctx: Context, config: Config = {}): void {
     // a composition without it stays text-only and says so in the catalogue.
     resolveAttachments: () => ctx.get('attachments') as AttachmentImageService | undefined,
     ...(config.models === undefined ? {} : { models: config.models }),
+    // Read the volatile reference per request so /codebuddy prompt applies
+    // without remounting the plugin.
+    systemPrompt: () => resolveVolatileValue(config.systemPrompt),
     onDiagnostic: message => ctx.logger?.warn?.(message),
   })
   ctx.llm.registerAdapter(PROFILES.map(profile => profile.id), adapter)

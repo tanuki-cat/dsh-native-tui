@@ -137,6 +137,13 @@ export interface CodeBuddyAdapterOptions {
    * 2026-10-19, `default` and `glm-5.0` declare no images and still read them.
    */
   models?: Readonly<Record<string, ModelOverride>>
+  /**
+   * Reads the system prompt template sent in place of the harness-composed
+   * one. Called per request so a live settings edit applies to the next turn;
+   * `{prompt}` keeps the harness prompt at that position. See
+   * `WirePromptOptions`.
+   */
+  systemPrompt?: () => string | undefined
   /** Observe a contained catalogue or credential failure. */
   onDiagnostic?: (message: string) => void
 }
@@ -355,10 +362,11 @@ export class CodeBuddyAdapter extends LlmAdapter {
     const signal = options.signal
     const access = await accessToken(store, profile, signal)
     const attachments = this.attachmentService()
+    const systemPrompt = this.config.systemPrompt?.()
     const payload = await buildChatPayload(options, profile, this.config.resolveFileText, {
       ...(attachments === undefined ? {} : { reader: attachments as WireImageReader }),
       onDiagnostic: message => this.config.onDiagnostic?.(profile.id + ': ' + message),
-    })
+    }, systemPrompt === undefined || systemPrompt === '' ? {} : { systemPrompt })
     yield* streamChat({
       profile,
       model: options.model,

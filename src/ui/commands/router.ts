@@ -18,7 +18,7 @@ import type { CodeBuddyService } from '../../codebuddy.js'
 import { INIT_AGENTS_PROMPT } from '../../runtime/init-prompt.js'
 import { openUrlInBrowser } from '../../runtime/open.js'
 import type { SkillSuggestion } from '../autocomplete.js'
-import { showTextInput } from '../dialogs.js'
+import { showChoice, showMultilineInput, showTextInput } from '../dialogs.js'
 import { attachCommand, attachmentsCommand } from './attachments.js'
 import { changesCommand, deliverablesCommand, filesCommand } from './artifacts.js'
 import { HELP_LINES } from './catalog.js'
@@ -195,6 +195,7 @@ export async function runCommandLine(line: string, deps: CommandRouterDeps): Pro
         authorization: ctx().host.get('authorization') as CodeBuddyCommandDeps['authorization'],
         credentials: ctx().host.get('credentials') as CodeBuddyCommandDeps['credentials'],
         openUrl: url => openUrlInBrowser(url),
+        settings: ctx().host.get('settings') as CodeBuddyCommandDeps['settings'],
         signal: ctx().signal,
         notice: (level, text) => ctx().notice(level, text),
         prompt: question => showTextInput(
@@ -203,6 +204,15 @@ export async function runCommandLine(line: string, deps: CommandRouterDeps): Pro
           question.message,
           question.placeholder ?? '',
           question.secret === true ? 'Input is hidden from the transcript · Esc cancels' : 'Enter submits · Esc cancels',
+          ctx().signal,
+        ),
+        choose: (title, items, hint) => showChoice(ctx().tui, ctx().palette, title, items, hint, ctx().signal),
+        editText: (title, initialValue, hint) => showMultilineInput(
+          ctx().tui,
+          ctx().palette,
+          title,
+          initialValue,
+          hint,
           ctx().signal,
         ),
       })

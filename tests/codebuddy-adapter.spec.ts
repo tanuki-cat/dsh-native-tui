@@ -167,6 +167,15 @@ describe('codebuddy adapter', () => {
     expect(adapter.status().map(entry => entry.id)).toEqual(['codebuddy', 'codebuddy-en'])
   })
 
+  it('owns only the two CodeBuddy routes', () => {
+    const adapter = new CodeBuddyAdapter({ store: () => undefined })
+    expect(adapter.providerInfo('codebuddy').id).toBe('codebuddy')
+    expect(adapter.providerInfo('codebuddy-en').id).toBe('codebuddy-en')
+    // The system-prompt override lives in this adapter's wire layer, so a
+    // provider this adapter does not own can never receive it.
+    expect(() => adapter.providerInfo('deepseek')).toThrowError(/does not own provider/u)
+  })
+
   it('refreshes the catalogue and exposes exact model metadata', async () => {
     const store = storeOf(freshRecord)
     const seen: string[] = []
@@ -464,6 +473,28 @@ describe('codebuddy adapter', () => {
     expect(chunks.at(-1)).toEqual({ type: 'finish', reason: { kind: 'stop' } })
     expect(bodies[0]).toMatchObject({ model: 'chat-a', stream: true })
     expect(bodies[0]).not.toHaveProperty('store')
+  })
+
+  it('sends the configured system prompt through the adapter', async () => {
+    const bodies: { messages?: { role: string; content: unknown }[] }[] = []
+    vi.stubGlobal('fetch', async (_url: string, init: { body: string }) => {
+      bodies.push(JSON.parse(init.body))
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          const encoder = new TextEncoder()
+          controller.enqueue(encoder.encode('data: ' + JSON.stringify({ choices: [{ delta: { content: 'hi' }, finish_reason: 'stop' }] }) + '\n\n'))
+          controller.close()
+        },
+      }), { status: 200 })
+    })
+    let prompt = 'Custom prompt.'
+    const adapter = new CodeBuddyAdapter({ store: () => storeOf(freshRecord), systemPrompt: () => prompt })
+    await drain(adapter.stream(optionsOf({ system: 'Harness prompt.' })))
+    expect(bodies[0]?.messages?.[0]).toEqual({ role: 'system', content: 'Custom prompt.' })
+    // A live settings edit reaches the next request without rebuilding the adapter.
+    prompt = 'Edited prompt.'
+    await drain(adapter.stream(optionsOf({ system: 'Harness prompt.' })))
+    expect(bodies[1]?.messages?.[0]).toEqual({ role: 'system', content: 'Edited prompt.' })
   })
 
   it('refuses to stream without a credential', async () => {

@@ -86,6 +86,24 @@ describe('TuiAutocompleteProvider', () => {
     expect(await provider().getSuggestions(['/provider add'], 0, 13, { signal })).toBeNull()
   })
 
+  it('offers the codebuddy prompt subcommand', async () => {
+    const exact = await provider([], [], [], LOCAL_COMMANDS).getSuggestions(['/codebuddy'], 0, 10, { signal })
+    expect(exact?.prefix).toBe('/codebuddy')
+    expect(exact?.items).toContainEqual({
+      value: '/codebuddy prompt',
+      label: '/codebuddy prompt [show|reset]',
+      description: 'guided system-prompt setup or show/reset',
+    })
+
+    const filtered = await provider([], [], [], LOCAL_COMMANDS).getSuggestions(['/codebuddy pro'], 0, 14, { signal })
+    expect(filtered?.prefix).toBe('pro')
+    expect(filtered?.items).toEqual([{
+      value: 'prompt',
+      label: 'prompt [show|reset]',
+      description: 'guided system-prompt setup or show/reset',
+    }])
+  })
+
   it('keeps hinted subcommands insert-only after a command space', async () => {
     const suggestions = await provider().getSuggestions(['/provider re'], 0, 12, { signal })
     expect(suggestions?.prefix).toBe('re')

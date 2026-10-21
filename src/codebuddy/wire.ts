@@ -18,7 +18,7 @@ import { IMAGE_OFFLOAD_REQUIRED_CODE, LlmError, offloadedImageText, requiredImag
 import type { ContentBlock, GenerateOptions, RequestMessage } from '@deepseek-ai/dsh-llm'
 import type { CodeBuddyProfile } from './profiles.js'
 import { REASONING_SUMMARY } from './profiles.js'
-import { neutralizeAgentIdentity } from './prompt.js'
+import { expandSystemPrompt, neutralizeAgentIdentity } from './prompt.js'
 
 /** One durable image reference carried by a request. */
 type ImageRef = Extract<ContentBlock, { type: 'image' }>['attachment']
@@ -46,6 +46,16 @@ export interface WireImageOptions {
   readonly onDiagnostic?: (message: string) => void
   /** Cancellation for attachment reads. */
   readonly signal?: AbortSignal
+}
+
+/** Operator-facing system-prompt configuration for one payload build. */
+export interface WirePromptOptions {
+  /**
+   * System prompt template sent as the conversation's leading system message.
+   * `{prompt}` expands to the harness-composed prompt; without the placeholder
+   * the template replaces it verbatim. Empty or absent keeps the harness text.
+   */
+  readonly systemPrompt?: string
 }
 
 /**
@@ -452,6 +462,7 @@ function assertImagesFit(
  * @param profile - deployment whose normalization applies.
  * @param resolveFileText - Host projection for durable file references.
  * @param images - image reader, diagnostics and cancellation.
+ * @param prompt - operator system-prompt template, when one is configured.
  * @returns the JSON body to POST.
  */
 export async function buildChatPayload(
@@ -459,6 +470,7 @@ export async function buildChatPayload(
   profile: CodeBuddyProfile,
   resolveFileText?: (ref: unknown) => string,
   images: WireImageOptions = {},
+  prompt: WirePromptOptions = {},
 ): Promise<Record<string, unknown>> {
   const scoped: WireImageOptions = { ...images, signal: images.signal ?? options.signal }
   // Role failures are reported before any image work: an assistant image is a
@@ -482,6 +494,16 @@ export async function buildChatPayload(
   // itself is unchanged.
   if (messages.length === 0 || messages[0]?.role !== 'system') {
     messages.unshift({ role: 'system', content: '' })
+  }
+  // An operator-supplied prompt owns only the opening system text: later
+  // system messages keep their content, so an in-history instruction is not
+  // silently dropped. The CN identity rewrite below still runs on the result,
+  // which keeps a template that carries `{prompt}` on the accepted wording.
+  const template = prompt.systemPrompt
+  const leading = messages[0]
+  if (template !== undefined && template !== '' && leading !== undefined) {
+    const harnessPrompt = typeof leading.content === 'string' ? leading.content : ''
+    leading.content = expandSystemPrompt(template, harnessPrompt)
   }
   // The CN gateway refuses a third-party agent identity wherever the prompt is
   // carried: as `options.system` and as an in-history system message (the
