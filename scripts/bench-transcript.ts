@@ -7,7 +7,7 @@
  * Run with: node_modules/.bin/tsx scripts/bench-transcript.ts
  *
  * F includes 10,000 live deltas in a long session with an active detailed
- * thinking reveal; each frame appends one delta without replaying prior ones.
+ * thinking stream; each frame appends one delta without replaying prior ones.
  */
 import { createPalette, markdownTheme } from '../src/ui/theme.js'
 import { reduceTranscriptWindow, type TranscriptEntry } from '../src/ui/transcript.js'
@@ -125,14 +125,11 @@ for (const cap of [200, 2000]) {
 }
 
 console.log('')
-console.log('=== D. large completed-reasoning reveal frame (reduce only) ===')
+console.log('=== D. large completed reasoning block (reduce only) ===')
 {
   const entries = [...makeEntries(600), liveReasoning(900000, 600, 1_000)]
-  const revealOptions = { ...(options as object), revealProgress: new Map() } as never
-  let now = 1_000
-  measure('600 turns + 3000-grapheme reveal', () => {
-    reduceTranscriptWindow(entries, revealOptions, now)
-    now += 33
+  measure('600 turns + completed reasoning', () => {
+    reduceTranscriptWindow(entries, options)
   }, 9)
 }
 
@@ -151,7 +148,7 @@ for (const turns of [200, 600, 2000]) {
 }
 
 console.log('')
-console.log('=== F. long session + 10,000 thinking deltas, active detailed reveal ===')
+console.log('=== F. long session + 10,000 thinking deltas, detailed display ===')
 {
   const entries = makeEntries(600)
   let seq = 900000

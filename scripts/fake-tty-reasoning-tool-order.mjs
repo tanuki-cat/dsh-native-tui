@@ -1,9 +1,9 @@
 /**
- * Real-Host check that a tool card does not overtake a still-revealing thinking block.
+ * Real-Host check that reasoning and its tool card render in provider order.
  *
  * The mock Responses server sends one completed reasoning item, then a run_code
- * function call. The TUI must finish revealing the reasoning before rendering
- * the tool card, then run the tool and receive the final answer.
+ * function call. The TUI must render the full reasoning above the tool card
+ * without an artificial delay, then receive the final answer.
  *
  * Setup:
  *   pnpm build
@@ -181,14 +181,13 @@ child.on('exit', (code, signal) => {
   clearInterval(tick)
   clearTimeout(hard)
   const text = strip(out)
-  const streaming = prefixAt !== undefined && endAt !== undefined && endAt - prefixAt >= 100
-  const ordered = endAt !== undefined && toolAt !== undefined && toolAt >= endAt
+  const ordered = text.indexOf(endMark) !== -1 && text.indexOf('⚙ run_code') > text.indexOf(endMark)
   const completed = finalAt !== undefined
   const clears = (out.match(/\x1b\[2J/g) ?? []).length
-  const pass = code === 0 && signal === null && streaming && ordered && completed && clears === 0
+  const pass = code === 0 && signal === null && ordered && completed && clears === 0
   console.log('EXIT', code, signal, 'phase', phase)
   console.log('prefixAt', prefixAt, 'endAt', endAt, 'toolAt', toolAt, 'finalAt', finalAt)
-  console.log('streaming', streaming, 'ordered', ordered, 'completed', completed, 'clears', clears)
+  console.log('ordered', ordered, 'completed', completed, 'clears', clears)
   console.log('RESULT', pass ? 'PASS' : 'FAIL')
   if (!pass) {
     console.log('--- stdout tail ---')

@@ -6,8 +6,7 @@ const NL = String.fromCharCode(10).repeat(2)
 const home = '/tmp/dsh-native-tui-stream-chunks-home'
 rmSync(home, { recursive: true, force: true })
 mkdirSync(home + '/profiles/tui/node_modules', { recursive: true })
-// One sentence-sized provider chunk every 300ms: the shape that used to paint a
-// whole chunk per frame after the reveal went idle between chunks.
+// Sentence-sized chunks arrive independently of the terminal frame cadence.
 const words = Array.from({ length: 160 }, (_, index) => 'w' + String(index).padStart(4, '0'))
 const answer = words.join(' ')
 const chunk = 100
@@ -98,7 +97,7 @@ child.stdout.on('data', data => {
   }
   if (sent && !exitSent && text.includes(words.at(-1))) {
     exitSent = true
-    // Let the last reveal frames land before quitting.
+    // Allow the provider to send its terminal event before quitting.
     setTimeout(() => { try { child.stdin.write(String.fromCharCode(4)) } catch {} }, 1200)
   }
 })
@@ -110,14 +109,8 @@ child.on('exit', (code, signal) => {
   const clean = strip(out)
   const dashes = err.split(String.fromCharCode(10)).filter(line => line.includes('stream chunk: text-delta'))
   const revealLines = err.split(String.fromCharCode(10)).filter(line => line.includes('reveal text:'))
-  const advances = revealLines.map(line => Number(line.match(/advance=(\d+)/)?.[1] ?? NaN))
-  const maxAdvance = advances.length === 0 ? NaN : Math.max(...advances)
-  // Every chunk has to arrive over several bounded frames, not one paint: ten
-  // 100-character chunks leave far more than one frame each.
   const finalVisible = words.every(word => clean.includes(word))
-  const pass = code === 0 && dashes.length >= 8 && finalVisible && advances.length >= 40 && maxAdvance <= 24
-  console.log('EXIT', code, signal, 'sent', sent, 'chunkLogs', dashes.length, 'revealLines', revealLines.length, 'maxAdvance', maxAdvance, 'finalVisible', finalVisible, 'pass', pass)
-  console.log(revealLines.slice(0, 4).join(String.fromCharCode(10)))
-  console.log(revealLines.slice(-3).join(String.fromCharCode(10)))
+  const pass = code === 0 && signal === null && dashes.length >= 8 && finalVisible && revealLines.length === 0
+  console.log('EXIT', code, signal, 'sent', sent, 'chunkLogs', dashes.length, 'revealLines', revealLines.length, 'finalVisible', finalVisible, 'pass', pass)
   process.exit(pass ? 0 : 1)
 })

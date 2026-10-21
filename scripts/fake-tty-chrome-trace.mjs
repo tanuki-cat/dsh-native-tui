@@ -26,7 +26,7 @@ if (logPath !== undefined) {
     const record = {
       statusRow: statusRow - state.previousViewportTop,
       editorRow: editorRow - state.previousViewportTop,
-      wait: lines.some(line => line.includes('⟳ waiting for response') || line.includes('⟳ generating ')),
+      wait: lines.some(line => line.includes('⟳ working ·') || line.includes('⟳ retry ')),
       mark: marks.filter(mark => lines.some(line => line.includes(mark))).join(','),
     }
     const key = JSON.stringify(record)

@@ -3,8 +3,8 @@
  *
  * The pi-ai Responses path can receive a gateway's whole reasoning in the
  * terminal `response.output_item.done` event, with no summary/text deltas.
- * The TUI must still reveal that block progressively instead of waiting for the
- * durable assistant message and popping it in whole.
+ * The TUI must display that whole block on its first content frame without
+ * waiting for the durable assistant message or replaying a typing animation.
  *
  * One-time setup (the disposable home used by the reasoning probe works):
  *   pnpm build
@@ -143,10 +143,11 @@ let prefixAt
 let endAt
 let finalAt
 let waitingSeen = false
+let firstFrameComplete = false
 const started = Date.now()
 const tick = setInterval(() => {
   const text = strip(out)
-  if (text.includes('waiting for response')) waitingSeen = true
+  if (text.includes('⟳ working ·')) waitingSeen = true
   if (phase === 'editor' && text.includes('enter send')) {
     phase = 'model'
     try { child.stdin.write('/model mock/mock-model\r') } catch {}
@@ -158,6 +159,7 @@ const tick = setInterval(() => {
   else if (phase === 'prompt' || phase === 'streaming' || phase === 'settled') {
     if (prefixAt === undefined && text.includes(mark)) {
       prefixAt = Date.now() - started
+      firstFrameComplete = text.includes(endMark)
       phase = 'streaming'
     }
     if (endAt === undefined && text.includes(endMark)) endAt = Date.now() - started
@@ -173,16 +175,13 @@ child.on('exit', (code, signal) => {
   clearInterval(tick)
   clearTimeout(hard)
   const text = strip(out)
-  const streaming = prefixAt !== undefined && endAt !== undefined && endAt - prefixAt >= 100
   const completed = finalAt !== undefined
-  // The answer text is held until the reveal completes, so it must never appear
-  // before the reasoning end marker.
-  const answerOrdered = endAt !== undefined && finalAt !== undefined && finalAt >= endAt
+  const answerOrdered = text.indexOf(endMark) !== -1 && text.indexOf('Probe answer.') > text.indexOf(endMark)
   const waitingCovered = reasoningDelayMs < 1100 || waitingSeen
-  const pass = code === 0 && signal === null && streaming && completed && answerOrdered && waitingCovered
+  const pass = code === 0 && signal === null && firstFrameComplete && completed && answerOrdered && waitingCovered
     && text.includes(mark) && text.includes(endMark)
   console.log('EXIT', code, signal, 'phase', phase)
-  console.log('settleDelayMs', settleDelayMs, 'reasoningDelayMs', reasoningDelayMs, 'waitingSeen', waitingSeen, 'answerOrdered', answerOrdered)
+  console.log('settleDelayMs', settleDelayMs, 'reasoningDelayMs', reasoningDelayMs, 'waitingSeen', waitingSeen, 'answerOrdered', answerOrdered, 'firstFrameComplete', firstFrameComplete)
   console.log('prefixAt', prefixAt, 'endAt', endAt, 'finalAt', finalAt)
   console.log('reasoning length', reasoning.length, 'rendered', text.includes(mark), text.includes(endMark))
   console.log('RESULT', pass ? 'PASS' : 'FAIL')

@@ -10,7 +10,7 @@ DeepSeek Harness 的 host-native 终端前端，基于 pi-tui。
 ## 特性
 
 - 新建/恢复 Session，owned root Agent。
-- 流式文本、Markdown、reasoning（含网关只在完成时回传整块时的本地逐帧展开）、工具卡片（write/edit 结果渲染 ± diff 行，含 `run_code` 内嵌子调用与 native 直接调用）、turn 失败提示。
+- 流式文本、Markdown、reasoning（含网关只在完成时回传的完整块）、工具卡片（write/edit 结果渲染 ± diff 行，含 `run_code` 内嵌子调用与 native 直接调用）、turn 失败提示。
 - 本地命令与宿主命令执行（compact/feedback/goal/permission/plan）；slash 命令支持子命令补全，例如 `/provider` 显示 add/list/edit/models/input/remove，`/reasoning` 后输入空格显示 map；子命令已完整输入时回车直接执行；从补全中选中时，如果当前过滤结果只包含无参数子命令则直接执行；混有带参数子命令时保持插入，继续输入参数。
 - 审批与问答 waterfall；所有独立 overlay（Choice/TextInput/Approval、Markdown/Text Pager、Image）统一使用带边框和全宽背景的 opaque dialog frame，长内容自动换行/补齐。问答面板支持单选与多选：多选用 Space 勾选、Enter 提交，Other 提供自由文本（多选时会与已勾选项一并返回）；每题统一提供 `Skip this question` 行（无选项文本题为 `Answer… / Skip this question` 菜单），跳过只返回 `{ id, selected: [] }` 并继续批次；Esc 或请求 signal 中止则以 `UserQuestionError(ASK_ABORTED)` 取消整个批次。
 - 模型选择器（LLM catalog 为空时明确提示）、reasoning effort 切换与映射编辑、权限预设、后台任务、子代理列表。
@@ -21,10 +21,10 @@ DeepSeek Harness 的 host-native 终端前端，基于 pi-tui。
 - Agent Presets：standard / ptc / minimal / cordis；/preset 可在首个 turn 前切换当前 Session，已开始的 Session 锁定并用于下一次 /new；选择同时写入 `agent-preset-registry.selectedDefault`，重启后继续使用。
 - Workspace 列表/创建/切换/pin/unpin/archive/unarchive；Schedule 列表/创建/删除；Settings 引导式 TUI 配置页（全部 native-tui 字段：显示模式、transcript、theme/fullscreen、title、cwd、sessionId、agentPreset，带即时/重启/下次启动标注与暂存 diff）与 Host 命名空间内嵌编辑器（搜索、类型化编辑、数组增删/JSON、secret 保护、revision 冲突重试）；Plugins 列表/官方市场/检查/安装/移除/启停（带确认，实时应用）。
 - 可选 `fullscreen`：TuiAltScreen + ScrollView，header/status/editor 固定，鼠标滚轮滚动、文本选择复制。
-- Transcript 层次：参考 pi agent 使用全宽背景带（用户消息、reasoning、tool 输出）、assistant/context 标签、notice 图标、turn 分隔线；本地命令输出按 durable event sequence 插入，不会一律堆在 transcript 末尾。每个行组件按宽度 memo 自己的渲染结果（`MemoBlock`）：pi-tui 即使每个叶子有自己的缓存也会遍历整棵子树，2000 行时一次遍历 45 ms，memo 后降到 0.15 ms。`maxTranscriptEntries` 默认 600（此前 2000），因为它决定每帧要走多少行。reasoning 块按 live chunk 增量刷新，并和 answer delta 一样走本地 reveal；若网关只在完成时回传整块 reasoning（Responses 路径常见），reasoning `block-start` 会先显示 `thinking …` 占位，完整块再按字素展开。展开按 wall clock 推进（`elapsed × rate`，rate 自适应保证 3000 字素预览约 600ms 内完成），帧率掉到 10fps 也只是跳步更快，不会把动画拉长；grapheme 切分按块缓存，长 reasoning 不会每帧重新分词。展开期间只暂缓其后真正“由该 reasoning 触发”的行：tool/step 卡片与 info notice 等 reveal 完成，`compact`/`hidden` 模式不参与展开；新的 user 消息、warning/error notice 以及同一 assistant 块的 answer 文本照常实时显示，避免整段答案最后一帧突然出现。answer/reasoning 最后一段内容与紧随其后的 tool 卡片之间保留 settle grace（至少 150 ms，且随当前流式帧间隔放宽，`settleGraceMs`），二者不会落在同一帧。reveal 进度按 step 记录并在重试（`assistant/attempt` 或同 step 的新 live 块）时清除，重试的 reasoning 从第一个 grapheme 重新展开，不会继承上一次的完成度。这是 TUI 本地平滑，不等同于 Web 端：Web 在 block-end 到达时直接显示完整 reasoning，不暂缓后续节点。
+- Transcript 层次：全宽背景带（用户消息、reasoning、tool 输出）、assistant/context 标签、notice 图标、turn 分隔线；本地命令输出按 durable event sequence 插入。每个行组件按宽度缓存渲染结果（`MemoBlock`），避免重复遍历和格式化不变的历史。`maxTranscriptEntries` 默认 600，限制每帧保留的 transcript 行组件数量。
 - 流式节拍：帧间隔按**上次绘制时刻**对齐（`nextFrameDelay`），chunk 突发不会把帧间隔拉成 33/66 ms 交替；内容签名（修订号 + 等待行文本）未变的帧直接跳过重绘。帧成本按「rebuild + 本帧迟到量」实测（`frameOverrunMs`），间隔取两者之和的 2 倍，上限 `STREAM_PAINT_CEILING_MS`；迟到量按当前帧间隔封顶（`frameCostMs`），读流解析、GC、审批框或 OS 调度这类与绘制无关的停顿只能让间隔翻倍一次，却仍能让真正重绘超预算的窗口逐帧翻倍到两倍成本：pi-tui 的逐行处理（光标解析、行 reset、差分写入）随屏幕行数增长且不在任何组件自己的计时里，只按 rebuild 计时会让 2000 行窗口以 33 ms 间隔连续重绘，抢走读流的事件循环——这正是长会话 tok/s 越跑越低、而 Web（Host 与前端分进程）不出现的原因。mock SSE（1200 chunks × 8 字符 / 12 ms）实测 26 fps、gap p50 34 ms / p90 41 ms（修复前 14 fps、44–51 ms）；fullscreen（alt-screen）下每帧通常只重写 1 行，main-screen 因整屏 diff 会在换行时重写尾部区域，推荐开启 `fullscreen`。main-screen 只能 patch 可见行：已滚入 scrollback 的行一旦变化，pi-tui 会清屏 + 清 scrollback 并重写整份 transcript，所以块首行（`◆ assistant`、`⚙ name`、`◆ compaction`）在块创建后保持不变，运行状态由状态行或卡片尾行表达。
-- 流式正文逐帧展开：provider 一帧可能带回整句/整段，直接绘制会让答案"跳"出来。每个突发在开始展开时规划一次步长（backlog / 6 帧，单帧最多 24 字），之后每帧按该步长推进；步长只由帧数决定，不随帧间隔或 chunk 到达间隔变化（帧间隔回退时单位时间的展开字数随之减少，这是保护读流事件循环的代价）。此前按 wall clock（1.2 字/ms）推进时，chunk 总是在上一轮 reveal 排空后的空闲期到达，第一帧的 elapsed 就是整段空闲时间，于是 100 字以上的 chunk 仍然一帧整块画出——这是 main-screen 下跳字明显的主因。≤12 字的 token 级 delta 直接跟随到达速率；突发超过当前步长可排空量的 2 倍时放宽步长；单个 chunk 超过 600 字视为整块返回，直接显示。`block-end` 和 `assistant/message` 不再立即补全：backlog ≤ 600 时按步长继续展开，完成的那一帧 `revealPending` 立刻归零，不会留下每秒 30 帧的空转；同一步后续 block 从已结算长度继续展开，不会回退重放。reasoning delta 也走同一 reveal；`DSH_NATIVE_TUI_DEBUG=1` 会输出每个 chunk 的字符数、帧间隔与本帧 reveal 的 advance/step/visible。
-- 等待行按当前等待对象换词：模型还没吐出可读输出时是 `⟳ waiting for response · Ns`，正在流式生成工具调用时是 `⟳ generating run_code call · Ns`（名称取自首个 `tool-call-delta`，后续只补参数的 delta 不会把它退回到无名形式）。请求超过 1 秒后才出现，首个可渲染的 text/reasoning chunk 或 durable assistant/tool 事件到达时消失；裸 `block-start` 不会提前清除，避免等待行先消失但内容尚未出现。自动重试追加 `· retry N/M after CODE (automatic)`。
+- 流式内容直接跟随 provider：每帧显示已经收到的全部 text/reasoning，`block-end` 与 `assistant/message` 立即采用完整内容，没有额外逐字动画、播放队列或 settle grace。reasoning、正文、工具卡片按 provider/event 顺序展示，可以落在同一帧；只收到 reasoning `block-start` 时显示 `thinking …` 占位。长会话仍保留增量事件归并、组件复用和自适应帧合并。`DSH_NATIVE_TUI_DEBUG=1` 输出 chunk 字符数与帧成本。
+- 执行状态独立于内容渲染：turn 开始后显示 `⟳ working · Ns`，收到文本、reasoning、工具调用或 stream/end 都不会将它清除，直到 turn/end 或切换会话才结束。Host 调度自动重试时立即显示 `⟳ retry N/M after CODE (automatic) · Ns`，新 attempt 或恢复收流后回到 working；秒数按本轮执行时长计数。断流检测、超时和重试策略归 Host/provider 所有，TUI 不根据画面是否变化判断网络状态；失败与取消 notice 保留已收到内容并直接展示。
 - 运行中 `Esc` / `Ctrl+C` 取消 turn；输入框有草稿时 `Esc` 先清空草稿，空输入才取消 turn（overlay 聚焦时不触发）。长文本和 tool 输出按行保持左侧色条。
 - 上下文压缩：默认 preset 启用 `compaction-basic` 自动压力压缩与 context-overflow 恢复，以及 tool-result pruner；TUI 渲染 compaction start/summary/end；prune 会隐藏对应 tool 卡片并保留 prune notice；session 级 tool memory 会忽略同一 callId 的晚到/重复 call/result，即使原始事件已离开 retained window；`compact-checkpoint` 在匹配的 compaction 卡片已存在时不再重复渲染完整 checkpoint。进程在 `compaction/start` 与 `compaction/end` 之间崩溃时，resume 写入的 `turn/end{interrupted}` / `session/end-seed` 会释放 Host 的压缩锁，卡片尾行随之显示 `⚠ interrupted` 而不是一直停在 `⟳ compacting…`；同一 resume 的 `Turn interrupted before it finished` 也会作为 notice 显示。`/compact` 作为 Host command 可手动触发。
 - 显示密度可配置：`thinkingDisplay` 与 `runCodeDisplay` 均支持 `hidden | compact | detailed`；后者覆盖 `run_code`、`bash`、`pwsh` 等代码执行工具卡。
@@ -369,24 +369,25 @@ DSH_HOME=/tmp/dsh-native-tui-native-diff-home node scripts/fake-tty-native-diff.
 node scripts/fake-tty-reload.mjs
 ~~~
 
-流式大 chunk 的平滑与 settlement 收尾用同一类探针验证（212 字单 chunk，首帧 24 字，逐帧推进到完整；100 字 chunk / 300 ms 的连续流，每个 chunk 都按帧预算展开而不是空闲后整块画出）：
+流式大 chunk 与 settlement 收尾用同一类探针验证（212 字单 chunk 与 100 字 chunk / 300 ms 的连续流，内容完整显示且没有本地逐字播放）：
 
 ~~~sh
 node scripts/fake-tty-stream-smooth.mjs
 node scripts/fake-tty-stream-chunks.mjs
 ~~~
 
-`fullscreen: false`（main-screen）下长 transcript 的流式渲染另用探针验证：assistant 块结算时头部不再变化，因此不会触发 pi-tui 的整屏重绘（清屏 + 清 scrollback），流式答案按帧推进并完整落地：
+`fullscreen: false`（main-screen）下长 transcript 的流式渲染另用探针验证：assistant 块结算时头部不再变化，因此不会触发 pi-tui 的整屏重绘（清屏 + 清 scrollback），流式答案跟随收到的内容并完整落地：
 
 ~~~sh
 node scripts/fake-tty-main-screen-scroll.mjs
 node scripts/fake-tty-card-head.mjs
 ~~~
 
-等待行在工具调用流式生成期间改用 `generating run_code call` 也由真实 Host 探针验证（函数调用参数分帧流出，断言先出现请求文案、再出现工具阶段文案、且该行最后一次绘制早于工具卡片）：
+工具调用参数分帧流出时，working 行保持可见，直到整个 turn 结束；断流恢复探针在完整显示部分 reasoning 后主动断开 SSE，断言 working 持续、自动重试可见、恢复响应后回到 idle：
 
 ~~~sh
 DSH_HOME=/tmp/dsh-native-tui-wait-tool-phase-home node scripts/fake-tty-wait-tool-phase.mjs
+node scripts/fake-tty-stream-recovery.mjs
 ~~~
 
 `@file` 补全的长文件名布局同样用真实 Host 探针验证（同名前缀的 `docs/design-task-*` 文件，断言每行第一列是文件名而不是公共目录前缀）：

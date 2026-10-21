@@ -1,16 +1,14 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { Spacer } from '@earendil-works/pi-tui'
-import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import { Rule } from '../src/ui/rule.js'
 import { createPalette, markdownTheme } from '../src/ui/theme.js'
-import { contentText, liveChunkHasOutput, reduceTranscript, reduceTranscriptWindow, type TranscriptBlock, type TranscriptEntry } from '../src/ui/transcript.js'
-import { frameCostMs, frameOverrunMs, nextFrameDelay, nextStreamInterval, settleGraceMs, STREAM_MIN_INTERVAL_MS, STREAM_PAINT_CEILING_MS, transcriptFrameChanged } from '../src/ui/stream-pacing.js'
+import { contentText, reduceTranscript, reduceTranscriptWindow, type TranscriptBlock, type TranscriptEntry } from '../src/ui/transcript.js'
+import { frameCostMs, frameOverrunMs, nextFrameDelay, nextStreamInterval, STREAM_MIN_INTERVAL_MS, STREAM_PAINT_CEILING_MS, transcriptFrameChanged } from '../src/ui/stream-pacing.js'
 import { renderTranscriptBlock } from '../src/ui/transcript-render.js'
-import { revealStreamText, STREAM_TEXT_MAX_STEP } from '../src/ui/reasoning-reveal.js'
 import { sameTranscriptBlock, TranscriptRenderer } from '../src/ui/transcript-renderer.js'
 import { formatToolArguments } from '../src/ui/tool-preview.js'
-import { WAIT_ROW_DELAY_MS, waitSubjectAfter, waitingText, waitingVisible, type WaitSubject } from '../src/ui/waiting.js'
+import { waitingText } from '../src/ui/waiting.js'
 
 const palette = createPalette('plain')
 const options = {
@@ -19,8 +17,6 @@ const options = {
   palette,
   markdown: markdownTheme(palette),
 }
-/** The same reduction options, named for reuse inside describe blocks. */
-const optionsBase = options
 
 function durable(type: string, data: unknown, seq = 0): TranscriptEntry {
   return { type: 'event', event: { type, seq, time: 0, data } as unknown as SessionEvent }
@@ -114,373 +110,6 @@ describe('reduceTranscript', () => {
     expect(blocks[0]).toMatchObject({ kind: 'assistant', text: 'Hello', live: true })
   })
 
-  it('reveals a completed reasoning block that arrived without deltas', () => {
-    const reasoning = 'x'.repeat(400)
-    const entries: TranscriptEntry[] = [
-      liveChunk(1, 1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: reasoning } }, 1_000),
-    ]
-    const partial = reduceTranscriptWindow(entries, options, 1_050)
-    const partialBlock = partial.blocks[0]
-    expect(partialBlock?.kind).toBe('assistant')
-    if (partialBlock?.kind !== 'assistant') throw new Error('expected an assistant block')
-    expect(partialBlock.reasoning).toHaveLength(200)
-    expect(partial.revealPending).toBe(true)
-
-    const full = reduceTranscriptWindow(entries, options, 1_200)
-    const fullBlock = full.blocks[0]
-    expect(fullBlock?.kind).toBe('assistant')
-    if (fullBlock?.kind !== 'assistant') throw new Error('expected an assistant block')
-    expect(fullBlock.reasoning).toBe(reasoning)
-    expect(full.revealPending).toBe(false)
-  })
-
-  it('keeps streamed reasoning complete when the terminal block arrives', () => {
-    const entries: TranscriptEntry[] = [
-      liveChunk(1, 1, 1, { type: 'reasoning-delta', index: 0, text: 'reasoned ' }, 1_000),
-      liveChunk(2, 1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: 'reasoned fully' } }, 1_001),
-    ]
-    const reduction = reduceTranscriptWindow(entries, options, 1_001)
-    const block = reduction.blocks[0]
-    expect(block?.kind).toBe('assistant')
-    if (block?.kind !== 'assistant') throw new Error('expected an assistant block')
-    expect(block.reasoning).toBe('reasoned fully')
-    expect(reduction.revealPending).toBe(false)
-  })
-
-  it('adopts a completed text block when no text delta arrived', () => {
-    const entries: TranscriptEntry[] = [
-      liveChunk(1, 1, 1, { type: 'block-end', index: 0, block: { type: 'text', text: 'complete answer' } }, 1_000),
-    ]
-    const blocks = reduceTranscript(entries, options, 1_001)
-    expect(blocks[0]).toMatchObject({ kind: 'assistant', text: 'complete answer', live: true })
-  })
-
-  it('continues revealing a durable reasoning block that has no deltas', () => {
-    const reasoning = 'x'.repeat(400)
-    const entries: TranscriptEntry[] = [
-      durable('assistant/message', {
-        turn: 1,
-        step: 1,
-        message: { content: [{ type: 'reasoning', text: reasoning }, { type: 'text', text: 'answer' }] },
-        stream: [
-          { type: 'chunk', time: 1_000, chunk: { type: 'block-end', index: 0, block: { type: 'reasoning', text: reasoning } } },
-          { type: 'chunk', time: 1_100, chunk: { type: 'usage', usage: { outputTokens: 10 } } },
-        ],
-      }, 2),
-    ]
-    const partial = reduceTranscriptWindow(entries, options, 1_050)
-    const partialBlock = partial.blocks.at(-1)
-    expect(partialBlock?.kind).toBe('assistant')
-    if (partialBlock?.kind !== 'assistant') throw new Error('expected an assistant block')
-    expect(partialBlock.reasoning).toHaveLength(200)
-    expect(partial.revealPending).toBe(true)
-
-    const full = reduceTranscriptWindow(entries, options, 1_200)
-    const fullBlock = full.blocks.at(-1)
-    expect(fullBlock?.kind).toBe('assistant')
-    if (fullBlock?.kind !== 'assistant') throw new Error('expected an assistant block')
-    expect(fullBlock.reasoning).toBe(reasoning)
-    expect(full.revealPending).toBe(false)
-  })
-
-  it('does not re-reveal a durable block that streamed reasoning deltas', () => {
-    const reasoning = 'x'.repeat(400)
-    const entries: TranscriptEntry[] = [
-      durable('assistant/message', {
-        turn: 1,
-        step: 1,
-        message: { content: [{ type: 'reasoning', text: reasoning }] },
-        stream: [
-          { type: 'reasoning-chunks', time0: 1_000, index: 0, dt: [], texts: [reasoning] },
-          { type: 'chunk', time: 1_001, chunk: { type: 'block-end', index: 0, block: { type: 'reasoning', text: reasoning } } },
-        ],
-      }, 2),
-    ]
-    const reduction = reduceTranscriptWindow(entries, options, 1_001)
-    const block = reduction.blocks.at(-1)
-    expect(block?.kind).toBe('assistant')
-    if (block?.kind !== 'assistant') throw new Error('expected an assistant block')
-    expect(block.reasoning).toBe(reasoning)
-    expect(reduction.revealPending).toBe(false)
-  })
-
-  it('shows a thinking placeholder at reasoning block-start', () => {
-    const entries: TranscriptEntry[] = [
-      liveChunk(1, 1, 1, { type: 'block-start', index: 0, blockType: 'reasoning' }, 1_000),
-    ]
-    const reduction = reduceTranscriptWindow(entries, options, 1_000)
-    expect(reduction.blocks[0]).toMatchObject({ kind: 'assistant', live: true, starting: true })
-    expect(reduction.revealPending).toBe(false)
-
-    const renderer = new TranscriptRenderer(options)
-    renderer.set(entries, [])
-    expect(renderer.container.render(80).join('\n')).toContain('thinking …')
-  })
-
-  it('starts a tracked reveal at the first render instead of block-end time', () => {
-    const reasoning = 'x'.repeat(400)
-    const entries: TranscriptEntry[] = [
-      liveChunk(1, 1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: reasoning } }, 1_000),
-    ]
-    const revealProgress = new Map()
-    const tracked = { ...options, revealProgress }
-
-    const first = reduceTranscriptWindow(entries, tracked, 1_200)
-    const firstBlock = first.blocks[0]
-    expect(firstBlock?.kind).toBe('assistant')
-    if (firstBlock?.kind !== 'assistant') throw new Error('expected an assistant block')
-    expect(firstBlock.reasoning).toHaveLength(STREAM_TEXT_MAX_STEP)
-    expect(first.revealPending).toBe(true)
-
-    const next = reduceTranscriptWindow(entries, tracked, 1_233)
-    const nextBlock = next.blocks[0]
-    expect(nextBlock?.kind).toBe('assistant')
-    if (nextBlock?.kind !== 'assistant') throw new Error('expected an assistant block')
-    expect(nextBlock.reasoning).toHaveLength(STREAM_TEXT_MAX_STEP * 2)
-  })
-
-  it('caps the thinking advance even when a frame is late', () => {
-    const reasoning = 'x'.repeat(400)
-    const entries: TranscriptEntry[] = [
-      liveChunk(1, 1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: reasoning } }, 1_000),
-    ]
-    const revealProgress = new Map()
-    const tracked = { ...options, revealProgress }
-
-    reduceTranscriptWindow(entries, tracked, 1_000)
-    const late = reduceTranscriptWindow(entries, tracked, 1_100)
-    const lateBlock = late.blocks[0]
-    expect(lateBlock?.kind).toBe('assistant')
-    if (lateBlock?.kind !== 'assistant') throw new Error('expected an assistant block')
-    expect((lateBlock.reasoning ?? '').length).toBe(STREAM_TEXT_MAX_STEP * 2)
-    expect(revealProgress.size).toBe(1)
-  })
-
-  it('drains a large thinking backlog without wall-clock catch-up', () => {
-    const reasoning = 'x'.repeat(3_000)
-    const entries: TranscriptEntry[] = [
-      liveChunk(1, 1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: reasoning } }, 1_000),
-    ]
-    const revealProgress = new Map()
-    const tracked = { ...options, revealProgress }
-    let shown = 0
-    let result
-    for (let frame = 0; frame < 150; frame += 1) {
-      result = reduceTranscriptWindow(entries, tracked, 1_000 + frame * 500)
-      const block = result.blocks[0]
-      const length = block?.kind === 'assistant' ? block.reasoning?.length ?? 0 : 0
-      expect(length - shown).toBeLessThanOrEqual(STREAM_TEXT_MAX_STEP)
-      shown = length
-      if (!result.revealPending) break
-    }
-    expect(result?.revealPending).toBe(false)
-    expect(shown).toBe(reasoning.length)
-  })
-
-  it('drops a settled step reveal clock so a retry starts from its first frame', () => {
-    const first = 'a'.repeat(400)
-    const retry = 'b'.repeat(400)
-    const entries: TranscriptEntry[] = [
-      liveChunk(1, 1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: first } }, 1_000),
-    ]
-    const revealProgress = new Map()
-    const tracked = { ...options, revealProgress }
-    for (let now = 1_000; now <= 1_700; now += 33) reduceTranscriptWindow(entries, tracked, now)
-    expect(revealProgress.size).toBe(1)
-
-    const settled: TranscriptEntry[] = [
-      ...entries,
-      durable('assistant/attempt', { turn: 1, step: 1, stream: [] }, 2),
-      liveChunk(3, 1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: retry } }, 1_700),
-    ]
-    const retried = reduceTranscriptWindow(settled, tracked, 1_700)
-    const retriedBlock = retried.blocks.at(-1)
-    expect(retriedBlock?.kind).toBe('assistant')
-    if (retriedBlock?.kind !== 'assistant') throw new Error('expected an assistant block')
-    // The retried attempt reveals from the start instead of inheriting the
-    // first attempt's completed count.
-    expect(retriedBlock.reasoning).toHaveLength(STREAM_TEXT_MAX_STEP)
-    expect(retried.revealPending).toBe(true)
-  })
-
-  it('does not reveal or hold in the compact thinking display', () => {
-    const reasoning = 'x'.repeat(400)
-    const entries: TranscriptEntry[] = [
-      liveChunk(1, 1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: reasoning } }, 1_000),
-      durable('tool/call', { turn: 1, step: 1, callId: 'call-1', name: 'run_code', arguments: '{}' }, 2),
-    ]
-    const compact = { ...options, thinkingDisplay: 'compact' as const }
-    // Compact renders one line, so there is no reveal to finish. The tool card
-    // still waits out the settle grace so it does not share a frame with the
-    // freshly settled assistant row.
-    const settled = reduceTranscriptWindow(entries, compact, 1_010)
-    expect(settled.blocks.map(block => block.kind)).toEqual(['assistant'])
-    expect(settled.revealPending).toBe(true)
-
-    const reduction = reduceTranscriptWindow(entries, compact, 1_200)
-    expect(reduction.revealPending).toBe(false)
-    expect(reduction.blocks.map(block => block.kind)).toEqual(['assistant', 'tool'])
-    const block = reduction.blocks[0]
-    expect(block?.kind).toBe('assistant')
-    if (block?.kind !== 'assistant') throw new Error('expected an assistant block')
-    expect(block.reasoning).toBe(reasoning)
-  })
-
-  it('reveals whole grapheme clusters', () => {
-    const reasoning = '🧠'.repeat(100)
-    const entries: TranscriptEntry[] = [
-      liveChunk(1, 1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: reasoning } }, 1_000),
-    ]
-    const partial = reduceTranscriptWindow(entries, options, 1_010)
-    const block = partial.blocks[0]
-    expect(block?.kind).toBe('assistant')
-    if (block?.kind !== 'assistant') throw new Error('expected an assistant block')
-    expect(block.reasoning).toBe('🧠'.repeat(40))
-    expect(partial.revealPending).toBe(true)
-
-    const full = reduceTranscriptWindow(entries, options, 1_200)
-    const fullBlock = full.blocks[0]
-    expect(fullBlock?.kind).toBe('assistant')
-    if (fullBlock?.kind !== 'assistant') throw new Error('expected an assistant block')
-    expect(fullBlock.reasoning).toBe(reasoning)
-    expect(full.revealPending).toBe(false)
-  })
-
-  it('reveals a long completed reasoning block in full', () => {
-    const reasoning = 'x'.repeat(6_000)
-    const entries: TranscriptEntry[] = [
-      liveChunk(1, 1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: reasoning } }, 1_000),
-    ]
-    const partial = reduceTranscriptWindow(entries, options, 1_599)
-    const partialBlock = partial.blocks[0]
-    expect(partialBlock?.kind).toBe('assistant')
-    if (partialBlock?.kind !== 'assistant') throw new Error('expected an assistant block')
-    expect(partialBlock.reasoning).toHaveLength(5_990)
-    expect(partial.revealPending).toBe(true)
-
-    const full = reduceTranscriptWindow(entries, options, 1_600)
-    const fullBlock = full.blocks[0]
-    expect(fullBlock?.kind).toBe('assistant')
-    if (fullBlock?.kind !== 'assistant') throw new Error('expected an assistant block')
-    expect(fullBlock.reasoning).toBe(reasoning)
-    expect(full.revealPending).toBe(false)
-  })
-
-  it('holds the next row until a revealing reasoning block completes', () => {
-    const reasoning = 'x'.repeat(400)
-    const entries: TranscriptEntry[] = [
-      liveChunk(1, 1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: reasoning } }, 1_000),
-      durable('tool/call', { turn: 1, step: 1, callId: 'call-1', name: 'run_code', arguments: '{}' }, 2),
-    ]
-    const partial = reduceTranscriptWindow(entries, options, 1_050)
-    expect(partial.revealPending).toBe(true)
-    expect(partial.blocks).toHaveLength(1)
-    expect(partial.blocks[0]).toMatchObject({ kind: 'assistant', live: true, revealing: true })
-
-    const full = reduceTranscriptWindow(entries, options, 1_200)
-    expect(full.revealPending).toBe(false)
-    expect(full.blocks.map(block => block.kind)).toEqual(['assistant', 'tool'])
-    expect(full.blocks[1]).toMatchObject({ kind: 'tool', name: 'run_code' })
-  })
-
-  it('shows a new user message instead of holding it behind the reveal', () => {
-    const reasoning = 'x'.repeat(400)
-    const entries: TranscriptEntry[] = [
-      liveChunk(1, 1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: reasoning } }, 1_000),
-      durable('user/message', { content: [{ type: 'text', text: 'next' }], source: { kind: 'user' } }, 2),
-      durable('tool/call', { turn: 1, step: 1, callId: 'call-1', name: 'run_code', arguments: '{}' }, 3),
-    ]
-    const partial = reduceTranscriptWindow(entries, options, 1_050)
-    expect(partial.blocks.map(block => block.kind)).toEqual(['assistant', 'user', 'tool'])
-    expect(partial.revealPending).toBe(true)
-  })
-
-  it('keeps a tool row off the frame that settles streamed reasoning', () => {
-    // The delta path has no local reveal, so without a settle grace the last
-    // thinking delta and the tool call that follows it within a few ms land on
-    // one paint: the card looks like it appeared the instant thinking ended.
-    const entries: TranscriptEntry[] = [
-      liveChunk(1, 1, 1, { type: 'reasoning-delta', index: 0, text: 'thought' }, 1_000),
-      liveChunk(2, 1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: 'thought' } }, 1_002),
-      durable('tool/call', { turn: 1, step: 1, callId: 'call-1', name: 'run_code', arguments: '{}' }, 3),
-    ]
-    const settled = reduceTranscriptWindow(entries, options, 1_005)
-    expect(settled.blocks.map(block => block.kind)).toEqual(['assistant'])
-    expect(settled.revealPending).toBe(true)
-
-    const nextPaint = reduceTranscriptWindow(entries, options, 1_250)
-    expect(nextPaint.blocks.map(block => block.kind)).toEqual(['assistant', 'tool'])
-    expect(nextPaint.revealPending).toBe(false)
-  })
-
-  it('keeps a delayed paint from settling the tool row with the content', () => {
-    // Backed-off pacing can put the first paint 500 ms after the content. A
-    // fixed 150 ms grace has already expired by then, so the final text and the
-    // tool card would share that frame; the grace has to follow the interval.
-    const entries: TranscriptEntry[] = [
-      liveChunk(1, 1, 1, { type: 'reasoning-delta', index: 0, text: 'thought' }, 1_000),
-      liveChunk(2, 1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: 'thought' } }, 1_002),
-      durable('tool/call', { turn: 1, step: 1, callId: 'call-1', name: 'run_code', arguments: '{}' }, 3),
-    ]
-    const fixed = reduceTranscriptWindow(entries, options, 1_502)
-    expect(fixed.blocks.map(block => block.kind)).toEqual(['assistant', 'tool'])
-
-    const paced = reduceTranscriptWindow(entries, options, 1_502, settleGraceMs(STREAM_PAINT_CEILING_MS))
-    expect(paced.blocks.map(block => block.kind)).toEqual(['assistant'])
-    expect(paced.revealPending).toBe(true)
-
-    const nextPaint = reduceTranscriptWindow(entries, options, 1_552, settleGraceMs(STREAM_PAINT_CEILING_MS))
-    expect(nextPaint.blocks.map(block => block.kind)).toEqual(['assistant', 'tool'])
-  })
-
-  it('holds a tool row behind the reveal but still shows a following failure', () => {
-    const reasoning = 'x'.repeat(400)
-    const entries: TranscriptEntry[] = [
-      liveChunk(1, 1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: reasoning } }, 1_000),
-      durable('tool/call', { turn: 1, step: 1, callId: 'call-1', name: 'run_code', arguments: '{}' }, 2),
-      durable('turn/end', { reason: { kind: 'max-tokens' } }, 3),
-    ]
-    const partial = reduceTranscriptWindow(entries, options, 1_050)
-    // The tool card preceded the failure, so it stays hidden until the reveal
-    // ends; the warning itself is shown rather than hidden behind the animation.
-    expect(partial.blocks.map(block => block.kind)).toEqual(['assistant', 'notice'])
-    expect(partial.blocks[1]).toMatchObject({ tone: 'warning' })
-    expect(partial.revealPending).toBe(true)
-
-    const full = reduceTranscriptWindow(entries, options, 1_200)
-    expect(full.blocks.map(block => block.kind)).toEqual(['assistant', 'tool', 'notice'])
-  })
-
-  it('keeps informational notices behind the reveal', () => {
-    const reasoning = 'x'.repeat(400)
-    const entries: TranscriptEntry[] = [
-      liveChunk(1, 1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: reasoning } }, 1_000),
-      durable('tool/call', { turn: 1, step: 1, callId: 'call-1', name: 'run_code', arguments: '{}' }, 2),
-      durable('compaction/prune', { shadowedSeqs: [1], shadowedTokenCount: 10 }, 3),
-    ]
-    const partial = reduceTranscriptWindow(entries, options, 1_050)
-    expect(partial.blocks.map(block => block.kind)).toEqual(['assistant'])
-    expect(partial.revealPending).toBe(true)
-
-    const full = reduceTranscriptWindow(entries, options, 1_200)
-    expect(full.blocks.map(block => block.kind)).toEqual(['assistant', 'tool', 'notice'])
-  })
-
-  it('stops revealing once the durable assistant message settles the step', () => {
-    const reasoning = 'x'.repeat(400)
-    const entries: TranscriptEntry[] = [
-      liveChunk(1, 1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: reasoning } }, 1_000),
-      durable('assistant/message', {
-        turn: 1,
-        step: 1,
-        message: { content: [{ type: 'reasoning', text: reasoning }, { type: 'text', text: 'answer' }] },
-      }, 2),
-    ]
-    const reduction = reduceTranscriptWindow(entries, options, 1_050)
-    expect(reduction.revealPending).toBe(false)
-    expect(reduction.blocks.at(-1)).toMatchObject({ kind: 'assistant', live: false, text: 'answer', reasoning })
-  })
-
   it('hides live rows once the durable assistant message settles the step', () => {
     const entries: TranscriptEntry[] = [
       { type: 'live', event: { type: 'assistant/live-chunk', seq: 1, time: 0, data: { attemptId: 'a', turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'draft' } } } },
@@ -549,8 +178,8 @@ describe('reduceTranscript', () => {
       durable('tool/call', { turn: 1, step: 1, callId: 'call-1', name: 'run_code', arguments: '{}' }, 1),
       toolResult('call-1', 'first output', 2),
     ]
-    const first = reduceTranscriptWindow(entries, tracked, 1_000)
-    const second = reduceTranscriptWindow(entries, tracked, 1_000)
+    const first = reduceTranscriptWindow(entries, tracked)
+    const second = reduceTranscriptWindow(entries, tracked)
     expect(first.blocks).toHaveLength(1)
     expect(second.blocks).toHaveLength(1)
     expect(second.blocks[0]).toMatchObject({ kind: 'tool', callId: 'call-1', result: 'first output' })
@@ -566,12 +195,12 @@ describe('reduceTranscript', () => {
     const tracked = { ...options, toolMemory }
     const first = reduceTranscriptWindow([
       durable('tool/call', { turn: 1, step: 1, callId: 'call-1', name: 'run_code', arguments: '{}' }, 1),
-    ], tracked, 1_000)
+    ], tracked)
     expect(first.blocks).toHaveLength(1)
 
     const late = reduceTranscriptWindow([
       durable('tool/call', { turn: 1, step: 1, callId: 'call-1', name: 'run_code', arguments: '{}' }, 2),
-    ], tracked, 1_000)
+    ], tracked)
     expect(late.blocks).toHaveLength(0)
   })
 
@@ -688,11 +317,11 @@ describe('reduceTranscript', () => {
       ptcStart('call-outer:ptc:1', 'edit', { file_path: 'a.ts' }, 4),
       ptcSettle('call-outer:ptc:1', 'edit', 'duplicate', undefined, 5),
     ]
-    const first = reduceTranscriptWindow(entries, tracked, 1_000)
+    const first = reduceTranscriptWindow(entries, tracked)
     expect(first.blocks).toHaveLength(1)
     expect(first.blocks[0]).toMatchObject({ pending: false, result: 'updated a.ts', seq: 3 })
 
-    const second = reduceTranscriptWindow(entries, tracked, 1_000)
+    const second = reduceTranscriptWindow(entries, tracked)
     expect(second.blocks).toHaveLength(1)
     expect(second.blocks[0]).toMatchObject({ pending: false, result: 'updated a.ts', seq: 3 })
   })
@@ -724,10 +353,10 @@ describe('reduceTranscript', () => {
       durable('tool/call', { turn: 1, step: 1, callId: 'call-1', name: 'run_code', arguments: '{}' }, 1),
       toolResult('call-1', 'original output', 2),
       durable('compaction/prune', { shadowedSeqs: [2], shadowedTokenCount: 900 }, 3),
-    ], tracked, 1_000)
+    ], tracked)
     expect(toolMemory.pruned.has('call-1')).toBe(true)
 
-    const late = reduceTranscriptWindow([toolResult('call-1', 'late output', 4)], tracked, 1_000)
+    const late = reduceTranscriptWindow([toolResult('call-1', 'late output', 4)], tracked)
     expect(late.blocks).toHaveLength(0)
   })
 
@@ -1122,29 +751,6 @@ describe('TranscriptRenderer', () => {
     expect(compactThinking).toContain('long code body')
   })
 
-  it('holds the answer until its reasoning has finished revealing', () => {
-    const renderer = new TranscriptRenderer({ ...options, thinkingDisplay: 'detailed' })
-    const reasoning = 'x'.repeat(400)
-    const entries: TranscriptEntry[] = [
-      liveChunk(1, 1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: reasoning } }, 1_000),
-      liveChunk(2, 1, 1, { type: 'text-delta', index: 1, text: 'final answer' }, 1_001),
-    ]
-    vi.useFakeTimers()
-    vi.setSystemTime(1_000)
-    renderer.set(entries, [])
-    const partial = renderer.container.render(80).join('\n')
-    expect(partial).toContain('thinking')
-    expect(partial).not.toContain('final answer')
-    expect(partial).not.toContain('fi')
-
-    for (let frame = 1; frame < 20; frame += 1) {
-      vi.setSystemTime(1_000 + frame * 33)
-      renderer.set(entries, [])
-    }
-    const full = renderer.container.render(80).join('\n')
-    expect(full).toContain('final answer')
-  })
-
   it('keeps tool and compaction head rows identical across their lifecycle', () => {
     // Main-screen pi-tui repaints the whole transcript when a row above the
     // viewport changes, so card heads must never encode run state. The state
@@ -1239,99 +845,6 @@ describe('sameTranscriptBlock', () => {
   })
 })
 
-afterEach(() => {
-  vi.useRealTimers()
-})
-
-describe('waitingText', () => {
-  it('counts the seconds the request has been in flight', () => {
-    expect(waitingText(1_000, undefined, 1_000)).toBe('waiting for response · 0s')
-    expect(waitingText(1_000, undefined, 4_400)).toBe('waiting for response · 3s')
-  })
-
-  it('names the automatic retry so the reader does not retry by hand', () => {
-    expect(waitingText(1_000, { retry: 2, maxRetries: 5, code: 'TRANSPORT' }, 6_000))
-      .toBe('waiting for response · 5s  ·  retry 2/5 after TRANSPORT (automatic)')
-  })
-
-  it('never counts backwards when the clock jumps', () => {
-    expect(waitingText(5_000, undefined, 1_000)).toBe('waiting for response · 0s')
-  })
-
-  it('names the tool call the model is writing', () => {
-    expect(waitingText(1_000, undefined, 4_000, { kind: 'tool', name: 'run_code' }))
-      .toBe('generating run_code call · 3s')
-    expect(waitingText(1_000, undefined, 4_000, { kind: 'tool' })).toBe('generating a tool call · 3s')
-  })
-
-  it('keeps the retry suffix when a tool call is streaming', () => {
-    expect(waitingText(1_000, { retry: 1, maxRetries: 5, code: 'SERVER' }, 2_000, { kind: 'tool', name: 'bash' }))
-      .toBe('generating bash call · 1s  ·  retry 1/5 after SERVER (automatic)')
-  })
-})
-
-describe('waitSubjectAfter', () => {
-  it('stays on the request until a tool call starts', () => {
-    const request: WaitSubject = { kind: 'request' }
-    expect(waitSubjectAfter(request, { type: 'block-start' })).toBe(request)
-    expect(waitSubjectAfter(request, { type: 'text-delta' })).toBe(request)
-    expect(waitSubjectAfter(request, { type: 'reasoning-delta' })).toBe(request)
-  })
-
-  it('adopts the tool name from the first delta and keeps it', () => {
-    const named = waitSubjectAfter({ kind: 'request' }, { type: 'tool-call-delta', name: 'run_code' })
-    expect(named).toEqual({ kind: 'tool', name: 'run_code' })
-    // Later deltas only extend the arguments; the row keeps naming the call.
-    expect(waitSubjectAfter(named, { type: 'tool-call-delta' })).toBe(named)
-    // A second call renames the row rather than leaving the stale one.
-    expect(waitSubjectAfter(named, { type: 'tool-call-delta', name: 'bash' })).toEqual({ kind: 'tool', name: 'bash' })
-  })
-
-  it('reports a nameless tool phase when the name never arrives', () => {
-    const nameless = waitSubjectAfter({ kind: 'request' }, { type: 'tool-call-delta' })
-    expect(nameless).toEqual({ kind: 'tool' })
-    expect(waitSubjectAfter(nameless, { type: 'tool-call-delta' })).toBe(nameless)
-  })
-})
-
-describe('waitingVisible', () => {
-  it('holds the row back through the flash window', () => {
-    expect(waitingVisible(0, undefined, WAIT_ROW_DELAY_MS - 1)).toBe(false)
-    expect(waitingVisible(0, undefined, WAIT_ROW_DELAY_MS)).toBe(true)
-  })
-
-  it('shows a scheduled retry immediately', () => {
-    // The reader already sat through the failed attempt, so the replay is news.
-    expect(waitingVisible(0, { retry: 1, maxRetries: 5, code: 'TRANSPORT' }, 1)).toBe(true)
-  })
-})
-
-describe('liveChunkHasOutput', () => {
-  it('keeps the wait row for marker-only chunks', () => {
-    expect(liveChunkHasOutput({ type: 'block-start', index: 0, blockType: 'reasoning' })).toBe(false)
-    expect(liveChunkHasOutput({ type: 'text-delta', index: 0, text: '   ' })).toBe(false)
-    expect(liveChunkHasOutput({ type: 'tool-call-delta', index: 0, id: ToolCallId('c1'), argumentsDelta: '' })).toBe(false)
-    expect(liveChunkHasOutput({ type: 'tool-call-delta', index: 0, id: ToolCallId('c1'), name: 'run', argumentsDelta: '{}' })).toBe(false)
-    expect(liveChunkHasOutput({
-      type: 'block-end',
-      index: 0,
-      block: { type: 'tool-call', id: ToolCallId('c1'), name: 'run', arguments: '{}' },
-    })).toBe(false)
-  })
-
-  it('clears the wait row once visible output exists', () => {
-    expect(liveChunkHasOutput({ type: 'reasoning-delta', index: 0, text: 'thinking' })).toBe(true)
-    expect(liveChunkHasOutput({ type: 'text-delta', index: 0, text: 'answer' })).toBe(true)
-    expect(liveChunkHasOutput({ type: 'block-end', index: 0, block: { type: 'reasoning', text: 'thought' } })).toBe(true)
-  })
-
-  it('ignores reasoning while the thinking display is hidden', () => {
-    expect(liveChunkHasOutput({ type: 'reasoning-delta', index: 0, text: 'thinking' }, false)).toBe(false)
-    expect(liveChunkHasOutput({ type: 'block-end', index: 0, block: { type: 'reasoning', text: 'thought' } }, false)).toBe(false)
-    expect(liveChunkHasOutput({ type: 'text-delta', index: 0, text: 'answer' }, false)).toBe(true)
-  })
-})
-
 describe('frameOverrunMs', () => {
   it('measures lateness against the due time', () => {
     expect(frameOverrunMs(1_000, 1_012)).toBe(12)
@@ -1368,16 +881,6 @@ describe('frameCostMs', () => {
 
   it('ignores non-finite measurements', () => {
     expect(frameCostMs(Number.NaN, Number.NaN, 33)).toBe(0)
-  })
-})
-
-describe('settleGraceMs', () => {
-  it('keeps the floor for the streaming cadence', () => {
-    expect(settleGraceMs(STREAM_MIN_INTERVAL_MS)).toBe(150)
-  })
-
-  it('follows a backed-off interval', () => {
-    expect(settleGraceMs(STREAM_PAINT_CEILING_MS)).toBe(550)
   })
 })
 
@@ -1427,272 +930,6 @@ describe('nextStreamInterval', () => {
   })
 })
 
-describe('revealStreamText', () => {
-  const progress = (visible = 0, start = 0) => ({ visible, start })
-  const advance = (text: string, state: ReturnType<typeof progress>, now: number) => revealStreamText(text, state, now)
-
-  /** Whether every surrogate unit in the text belongs to a complete pair. */
-  function isWellFormed(value: string): boolean {
-    for (let index = 0; index < value.length; index += 1) {
-      const code = value.charCodeAt(index)
-      if (code >= 0xDC00 && code <= 0xDFFF) return false
-      if (code >= 0xD800 && code <= 0xDBFF) {
-        const low = value.charCodeAt(index + 1)
-        if (low < 0xDC00 || low > 0xDFFF) return false
-        index += 1
-      }
-    }
-    return true
-  }
-
-  it('reveals a prefix of a burst instead of the whole chunk', () => {
-    const state = progress()
-    const reveal = advance('The quick brown fox jumps over the lazy dog', state, 0)
-    expect(reveal.pending).toBe(true)
-    expect(reveal.text.length).toBeGreaterThan(0)
-    expect(reveal.text.length).toBeLessThan(43)
-  })
-
-  it('drains the backlog within a few frames', () => {
-    const text = 'x'.repeat(200)
-    const state = progress()
-    let shown = 0
-    // 200 characters at the 24-character frame cap need nine frames.
-    for (let frame = 0; frame < 10; frame += 1) {
-      const reveal = advance(text, state, frame * 33)
-      shown = reveal.text.length
-      if (!reveal.pending) break
-    }
-    expect(shown).toBe(200)
-  })
-
-  it('spreads a burst that follows an idle gap instead of painting it at once', () => {
-    const text = 'x'.repeat(200)
-    const state = progress()
-    // The previous chunk drained long ago. The gap must not count as reveal
-    // time, or every chunk of a slow provider would snap in whole.
-    const reveal = advance(text, state, 500)
-    expect(reveal.pending).toBe(true)
-    expect(reveal.text.length).toBeLessThan(text.length)
-  })
-
-  it('never turns a late frame into a jump', () => {
-    const text = 'x'.repeat(200)
-    const state = progress()
-    advance(text, state, 0)
-    advance(text, state, 33)
-    // How long the previous frame took must not change the frame's step; that
-    // wall-clock pacing is what painted whole chunks at once.
-    const late = advance(text, state, 500)
-    expect(late.pending).toBe(true)
-    expect(late.text.length).toBe(72)
-  })
-
-  it('caps large settlements instead of snapping when the backlog exceeds 600', () => {
-    const text = 'x'.repeat(6_001)
-    const state = progress()
-    const reveal = advance(text, state, 0)
-    expect(reveal.pending).toBe(true)
-    expect(reveal.text).toHaveLength(STREAM_TEXT_MAX_STEP)
-  })
-
-  it('keeps a settled block visible and resumes after it', () => {
-    const revealProgress = new Map()
-    const options = { ...optionsBase, revealProgress } as never
-    const first = 'a'.repeat(60)
-    const entries: TranscriptEntry[] = [
-      liveChunk(1, 1, 1, { type: 'text-delta', index: 0, text: first }),
-      liveChunk(2, 1, 1, { type: 'block-end', index: 0, block: { type: 'text', text: first } }),
-    ]
-    const settled = reduceTranscriptWindow(entries, options, 1_000)
-    const settledBlock = settled.blocks.at(-1)
-    expect(settledBlock?.kind).toBe('assistant')
-    // The block-end keeps revealing instead of snapping the settled text in.
-    expect(settledBlock?.kind === 'assistant' ? settledBlock.text.length : 0).toBeGreaterThan(0)
-    expect(settledBlock?.kind === 'assistant' ? settledBlock.text.length : 0).toBeLessThan(first.length)
-    expect(settled.revealPending).toBe(true)
-
-    let revealed = settled
-    for (let frame = 1; frame <= 8 && revealed.revealPending; frame += 1) {
-      revealed = reduceTranscriptWindow(entries, options, 1_000 + frame * 33)
-    }
-    const revealedBlock = revealed.blocks.at(-1)
-    expect(revealedBlock?.kind === 'assistant' ? revealedBlock.text : '').toBe(first)
-
-    entries.push(liveChunk(3, 1, 1, { type: 'text-delta', index: 1, text: 'def' }, 1_210))
-    const resumed = reduceTranscriptWindow(entries, options, 1_220)
-    const resumedBlock = resumed.blocks.at(-1)
-    const text = resumedBlock?.kind === 'assistant' ? resumedBlock.text : ''
-    // A later block in the same step resumes from the settled text instead of
-    // re-revealing it from the first character.
-    expect(text.startsWith(first)).toBe(true)
-    expect(text.length).toBeGreaterThan(first.length)
-  })
-
-  it('reveals a settled text block over frames instead of snapping it', () => {
-    const revealProgress = new Map()
-    const options = { ...optionsBase, revealProgress } as never
-    const text = 'x'.repeat(200)
-    const entries: TranscriptEntry[] = [
-      liveChunk(1, 1, 1, { type: 'block-end', index: 0, block: { type: 'text', text } }, 1_000),
-    ]
-    const first = reduceTranscriptWindow(entries, options, 1_000)
-    const firstBlock = first.blocks.at(-1)
-    expect(firstBlock?.kind).toBe('assistant')
-    expect(firstBlock?.kind === 'assistant' ? firstBlock.text.length : 0).toBeGreaterThan(0)
-    expect(firstBlock?.kind === 'assistant' ? firstBlock.text.length : 0).toBeLessThan(text.length)
-    expect(first.revealPending).toBe(true)
-
-    // 200 characters at the 24-character frame cap need nine frames.
-    let done = first
-    for (let frame = 1; frame <= 10 && done.revealPending; frame += 1) {
-      done = reduceTranscriptWindow(entries, options, 1_000 + frame * 33)
-    }
-    const doneBlock = done.blocks.at(-1)
-    expect(doneBlock?.kind === 'assistant' ? doneBlock.text : '').toBe(text)
-    expect(done.revealPending).toBe(false)
-  })
-
-  it('keeps a live row until a durable message finishes revealing', () => {
-    const revealProgress = new Map()
-    const options = { ...optionsBase, revealProgress } as never
-    const text = 'y'.repeat(200)
-    const entries: TranscriptEntry[] = [
-      liveChunk(1, 1, 1, { type: 'text-delta', index: 0, text }, 1_000),
-      durable('assistant/message', {
-        turn: 1,
-        step: 1,
-        message: { content: [{ type: 'text', text }] },
-        stream: [],
-      }, 2),
-    ]
-    const first = reduceTranscriptWindow(entries, options, 1_000)
-    const firstBlock = first.blocks.at(-1)
-    expect(firstBlock?.kind).toBe('assistant')
-    expect(firstBlock?.kind === 'assistant' ? firstBlock.live : true).toBe(false)
-    expect(firstBlock?.kind === 'assistant' ? firstBlock.text.length : 0).toBeLessThan(text.length)
-    expect(first.revealPending).toBe(true)
-
-    let revealed = first
-    for (let frame = 1; frame <= 10 && revealed.revealPending; frame += 1) {
-      revealed = reduceTranscriptWindow(entries, options, 1_000 + frame * 33)
-    }
-    const revealedBlock = revealed.blocks.at(-1)
-    expect(revealedBlock?.kind === 'assistant' ? revealedBlock.text : '').toBe(text)
-    // The frame that paints the last character clears the pending flag, so the
-    // stream loop can settle instead of holding a frame open forever.
-    expect(revealed.revealPending).toBe(false)
-
-    const final = reduceTranscriptWindow(entries, options, 1_400)
-    const finalBlock = final.blocks.at(-1)
-    expect(finalBlock?.kind).toBe('assistant')
-    expect(finalBlock?.kind === 'assistant' ? finalBlock.text : '').toBe(text)
-    expect(finalBlock?.kind === 'assistant' ? finalBlock.live : true).toBe(false)
-    expect(final.revealPending).toBe(false)
-  })
-
-  it('recreates the pending reveal when the live rows are already gone', () => {
-    const revealProgress = new Map()
-    const options = { ...optionsBase, revealProgress } as never
-    const text = 'w'.repeat(200)
-    revealProgress.set('text:1:1', { start: 1_000, visible: 0 })
-    const entries: TranscriptEntry[] = [
-      durable('assistant/message', {
-        turn: 1,
-        step: 1,
-        message: { content: [{ type: 'text', text }] },
-        stream: [],
-      }, 2),
-    ]
-    const first = reduceTranscriptWindow(entries, options, 1_000)
-    const firstBlock = first.blocks.at(-1)
-    expect(firstBlock?.kind === 'assistant' ? firstBlock.text.length : 0).toBeGreaterThan(0)
-    expect(firstBlock?.kind === 'assistant' ? firstBlock.text.length : 0).toBeLessThan(text.length)
-    expect(first.revealPending).toBe(true)
-
-    let revealed = first
-    for (let frame = 1; frame <= 10 && revealed.revealPending; frame += 1) {
-      revealed = reduceTranscriptWindow(entries, options, 1_000 + frame * 33)
-    }
-    const revealedBlock = revealed.blocks.at(-1)
-    expect(revealedBlock?.kind === 'assistant' ? revealedBlock.text : '').toBe(text)
-    expect(revealed.revealPending).toBe(false)
-
-    const final = reduceTranscriptWindow(entries, options, 1_400)
-    const finalBlock = final.blocks.at(-1)
-    expect(finalBlock?.kind === 'assistant' ? finalBlock.text : '').toBe(text)
-    expect(final.revealPending).toBe(false)
-  })
-
-  it('reveals live reasoning deltas over frames', () => {
-    const revealProgress = new Map()
-    const options = { ...optionsBase, revealProgress, thinkingDisplay: 'detailed' } as never
-    const reasoning = 'z'.repeat(200)
-    const entries: TranscriptEntry[] = [
-      liveChunk(1, 1, 1, { type: 'reasoning-delta', index: 0, text: reasoning }, 1_000),
-    ]
-    const first = reduceTranscriptWindow(entries, options, 1_000)
-    const firstBlock = first.blocks.at(-1)
-    expect(firstBlock?.kind).toBe('assistant')
-    expect(firstBlock?.kind === 'assistant' ? firstBlock.reasoning?.length ?? 0 : 0).toBeGreaterThan(0)
-    expect(firstBlock?.kind === 'assistant' ? firstBlock.reasoning?.length ?? 0 : 0).toBeLessThan(reasoning.length)
-    expect(first.revealPending).toBe(true)
-
-    let done = first
-    for (let frame = 1; frame <= 10 && done.revealPending; frame += 1) {
-      done = reduceTranscriptWindow(entries, options, 1_000 + frame * 33)
-    }
-    const doneBlock = done.blocks.at(-1)
-    expect(doneBlock?.kind === 'assistant' ? doneBlock.reasoning : '').toBe(reasoning)
-    expect(done.revealPending).toBe(false)
-  })
-
-  it('never splits a surrogate pair', () => {
-    const text = '😀😀😀😀😀'
-    const state = progress()
-    const reveal = advance(text, state, 0)
-    expect(isWellFormed(reveal.text)).toBe(true)
-    expect([...reveal.text].every(character => character === '😀')).toBe(true)
-  })
-
-  it('keeps an emoji pair whole on a small reveal', () => {
-    const state = progress()
-    // A delta below the instant threshold paints at once, pair included.
-    expect(advance('a😀', state, 0)).toEqual({ text: 'a😀', pending: false })
-  })
-
-  it('never cuts an emoji pair out of a long burst', () => {
-    const state = progress()
-    const text = 'a'.repeat(20) + '😀'
-    let shown = ''
-    for (let frame = 0; frame < 10; frame += 1) {
-      const reveal = advance(text, state, frame * 33)
-      expect(isWellFormed(reveal.text)).toBe(true)
-      shown = reveal.text
-      if (!reveal.pending) break
-    }
-    expect(shown).toBe(text)
-  })
-
-  it('holds a pair cut by the chunk boundary until the rest arrives', () => {
-    // Mid-burst: this step reveals the high half at the end of the chunk.
-    const state = { visible: 16, start: 100, step: 4 }
-    const cut = 'a'.repeat(19) + '\uD83D'
-    expect(advance(cut, state, 100)).toEqual({ text: 'a'.repeat(19), pending: true })
-    expect(advance(cut + '\uDE00', state, 116)).toEqual({ text: 'a'.repeat(19) + '😀', pending: false })
-  })
-
-  it('stops holding a pair the stream never completes', () => {
-    const state = { visible: 16, start: 100, step: 4 }
-    const cut = 'a'.repeat(19) + '\uD83D'
-    expect(advance(cut, state, 100)).toEqual({ text: 'a'.repeat(19), pending: true })
-    // A lone high surrogate cannot pair, so the reveal settles rather than
-    // repainting the same prefix forever.
-    expect(advance(cut, state, 133)).toEqual({ text: cut, pending: false })
-    expect(advance(cut, state, 166)).toEqual({ text: cut, pending: false })
-  })
-})
-
 describe('nextFrameDelay', () => {
   it('waits a full interval when the last paint just happened', () => {
     expect(nextFrameDelay(33, 0)).toBe(33)
@@ -1723,7 +960,7 @@ describe('transcriptFrameChanged', () => {
     expect(transcriptFrameChanged(painted, { revision: 7, wait: '' })).toBe(false)
   })
 
-  it('paints the next reveal frame only when its visible prefix changes', () => {
+  it('paints when the transcript revision changes', () => {
     expect(transcriptFrameChanged(painted, { revision: 8, wait: '' })).toBe(true)
   })
 })
@@ -1791,9 +1028,9 @@ describe('TranscriptRenderer component reuse', () => {
     const renderer = new TranscriptRenderer(options)
     renderer.set([user(1, 'question')], [{ kind: 'waiting', text: waitingText(0, undefined, 3_000) }])
     const output = renderer.container.render(80).join('\n')
-    expect(output).toContain('⟳ waiting for response · 3s')
-    renderer.set([user(1, 'question')], [{ kind: 'waiting', text: waitingText(0, undefined, 3_000, { kind: 'tool', name: 'run_code' }) }])
-    expect(renderer.container.render(80).join('\n')).toContain('⟳ generating run_code call · 3s')
+    expect(output).toContain('⟳ working · 3s')
+    renderer.set([user(1, 'question')], [{ kind: 'waiting', text: waitingText(0, { retry: 1, maxRetries: 3, code: 'TRANSPORT' }, 3_000) }])
+    expect(renderer.container.render(80).join('\n')).toContain('retry 1/3 after TRANSPORT')
     // The row is transient, so it leaves no cached component behind.
     expect(renderer.container.children).toHaveLength(3)
   })
@@ -1802,12 +1039,7 @@ describe('TranscriptRenderer component reuse', () => {
     const renderer = new TranscriptRenderer(options)
     const text = 'hello there, this is a live answer'
     const entries = [liveChunk(1, 1, 1, { type: 'text-delta', text })]
-    // Text is revealed over frames, so the first frame paints a prefix; the
-    // size reported for pacing is what that frame will actually render.
     renderer.set(entries, [])
-    expect(renderer.liveContentLength).toBeGreaterThan(0)
-    expect(renderer.liveContentLength).toBeLessThan(text.length)
-    for (let frame = 0; frame < 8; frame += 1) renderer.set(entries, [])
     expect(renderer.liveContentLength).toBe(text.length)
     renderer.set([durable('assistant/message', { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'final' }] } }, 2)], [])
     expect(renderer.liveContentLength).toBe(0)
@@ -1907,28 +1139,3 @@ describe('TranscriptRenderer paint memo', () => {
     expect(after.render(80)).not.toBe(painted)
   })
 })
-
-describe('TranscriptRenderer settle grace', () => {
-  it('paces the grace from set() into the reduction', () => {
-    // The renderer owns the clock the reducer sees, so a paint that lands 500 ms
-    // after the content must pass an interval-scaled grace through, or the card
-    // joins the frame that first shows the final text.
-    vi.useFakeTimers()
-    vi.setSystemTime(1_502)
-    const entries: TranscriptEntry[] = [
-      liveChunk(1, 1, 1, { type: 'reasoning-delta', index: 0, text: 'thought' }, 1_000),
-      liveChunk(2, 1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: 'thought' } }, 1_002),
-      durable('tool/call', { turn: 1, step: 1, callId: 'call-1', name: 'run_code', arguments: '{}' }, 3),
-    ]
-    const renderer = new TranscriptRenderer(options)
-    const text = (): string => renderer.container.render(120).join(String.fromCharCode(10))
-    renderer.set(entries, [])
-    expect(text()).not.toContain('run_code')
-    vi.setSystemTime(1_702)
-    renderer.set(entries, [])
-    expect(text()).toContain('run_code')
-    renderer.set(entries, [], settleGraceMs(STREAM_PAINT_CEILING_MS))
-    expect(text()).not.toContain('run_code')
-  })
-})
-

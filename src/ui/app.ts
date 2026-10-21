@@ -34,10 +34,10 @@ import type { AgentDefaultModelService, LLM, SessionProjectionsService, SkillsCa
 import { openTuiSettings, showHostSettings } from './commands/settings.js'
 import { errorMessage } from './commands/shared.js'
 import { subscribeSessionEvents } from './session-events.js'
-import { liveChunkHasOutput, type TranscriptBlock, type TranscriptEntry } from './transcript.js'
-import { frameCostMs, frameOverrunMs, nextFrameDelay, nextStreamInterval, settleGraceMs, STREAM_MIN_INTERVAL_MS, transcriptFrameChanged } from './stream-pacing.js'
+import type { TranscriptBlock, TranscriptEntry } from './transcript.js'
+import { frameCostMs, frameOverrunMs, nextFrameDelay, nextStreamInterval, STREAM_MIN_INTERVAL_MS, transcriptFrameChanged } from './stream-pacing.js'
 import { TranscriptRenderer } from './transcript-renderer.js'
-import { WAIT_ROW_DELAY_MS, WaitStatusLine, waitSubjectAfter, waitingText, waitingVisible, type WaitRetry, type WaitSubject } from './waiting.js'
+import { WAIT_ROW_TICK_MS, WaitStatusLine, waitingText, type WaitRetry } from './waiting.js'
 import { holdProcessWarnings, type WarningGuard } from './warnings.js'
 import { Rule } from './rule.js'
 import { PromptEditor } from './prompt-editor.js'
@@ -129,7 +129,6 @@ export async function startTerminalApp(
     palette,
     markdown,
   })
-  let thinkingDisplayMode = config.thinkingDisplay
 
   // Vertical breathing room only: the transcript shares the full-width column
   // with the header, status, prompt, and rules.
@@ -235,11 +234,9 @@ export async function startTerminalApp(
   let painted = { revision: -1, wait: '' }
   /** performance.now() of the last frame that actually requested a paint. */
   let lastPaintAt = 0
-  /** Epoch ms the in-flight model request began, undefined when none is pending. */
+  /** Epoch ms the active turn began, undefined when idle. */
   let waitSince: number | undefined
   let waitRetry: WaitRetry | undefined
-  /** What the awaited model has produced so far, so the row can name it. */
-  let waitSubject: WaitSubject = { kind: 'request' }
   let waitTicker: ReturnType<typeof setInterval> | undefined
   let unsubscribeSession: (() => void) | undefined
   let interactionDisposers: Array<() => void> = []
@@ -287,13 +284,10 @@ export async function startTerminalApp(
     const slippedMs = frameOverrunMs(frameDueAt, performance.now())
     frameDueAt = undefined
     const started = performance.now()
+    renderer.set(entries, localNotices)
     const pending = waitingBlock()
     const pendingText = pending === undefined ? '' : pending.text
     waitStatus.setText(pendingText)
-    // The grace has to outlast the gap to this content's first paint, which is
-    // the interval the frame was scheduled on. A fixed grace would let a
-    // backed-off window paint the final text and the next tool card together.
-    renderer.set(entries, localNotices, settleGraceMs(transcriptInterval))
     if (renderer.contentChanged) transcriptRevision += 1
     const revision = transcriptRevision
     // Bound the next rebuild before pacing it.
@@ -313,17 +307,13 @@ export async function startTerminalApp(
     // session showed in tok/s.
     const frameMs = frameCostMs(rebuildMs, slippedMs, transcriptInterval)
     transcriptInterval = nextStreamInterval(transcriptInterval, frameMs)
-    debug(`stream frame: rebuild=${rebuildMs.toFixed(1)}ms slipped=${slippedMs.toFixed(1)}ms cost=${frameMs.toFixed(1)}ms sincePaint=${sincePaint.toFixed(1)}ms interval=${String(transcriptInterval)}ms live=${String(renderer.liveContentLength)} reveal=${String(renderer.liveRevealPending)}`)
-    const revealing = renderer.liveRevealPending
+    debug(`stream frame: rebuild=${rebuildMs.toFixed(1)}ms slipped=${slippedMs.toFixed(1)}ms cost=${frameMs.toFixed(1)}ms sincePaint=${sincePaint.toFixed(1)}ms interval=${String(transcriptInterval)}ms live=${String(renderer.liveContentLength)}`)
     const mark = { revision, wait: pendingText }
     if (transcriptFrameChanged(painted, mark)) {
       painted = mark
       lastPaintAt = performance.now()
       tui.requestRender()
     }
-    // A local reveal has no incoming chunk to re-arm the timer, so it drives
-    // its own frames until the whole block is visible.
-    if (revealing) scheduleTranscript()
   }
 
   /**
@@ -362,29 +352,25 @@ export async function startTerminalApp(
     waitTicker = undefined
   }
 
-  /** Forget the pending request: it answered, or the turn settled. */
+  /** Clear execution status when the turn settles or the session changes. */
   const clearWait = (): void => {
     waitSince = undefined
     waitRetry = undefined
-    waitSubject = { kind: 'request' }
     stopWaitTicker()
   }
 
-  /**
-   * Record that a request is in flight and repaint the row once a second, so a
-   * reader can tell a slow model from a turn that is no longer moving.
-   */
-  const beginWait = (): void => {
-    waitSince = Date.now()
-    waitSubject = { kind: 'request' }
-    // Repaint on the same cadence the row becomes reportable, so it shows on time.
-    if (waitTicker === undefined) waitTicker = setInterval(() => { scheduleTranscript(true) }, WAIT_ROW_DELAY_MS)
+  /** Execution status follows Host events, never receipt or playback of text. */
+  const beginWait = (retry?: WaitRetry): void => {
+    waitSince ??= Date.now()
+    waitRetry = retry
+    if (waitTicker === undefined) waitTicker = setInterval(() => { scheduleTranscript(true) }, WAIT_ROW_TICK_MS)
+    scheduleTranscript(true)
   }
 
   const waitingBlock = (): (TranscriptBlock & { readonly kind: 'waiting' }) | undefined => {
     const now = Date.now()
-    if (waitSince === undefined || !waitingVisible(waitSince, waitRetry, now)) return undefined
-    return { kind: 'waiting', text: waitingText(waitSince, waitRetry, now, waitSubject) }
+    if (waitSince === undefined) return undefined
+    return { kind: 'waiting', text: waitingText(waitSince, waitRetry, now) }
   }
 
   const pushNotice = (tone: 'info' | 'warning' | 'error', text: string): void => {
@@ -462,6 +448,7 @@ export async function startTerminalApp(
       sessionId: () => active.id,
       appendEntry: entry => {
         const chunk = entry.type === 'live' ? entry.event.data.chunk : undefined
+        if (chunk !== undefined) waitRetry = undefined
         if (chunk?.type === 'text-delta' || chunk?.type === 'reasoning-delta') {
           debug(`stream chunk: ${chunk.type} ${String(chunk.text.length)} chars`)
         }
@@ -470,21 +457,6 @@ export async function startTerminalApp(
           const size = block.type === 'text' || block.type === 'reasoning' ? block.text.length : 0
           debug(`stream chunk: block-end ${block.type} ${String(size)} chars`)
         }
-        // A bare block-start creates an empty live row; keep the wait row until
-        // the chunk produces something the reader can actually see.
-        if (chunk !== undefined && waitSince !== undefined) {
-          if (liveChunkHasOutput(chunk, thinkingDisplayMode !== 'hidden')) clearWait()
-          // A tool call streams for a long time before any card exists, so the
-          // row switches to naming it instead of only counting seconds.
-          else {
-            const subject = waitSubjectAfter(waitSubject, chunk)
-            if (subject !== waitSubject) {
-              waitSubject = subject
-              scheduleTranscript(true)
-            }
-          }
-        }
-        renderer.track(entry)
         entries.push(entry)
       },
       replaceEntries: update => { entries = update(entries) },
@@ -496,10 +468,7 @@ export async function startTerminalApp(
       nextLiveSeq: () => { liveSeq += 1; return liveSeq },
       attemptPosition: id => attemptPositions.get(id),
       beginWait,
-      retryScheduled: retry => {
-        waitRetry = retry
-        beginWait()
-      },
+      retryScheduled: retry => beginWait(retry),
       endWait: clearWait,
     })
     scheduleTranscript(true)
@@ -806,7 +775,6 @@ export async function startTerminalApp(
   return {
     setDisplayModes: (thinkingDisplay, runCodeDisplay) => {
       if (disposed) return
-      thinkingDisplayMode = thinkingDisplay
       renderer.setDisplayModes(thinkingDisplay, runCodeDisplay)
       tui.requestRender()
     },

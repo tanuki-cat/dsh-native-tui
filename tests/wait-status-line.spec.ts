@@ -5,14 +5,30 @@ import { WaitStatusLine, waitingText } from '../src/ui/waiting.js'
 
 const palette = createPalette('plain')
 
+describe('waitingText', () => {
+  it('reports working independently of whether content has arrived', () => {
+    expect(waitingText(1_000, undefined, 1_000)).toBe('working · 0s')
+    expect(waitingText(1_000, undefined, 4_400)).toBe('working · 3s')
+  })
+
+  it('reports automatic retry instead of ordinary working', () => {
+    expect(waitingText(1_000, { retry: 2, maxRetries: 5, code: 'TRANSPORT' }, 6_000))
+      .toBe('retry 2/5 after TRANSPORT (automatic) · 5s')
+  })
+
+  it('does not count backwards when the clock jumps', () => {
+    expect(waitingText(5_000, undefined, 1_000)).toBe('working · 0s')
+  })
+})
+
 describe('WaitStatusLine', () => {
-  it.each([1, 12, 80])('keeps one row at width %i through wait, retry, tool and idle transitions', width => {
+  it.each([1, 12, 80])('keeps one row at width %i through working, retry and idle transitions', width => {
     const line = new WaitStatusLine(palette)
     const labels = [
       '',
       waitingText(0, undefined, 2_000),
       waitingText(0, { retry: 2, maxRetries: 5, code: 'TRANSPORT' }, 4_000),
-      waitingText(0, undefined, 6_000, { kind: 'tool', name: 'a-long-tool-name-'.repeat(20) }),
+      'retry 2/5 after ' + 'LONG_FAILURE_CODE_'.repeat(20),
       '',
     ]
     for (const text of labels) {
@@ -24,12 +40,12 @@ describe('WaitStatusLine', () => {
     expect(line.render(width)[0]?.trim()).toBe('')
   })
 
-  it('shows the wait label and reuses its leaf until the label changes', () => {
+  it('shows execution status and reuses its leaf until the label changes', () => {
     const line = new WaitStatusLine(palette)
-    line.setText('waiting for response · 2s')
-    expect(line.render(80)[0]).toContain('⟳ waiting for response · 2s')
+    line.setText('working · 2s')
+    expect(line.render(80)[0]).toContain('⟳ working · 2s')
     const before = line.children[0]
-    line.setText('waiting for response · 2s')
+    line.setText('working · 2s')
     expect(line.children[0]).toBe(before)
     line.setText('')
     expect(line.children).toHaveLength(1)

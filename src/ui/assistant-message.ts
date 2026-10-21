@@ -1,5 +1,5 @@
 import { Box, Container, Markdown, Spacer, Text, type Component } from '@earendil-works/pi-tui'
-import { clipGraphemes } from './reasoning-reveal.js'
+import { clipGraphemes } from './grapheme-preview.js'
 import type { TranscriptBlock, TranscriptOptions } from './transcript.js'
 import type { AssistantPart } from './transcript-stream.js'
 

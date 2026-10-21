@@ -14,9 +14,7 @@ import { Rule } from './rule.js'
 import type { DisplayMode } from '../config.js'
 import { createTranscriptReducer, type TranscriptBlock, type TranscriptEntry, type TranscriptOptions } from './transcript.js'
 import { AssistantMessage } from './assistant-message.js'
-import { forgetStepReveal, rememberRevealProgress } from './reasoning-reveal.js'
 import { renderTranscriptBlock } from './transcript-render.js'
-import { STREAM_SETTLE_MIN_MS } from './stream-pacing.js'
 
 /**
  * One transcript row component, memoized on the width it last painted at.
@@ -151,9 +149,6 @@ export class TranscriptRenderer {
   private changed = false
   private retained = 0
   private liveChars = 0
-  private revealPending = false
-  /** Grace before rows after an assistant block, paced to the frame interval by {@link set}. */
-  private settleMs = STREAM_SETTLE_MIN_MS
   private options: TranscriptOptions
   private reducer: ReturnType<typeof createTranscriptReducer>
   private reducedEntries: TranscriptEntry[] = []
@@ -179,11 +174,6 @@ export class TranscriptRenderer {
     return this.liveChars
   }
 
-  /** True while ordered stream content or a settling row needs another frame. */
-  get liveRevealPending(): boolean {
-    return this.revealPending
-  }
-
   /** True when the last rebuild changed what the container would paint. */
   get contentChanged(): boolean {
     return this.changed
@@ -195,7 +185,6 @@ export class TranscriptRenderer {
   constructor(options: TranscriptOptions) {
     this.options = {
       ...options,
-      revealProgress: options.revealProgress ?? new Map(),
       toolMemory: options.toolMemory ?? {
         settled: new Set(),
         pruned: new Set(),
@@ -241,12 +230,8 @@ export class TranscriptRenderer {
    * Replace both the event window and local notices in one rebuild.
    * @param entries - contiguous durable and transient event window.
    * @param notices - local notices placed by durable sequence.
-   * @param settleMs - grace before rows after an assistant block; the app paces
-   *   it to the current frame interval so a backed-off window still shows the
-   *   final text on its own frame.
    */
-  set(entries: readonly TranscriptEntry[], notices: readonly TranscriptBlock[], settleMs = STREAM_SETTLE_MIN_MS): void {
-    this.settleMs = settleMs
+  set(entries: readonly TranscriptEntry[], notices: readonly TranscriptBlock[]): void {
     this.entries = entries
     this.extra = notices
     this.rebuild()
@@ -268,8 +253,6 @@ export class TranscriptRenderer {
   clear(): void {
     this.entries = []
     this.extra = []
-    this.revealPending = false
-    this.options.revealProgress?.clear()
     this.options.toolMemory?.settled.clear()
     this.options.toolMemory?.pruned.clear()
     this.options.toolMemory?.prunedSeqs.clear()
@@ -279,24 +262,6 @@ export class TranscriptRenderer {
     this.paintedBlocks = undefined
     this.changed = false
     this.container.clear()
-  }
-
-  /** Register a received burst even if its durable settlement replaces it before the first paint. */
-  track(entry: TranscriptEntry): void {
-    if (entry.type !== 'live') {
-      if (entry.event.type === 'assistant/attempt') {
-        const { turn, step } = entry.event.data
-        forgetStepReveal(this.options.revealProgress, String(turn) + ':' + String(step))
-      }
-      return
-    }
-    const { chunk, turn, step } = entry.event.data
-    const type = chunk.type === 'block-end' ? chunk.block.type : chunk.type === 'text-delta' ? 'text' : chunk.type === 'reasoning-delta' ? 'reasoning' : undefined
-    if (type !== 'text' && type !== 'reasoning') return
-    const prefix = type === 'text' ? 'text:' : 'reasoning:'
-    const key = prefix + String(turn) + ':' + String(step)
-    const progress = this.options.revealProgress!
-    if (!progress.has(key)) rememberRevealProgress(progress, key, { start: entry.event.time, visible: 0 })
   }
 
   private resetReduction(): void {
@@ -315,9 +280,8 @@ export class TranscriptRenderer {
     const offset = this.reducedEntries.length
     this.reducer.append(this.entries, offset)
     for (let index = offset; index < this.entries.length; index += 1) this.reducedEntries.push(this.entries[index]!)
-    const reduction = this.reducer.reduce(Date.now(), this.settleMs)
+    const reduction = this.reducer.reduce()
     this.retained = reduction.retainedFrom
-    this.revealPending = reduction.revealPending
     const durable = reduction.blocks
     const anchored = this.extra.filter((notice): notice is TranscriptBlock & { afterSeq: number } => notice.afterSeq !== undefined)
     const trailing = this.extra.filter(notice => notice.afterSeq === undefined)

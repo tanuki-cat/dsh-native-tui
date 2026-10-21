@@ -45,11 +45,11 @@ export interface SessionEventsHost {
   readonly nextLiveSeq: () => number
   /** The turn/step recorded for one attempt, when it is known. */
   readonly attemptPosition: (attemptId: string) => { turn: number; step: number } | undefined
-  /** A model request started; nothing has streamed from it yet. */
+  /** A turn or model attempt started; show working status and clear any retry label. */
   readonly beginWait: () => void
   /** A failed attempt scheduled a retry, which is now the reason for waiting. */
   readonly retryScheduled: (retry: WaitRetry) => void
-  /** The turn settled, so no request is in flight any more. */
+  /** The turn settled, so execution status can return to idle. */
   readonly endWait: () => void
 }
 
@@ -93,7 +93,8 @@ export function subscribeSessionEvents(host: SessionEventsHost): () => void {
         code: typeof data.failure?.code === 'string' ? data.failure.code : 'ERROR',
       })
     }
-    if (event.type === 'turn/end' || event.type === 'assistant/message' || event.type === 'tool/call') host.endWait()
+    if (event.type === 'turn/start') host.beginWait()
+    if (event.type === 'turn/end') host.endWait()
     host.scheduleTranscript()
     host.renderStatus()
   }))

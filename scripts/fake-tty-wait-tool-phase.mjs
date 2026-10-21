@@ -1,10 +1,8 @@
 /**
- * Real-Host check that the wait row names the tool call being generated.
+ * Real-Host check that working status persists while a tool call is streaming.
  *
- * The mock Responses server holds a function call for a while: it announces the
- * item, waits, then streams the arguments. A bare tool block-start must not
- * clear the wait row, so the row has to switch from the generic request text to
- * `generating run_code call` while the arguments are still streaming.
+ * The mock Responses server announces a function call, waits, then streams its
+ * arguments. Working status must remain visible until the whole turn ends.
  *
  * Setup:
  *   pnpm build
@@ -35,8 +33,8 @@ if (!existsSync(profile)) {
 }
 
 const toolArgs = JSON.stringify({ description: 'Wait phase probe', code: '1 + 1' })
-// Long enough to cross the 1s flash window and be seen as a tool phase.
 const holdMs = 2_500
+let argsOffset
 
 function sendMessage(res, text) {
   res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
@@ -59,8 +57,7 @@ function sendToolTurn(res) {
   res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
   const send = (type, payload = {}) => res.write('event: ' + type + '\ndata: ' + JSON.stringify({ type, ...payload }) + '\n\n')
   send('response.created', { response: { id: 'resp_tool', object: 'response', status: 'in_progress', output: [] } })
-  // The item first, then the arguments over several frames: a real provider
-  // streams the call's JSON, which is the window the wait row has to name it.
+  // The call's arguments arrive over multiple provider chunks.
   send('response.output_item.added', {
     output_index: 0,
     item: { id: 'fc_1', type: 'function_call', call_id: 'call_1', name: 'run_code', arguments: '' },
@@ -81,6 +78,7 @@ function sendToolTurn(res) {
       res.end()
       return
     }
+    argsOffset ??= strip(out).length
     send('response.function_call_arguments.delta', { output_index: 0, delta: toolArgs.slice(sent, sent + piece) })
     sent += piece
     setTimeout(streamArgs, holdMs / pieces)
@@ -162,8 +160,8 @@ const tick = setInterval(() => {
     try { child.stdin.write('probe wait phase\r') } catch {}
   }
   else if (phase !== 'done') {
-    if (requestAt === undefined && text.includes('waiting for response')) requestAt = Date.now() - started
-    if (toolPhaseAt === undefined && text.includes('generating run_code call')) toolPhaseAt = Date.now() - started
+    if (requestAt === undefined && text.includes('⟳ working ·')) requestAt = Date.now() - started
+    if (toolPhaseAt === undefined && argsOffset !== undefined && text.indexOf('⟳ working ·', argsOffset) !== -1) toolPhaseAt = Date.now() - started
     if (!approved && text.includes('Approval required')) {
       approved = true
       try { child.stdin.write('\r') } catch {}
@@ -180,20 +178,16 @@ child.on('exit', (code, signal) => {
   clearInterval(tick)
   clearTimeout(hard)
   const text = strip(out)
-  // Both texts must show, in order: the request first, then the tool phase.
+  // A fresh working-row repaint during arguments proves the status stayed live.
   const sawRequest = requestAt !== undefined
   const sawToolPhase = toolPhaseAt !== undefined
   const ordered = sawRequest && sawToolPhase && toolPhaseAt >= requestAt
-  // The row is repainted until the call settles; the accumulated stream keeps
-  // those frames, so "gone" means its last paint precedes the tool card.
-  const rowEnd = text.lastIndexOf('generating run_code call ·')
-  const cardStart = text.indexOf('⚙ run_code')
-  const clearedAfter = rowEnd !== -1 && cardStart !== -1 && rowEnd < cardStart
   const completed = finalAt !== undefined
-  const pass = ordered && clearedAfter && completed
+  const settled = text.lastIndexOf('● idle') > text.lastIndexOf('● working')
+  const pass = code === 0 && signal === null && ordered && completed && settled
   console.log('EXIT', code, signal, 'phase', phase)
   console.log('requestAt', requestAt, 'toolPhaseAt', toolPhaseAt, 'finalAt', finalAt)
-  console.log('sawRequest', sawRequest, 'sawToolPhase', sawToolPhase, 'ordered', ordered, 'clearedAfter', clearedAfter, 'completed', completed)
+  console.log('sawRequest', sawRequest, 'sawToolPhase', sawToolPhase, 'ordered', ordered, 'settled', settled, 'completed', completed)
   console.log('RESULT', pass ? 'PASS' : 'FAIL')
   if (!pass) {
     console.log('--- stdout tail ---')

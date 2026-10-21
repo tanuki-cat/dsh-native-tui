@@ -1,11 +1,8 @@
 /**
  * Real-Host check for a long API wait followed by one large reasoning block.
  *
- * Verifies the thinking placeholder, no whole-block pop-in, the wait row, that
- * the thinking text is revealed progressively, and that the status block and
- * prompt keep their rows across the wait-to-stream transition. The answer may appear
- * while the reveal is still running: it is real streamed content and the
- * transcript no longer hides it behind the animation.
+ * Verifies the thinking placeholder, whole-block display on receipt, and stable
+ * status/prompt rows through working, content arrival and settlement.
  *
  * Setup:
  *   pnpm build
@@ -37,8 +34,7 @@ if (!existsSync(profile)) {
 
 const startMark = 'SLOW-REASONING-START-'
 const middleMark = '-SLOW-REASONING-MIDDLE-'
-// The middle marker is inside the 3000-grapheme preview, so it proves the
-// block is being revealed rather than painted in one frame.
+// Both markers must appear together on the first content frame.
 const reasoning = startMark + 'x'.repeat(200) + middleMark + 'x'.repeat(5_800)
 
 function sendMessage(res, text) {
@@ -128,6 +124,7 @@ writeFileSync(join(profile, 'cordis.patch.yml'), `- id: llm-pi-ai
 `)
 
 const geometryLog = join(home, 'chrome-geometry.jsonl')
+writeFileSync(geometryLog, '')
 const child = spawn(process.execPath, ['scripts/fake-tty-entry.mjs', '--profile', 'tui'], {
   cwd: repo,
   env: {
@@ -139,7 +136,7 @@ const child = spawn(process.execPath, ['scripts/fake-tty-entry.mjs', '--profile'
     TERM: 'xterm-256color',
     COLORTERM: 'truecolor',
     FAKE_TTY_GEOMETRY_LOG: geometryLog,
-    FAKE_TTY_GEOMETRY_MARKS: startMark + ',' + 'SLOW ANSWER DONE',
+    FAKE_TTY_GEOMETRY_MARKS: ['thinking …', startMark, 'SLOW ANSWER DONE'].join(','),
     NODE_OPTIONS: [process.env.NODE_OPTIONS, '--import=' + fileURLToPath(new URL('./fake-tty-chrome-trace.mjs', import.meta.url))]
       .filter(Boolean).join(' '),
   },
@@ -161,7 +158,7 @@ const started = Date.now()
 const tick = setInterval(() => {
   const text = strip(out)
   if (placeholderAt === undefined && text.includes('thinking …')) placeholderAt = Date.now() - started
-  if (waitingAt === undefined && text.includes('waiting for response')) waitingAt = Date.now() - started
+  if (waitingAt === undefined && text.includes('⟳ working ·')) waitingAt = Date.now() - started
   if (phase === 'editor' && text.includes('enter send')) {
     phase = 'model'
     try { child.stdin.write('/model mock/mock-model\r') } catch {}
@@ -173,8 +170,6 @@ const tick = setInterval(() => {
   else {
     if (startAt === undefined && text.includes(startMark)) {
       startAt = Date.now() - started
-      // The frame that first shows the start marker must not already show the
-      // marker 200 characters in, or the block was painted in one piece.
       firstChunkHadMiddle = text.includes(middleMark)
     }
     if (middleAt === undefined && text.includes(middleMark)) middleAt = Date.now() - started
@@ -190,29 +185,24 @@ child.on('exit', (code, signal) => {
   clearInterval(tick)
   clearTimeout(hard)
   const text = strip(out)
-  // Progressive reveal: the start marker appears before the marker 200
-  // characters further in, and the first frame that shows the start marker is
-  // not already a whole block.
   const streamed = startAt !== undefined && middleAt !== undefined && middleAt >= startAt
   const answered = answerAt !== undefined
   const placeholderOrdered = placeholderAt !== undefined
     && (startAt === undefined || placeholderAt <= startAt)
   const waitingOrdered = waitingAt !== undefined
     && (startAt === undefined || waitingAt <= startAt)
-  // Chrome geometry: once a wait row is on screen, the status block and prompt
-  // must keep their rows through the wait clearing and the next stream content.
-  // Before that the viewport is still filling from empty, which legitimately
-  // pushes the prompt down.
+  // Before the placeholder, initial transcript rows can still fill the viewport.
+  // Once it is painted, status and prompt must not move on content or idle transitions.
   const frames = readFileSync(geometryLog, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
-  const firstWait = frames.findIndex(frame => frame.wait === true)
+  const firstWait = frames.findIndex(frame => frame.wait === true && String(frame.mark).includes('thinking …'))
   const streamedFrames = firstWait < 0 ? [] : frames.slice(firstWait)
   const chromeRows = new Set(streamedFrames.map(frame => String(frame.statusRow) + '/' + String(frame.editorRow)))
   const sawWait = firstWait >= 0
   const sawThinking = streamedFrames.some(frame => String(frame.mark).includes(startMark))
   const sawAnswer = streamedFrames.some(frame => String(frame.mark).includes('SLOW ANSWER DONE'))
   const chromeStable = chromeRows.size === 1 && sawWait && sawThinking && sawAnswer
-  const pass = placeholderOrdered && waitingOrdered
-    && startAt !== undefined && !firstChunkHadMiddle && streamed && answered && chromeStable
+  const pass = code === 0 && signal === null && placeholderOrdered && waitingOrdered
+    && startAt !== undefined && firstChunkHadMiddle && streamed && answered && chromeStable
   console.log('EXIT', code, signal, 'phase', phase)
   console.log('placeholderAt', placeholderAt, 'waitingAt', waitingAt)
   console.log('startAt', startAt, 'middleAt', middleAt, 'answerAt', answerAt, 'firstChunkHadMiddle', firstChunkHadMiddle)

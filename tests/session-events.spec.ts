@@ -48,7 +48,30 @@ function harness(): { emit: (name: string, ...args: unknown[]) => void; seen: Re
   }
 }
 
-describe('session event wait reporting', () => {
+describe('session event execution reporting', () => {
+  it('starts working on turn/start before any provider output', () => {
+    const { emit, seen } = harness()
+    emit('session/event', { id: 's1' }, { type: 'turn/start', seq: 1, data: { turn: 1 } })
+    expect(seen.begins).toBe(1)
+  })
+
+  it.each(['text-delta', 'reasoning-delta', 'tool-call-delta'])('keeps working after %s even if the stream then stalls', type => {
+    const { emit, seen } = harness()
+    emit('agent/assistant-stream', { agent: { id: 's1' }, frame: { type: 'start', attemptId: 'a1', turn: 1, step: 1 } })
+    emit('agent/assistant-stream', { agent: { id: 's1' }, frame: {
+      type: 'chunk', attemptId: 'a1', time: 1_000, chunk: { type, index: 0, text: 'partial' },
+    } })
+    emit('agent/assistant-stream', { agent: { id: 's1' }, frame: { type: 'end', attemptId: 'a1' } })
+    expect(seen.begins).toBe(1)
+    expect(seen.ends).toBe(0)
+    expect(seen.entries).toHaveLength(1)
+  })
+
+  it.each(['error', 'aborted', 'interrupted'])('ends working on a %s turn', kind => {
+    const { emit, seen } = harness()
+    emit('session/event', { id: 's1' }, { type: 'turn/end', seq: 1, data: { turn: 1, reason: { kind } } })
+    expect(seen.ends).toBe(1)
+  })
   it('reports a model wait from the attempt start frame', () => {
     const { emit, seen } = harness()
     emit('agent/assistant-stream', { agent: { id: 's1' }, frame: { type: 'start', attemptId: 'a1', turn: 1, step: 1 } })
@@ -81,7 +104,7 @@ describe('session event wait reporting', () => {
     expect(seen.entries).toHaveLength(1)
   })
 
-  it('clears the wait when a message or tool call settles the request', () => {
+  it('keeps working through messages and tool calls until turn/end', () => {
     const { emit, seen } = harness()
     emit('session/event', { id: 's1' }, {
       type: 'assistant/message',
@@ -93,7 +116,9 @@ describe('session event wait reporting', () => {
       seq: 9,
       data: { turn: 1, step: 1, callId: 'c1', name: 'run', arguments: '{}' },
     })
-    expect(seen.ends).toBe(2)
+    expect(seen.ends).toBe(0)
+    emit('session/event', { id: 's1' }, { type: 'turn/end', seq: 10, data: { turn: 1, reason: { kind: 'completed' } } })
+    expect(seen.ends).toBe(1)
   })
 
   it('reports a presented deliverable as a notice', () => {

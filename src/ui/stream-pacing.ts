@@ -31,32 +31,6 @@ const STREAM_FRAME_BUDGET_SHARE = 0.5
  */
 export const STREAM_PAINT_CEILING_MS = 500
 /**
- * Minimum grace after an assistant block's last content before the rows that
- * follow it are shown.
- *
- * A shorter grace would let the final thinking text and the tool card that
- * follows it land on the same frame, which reads as the thinking ending and
- * the card appearing at once.
- */
-export const STREAM_SETTLE_MIN_MS = 150
-
-/**
- * Settle grace for the frame interval in effect.
- *
- * The grace has to outlast the gap between an assistant block's last content
- * and its first paint, or that paint shows the content and the following tool
- * card together — the exact frame the grace exists to prevent. The gap is the
- * frame interval, which now reaches {@link STREAM_PAINT_CEILING_MS}, so a grace
- * derived from a fixed interval no longer covers a backed-off window.
- * @param interval - interval the next frames are paced at.
- * @returns grace in milliseconds for that cadence.
- */
-export function settleGraceMs(interval: number): number {
-  const paced = Number.isFinite(interval) ? Math.max(0, interval) : 0
-  return Math.max(STREAM_SETTLE_MIN_MS, Math.round(paced) + 50)
-}
-
-/**
  * Next streaming frame interval for one measured frame.
  *
  * The interval is the time that keeps a frame within
@@ -97,7 +71,7 @@ export function nextStreamInterval(current: number, frameMs: number): number {
  * The slip also covers work that has nothing to do with the paint, so
  * {@link frameCostMs} caps it before it reaches the pacer.
  * @param dueAt - when the frame was scheduled to run, or undefined when it was
- *   triggered directly (a burst, a reveal, or the first frame).
+ *   triggered directly (a burst or the first frame).
  * @param now - the current wall clock.
  * @returns slipped milliseconds, or 0 for an on-time or unscheduled frame.
  */
@@ -155,8 +129,7 @@ export interface TranscriptPaintMark {
  * Whether a rebuild has anything new to paint.
  *
  * Frames are scheduled on a cadence, so some rebuild the same rows as the last
- * one. A pending reveal schedules another projection, not a repaint of
- * identical terminal lines.
+ * one without requiring another terminal paint.
  * @param painted - state the last painted frame reflected.
  * @param current - state the rebuild just produced.
  * @returns true when the frame must be painted.

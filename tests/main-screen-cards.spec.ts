@@ -146,11 +146,7 @@ describe('main-screen stream settlement', () => {
       vi.setSystemTime(1_000)
       const firstText = Array.from({ length: 48 }, (_, index) => 'FIRST ' + index).join('\n')
       const secondText = Array.from({ length: 48 }, (_, index) => 'SECOND ' + index).join('\n')
-      const prefix = type === 'reasoning' ? 'reasoning:' : 'text:'
-      const renderer = new TranscriptRenderer({ ...options, revealProgress: new Map([
-        [prefix + '1:1', { start: 1_000, visible: firstText.length, paintedAt: 1_000 }],
-        [prefix + '1:2', { start: 1_200, visible: secondText.length, paintedAt: 1_200 }],
-      ]) })
+      const renderer = new TranscriptRenderer(options)
       const first = { type: 'event', event: { type: 'assistant/message', seq: 1, time: 1_000, data: {
         turn: 1, step: 1, message: { content: [{ type, text: firstText }] }, stream: [],
       } } } as unknown as TranscriptEntry
@@ -181,7 +177,6 @@ describe('main-screen stream settlement', () => {
       tui.renderNow()
       expect(tui.fullRedraws - redraws).toBe(0)
       expect(renderer.container.render(100).join('\n') === before).toBe(true)
-      expect(renderer.liveRevealPending).toBe(false)
     }
     finally {
       tui.stop()
@@ -191,15 +186,13 @@ describe('main-screen stream settlement', () => {
 })
 
 describe('main-screen chrome stability', () => {
-  it('keeps status and prompt rows fixed while a wait clears before the next step is visible', () => {
+  it('keeps status and prompt rows fixed through working, retry and idle transitions', () => {
     const tui = new TuiMainScreen(new FakeTerminal(100, 30) as never, false)
     vi.useFakeTimers()
     try {
       vi.setSystemTime(1_000)
       const reasoning = Array.from({ length: 48 }, (_, index) => 'THINKING ' + index).join('\n')
-      const renderer = new TranscriptRenderer({ ...options, revealProgress: new Map([
-        ['reasoning:1:1', { start: 1_000, visible: reasoning.length, paintedAt: 1_000 }],
-      ]) })
+      const renderer = new TranscriptRenderer(options)
       const wait = new WaitStatusLine(palette)
       const editor = new PromptEditor(tui, editorTheme(palette))
       const first = { type: 'event', event: { type: 'assistant/message', seq: 1, time: 1_000, data: {
@@ -207,7 +200,7 @@ describe('main-screen chrome stability', () => {
       } } } as unknown as TranscriptEntry
       const entries = [first]
       renderer.setEntries(entries)
-      wait.setText('waiting for response · 1s')
+      wait.setText('working · 1s')
       tui.addChild(renderer.container)
       tui.addChild(new Text('CHROME STATUS\n\nCHROME HINT', 0, 0))
       tui.addChild(wait)
@@ -234,14 +227,14 @@ describe('main-screen chrome stability', () => {
       renderer.setEntries(entries)
       wait.setText('')
       tui.renderNow()
-      expect(renderer.container.render(100).join('\n').includes('NEXT STEP')).toBe(false)
+      expect(renderer.container.render(100).join('\n')).toContain('NEXT STEP')
       expect(rows()).toEqual(before)
       vi.setSystemTime(1_200)
       renderer.setEntries(entries)
       tui.renderNow()
       expect(renderer.container.render(100).join('\n')).toContain('NEXT STEP')
       expect(rows()).toEqual(before)
-      for (const label of ['generating ' + 'a-long-tool-name-'.repeat(20), 'retry 2/5 after TRANSPORT', '']) {
+      for (const label of ['working · 3s', 'retry 2/5 after TRANSPORT', '']) {
         wait.setText(label)
         tui.renderNow()
         expect(rows()).toEqual(before)

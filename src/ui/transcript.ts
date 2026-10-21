@@ -25,10 +25,8 @@ import type { Palette } from './theme.js'
 import type { DisplayMode } from '../config.js'
 import { resultFileDiffs, type FileDiff } from './diff.js'
 import { clip } from './tool-preview.js'
-import { forgetStepReveal, type RevealProgress } from './reasoning-reveal.js'
 import { AssistantStream, type AssistantPart } from './transcript-stream.js'
 import { isCodeExecutionTool } from './transcript-render.js'
-import { STREAM_SETTLE_MIN_MS } from './stream-pacing.js'
 import { trimTranscriptWindow } from './transcript-window.js'
 
 /**
@@ -51,8 +49,6 @@ export type TranscriptBlock = ({
   readonly streamKey?: string
   /** True while the reasoning block is open but has no content yet. */
   readonly starting?: boolean
-  /** True while ordered content remains to be displayed. */
-  readonly revealing?: boolean
 } | {
   readonly kind: 'context'; readonly label: string; readonly text: string
 } | {
@@ -70,9 +66,8 @@ export type TranscriptBlock = ({
   readonly kind: 'notice'; readonly tone: 'info' | 'warning' | 'error'; readonly text: string
 } | {
   /**
-   * Transient model-wait row: a request is in flight and nothing streamed from
-   * it yet. The application synthesizes it, never the reducer, so it carries
-   * no seq and is rebuilt rather than reused.
+   * Transient execution/retry status. The application synthesizes it, never
+   * the reducer, so it carries no seq and is rebuilt rather than reused.
    */
   readonly kind: 'waiting'; readonly text: string
 } | {
@@ -118,12 +113,6 @@ export interface TranscriptOptions {
   readonly maxEntries: number
   readonly palette: Palette
   readonly markdown: MarkdownTheme
-  /**
-   * Per-part visible offsets shared across live-to-durable replacement.
-   * Interactive rendering advances bounded steps; untracked reducers use the
-   * completed reasoning timestamp and render streamed deltas directly.
-   */
-  readonly revealProgress?: Map<string, RevealProgress>
   /**
    * Session-level tool dedupe/prune memory. The renderer supplies it so a late
    * duplicate result cannot revive a call whose original events were sliced out
@@ -198,40 +187,6 @@ function stepKey(turn: number, step: number): string {
   return `${String(turn)}:${String(step)}`
 }
 
-/**
- * Whether a row ends the reveal hold because showing it late would hide
- * information: fresh user input and a failed or truncated turn.
- * @param block - one reduced block after a still-revealing reasoning block.
- * @returns true when the hold must give way.
- */
-function isRevealBoundary(block: TranscriptBlock): boolean {
-  return block.kind === 'user' || (block.kind === 'notice' && block.tone !== 'info')
-}
-
-/**
- * Whether one transient chunk proves the model started producing content the
- * live transcript can show. A bare block-start must not hide the wait row
- * before any content exists; tool calls and images are shown by their durable
- * events, which clear the row themselves.
- * @param chunk - one live assistant stream chunk.
- * @param showReasoning - false when the thinking display is hidden.
- * @returns true for a non-empty text/reasoning delta or block.
- */
-export function liveChunkHasOutput(chunk: StreamChunk, showReasoning = true): boolean {
-  switch (chunk.type) {
-    case 'text-delta':
-      return chunk.text.trim() !== ''
-    case 'reasoning-delta':
-      return showReasoning && chunk.text.trim() !== ''
-    case 'block-end':
-      if (chunk.block.type === 'text') return chunk.block.text.trim() !== ''
-      if (chunk.block.type === 'reasoning') return showReasoning && chunk.block.text.trim() !== ''
-      return false
-    default:
-      return false
-  }
-}
-
 /** One reduction plus the entry prefix no retained block still needs. */
 export interface TranscriptReduction {
   /** Rendered transcript blocks, oldest first. */
@@ -242,8 +197,6 @@ export interface TranscriptReduction {
    * caller may discard them and re-reduce a bounded window next time.
    */
   readonly retainedFrom: number
-  /** True while a completed reasoning block is still being revealed. */
-  readonly revealPending: boolean
 }
 
 /**
@@ -251,38 +204,28 @@ export interface TranscriptReduction {
  * independent from pi-tui so it can be unit-tested without a terminal.
  * @param entries - contiguous durable and transient event window.
  * @param options - display limits and palette.
- * @param now - wall clock for revealing a completed reasoning block; defaults to now.
- * @param settleMs - grace before rows that follow an assistant block are shown.
  * @returns rendered transcript blocks, oldest first.
  */
 export function reduceTranscript(
   entries: readonly TranscriptEntry[],
   options: TranscriptOptions,
-  now = Date.now(),
-  settleMs = STREAM_SETTLE_MIN_MS,
 ): TranscriptBlock[] {
-  return reduceTranscriptWindow(entries, options, now, settleMs).blocks
+  return reduceTranscriptWindow(entries, options).blocks
 }
 
 /**
  * Fold {@link reduceTranscript}'s window and report how much of it survives.
  * @param entries - contiguous durable and transient event window.
  * @param options - display limits and palette.
- * @param now - wall clock for revealing a completed reasoning block; defaults to now.
- * @param settleMs - grace before rows that follow an assistant block are shown.
- *   The renderer passes one paced to the current frame interval, so a backed-off
- *   window cannot paint the final text and the next tool card together.
  * @returns the rendered blocks and the oldest entry a retained block needs.
  */
 export function reduceTranscriptWindow(
   entries: readonly TranscriptEntry[],
   options: TranscriptOptions,
-  now = Date.now(),
-  settleMs = STREAM_SETTLE_MIN_MS,
 ): TranscriptReduction {
   const reducer = createTranscriptReducer(options)
   reducer.append(entries)
-  return reducer.reduce(now, settleMs)
+  return reducer.reduce()
 }
 
 /** Stateful event fold. Append immutable entries once; project as often as the UI paints. */
@@ -290,12 +233,6 @@ export function createTranscriptReducer(options: TranscriptOptions) {
   const blocks: TranscriptBlock[] = []
   /** Entry index that created each block, parallel to `blocks`; every event appends at most one. */
   const sources: number[] = []
-  /**
-   * Wall clock of the last content an assistant block received, parallel to
-   * `blocks`. Rows that follow a block are held until this is one paint old, so
-   * the final thinking text never shares a frame with the tool card after it.
-   */
-  const contentAt: number[] = []
   const liveByStep = new Map<string, number>()
   const assistants = new Map<number, AssistantStream>()
   const finalizedSteps = new Set<string>()
@@ -362,8 +299,7 @@ export function createTranscriptReducer(options: TranscriptOptions) {
       liveByStep.set(key, index)
       assistants.set(index, new AssistantStream(key, options))
     }
-    assistants.get(index)!.append(event.data.chunk, event.time)
-    contentAt[index] = event.time
+    assistants.get(index)!.append(event.data.chunk)
   }
 
   const append = (entries: readonly TranscriptEntry[], offset = 0): void => {
@@ -553,10 +489,9 @@ export function createTranscriptReducer(options: TranscriptOptions) {
           finalizedSteps.add(key)
           const index = liveByStep.get(key) ?? blocks.length
           const assistant = assistants.get(index) ?? new AssistantStream(key, options)
-          assistant.settle(event.data.message.content, event.data.stream, seq)
+          assistant.settle(event.data.message.content, seq)
           assistants.set(index, assistant)
           blocks[index] = { kind: 'assistant', text: '', live: false, seq }
-          contentAt[index] = event.time
           liveByStep.delete(key)
           break
         }
@@ -568,11 +503,9 @@ export function createTranscriptReducer(options: TranscriptOptions) {
             blocks[index] = { kind: 'assistant', text: '', live: false }
             liveByStep.delete(key)
           }
-          if (index !== undefined) forgetStepReveal(options.revealProgress, key)
           const assistant = new AssistantStream(key + ':attempt:' + String(seq), options)
-          assistant.settle(attemptContent(event.data.stream), event.data.stream, seq)
+          assistant.settle(attemptContent(event.data.stream), seq)
           assistants.set(blocks.length, assistant)
-          contentAt[blocks.length] = event.time
           blocks.push({ kind: 'assistant', text: '', live: false, seq })
           break
         }
@@ -697,63 +630,19 @@ export function createTranscriptReducer(options: TranscriptOptions) {
     while (sources.length < blocks.length) sources.push(entries.length - 1)
   }
 
-  const reduce = (now = Date.now(), settleMs = STREAM_SETTLE_MIN_MS): TranscriptReduction => {
-    let revealPending = false
+  const reduce = (): TranscriptReduction => {
     const visible: TranscriptBlock[] = []
     const visibleSources: number[] = []
-    let holdAfterReveal = false
-    /** Latest assistant content already emitted above the current row. */
-    let lastAssistantAt: number | undefined
-    let settleHeld = false
     for (let index = 0; index < blocks.length; index += 1) {
-      let block = blocks[index]!
-      // A reasoning block that is still revealing keeps the rows after it back,
-      // so a tool card or the next step does not overtake the thinking text. The
-      // hold ends at the first row that must not be hidden -- a new user message
-      // or a warning/error notice -- and everything from that row on is shown in
-      // event order. Rows that arrived before the boundary stay held, so a tool
-      // card that preceded the failure cannot leak out ahead of the thinking.
-      const boundary = isRevealBoundary(block)
-      if (holdAfterReveal && !boundary) continue
-      if (holdAfterReveal) holdAfterReveal = false
-      // Followers wait from the last visible stream update; stateless history
-      // uses event timestamps. No later row may overtake a row held by grace.
-      const previousAssistantAt = lastAssistantAt
-      if (previousAssistantAt !== undefined
-        && (block.kind === 'assistant' || block.kind === 'tool' || block.kind === 'compaction'
-          || (block.kind === 'notice' && block.tone === 'info'))
-        && now - previousAssistantAt < settleMs) {
-        settleHeld = true
-        holdAfterReveal = true
-        continue
-      }
-      const assistant = assistants.get(index)
-      if (assistant !== undefined) {
-        block = assistant.project(now)
-        if (block.kind === 'assistant' && block.revealing === true) {
-          revealPending = true
-          holdAfterReveal = true
-        }
-      }
-      // A pruned tool row only repeats the prune notice; hiding the whole card
-      // keeps the transcript focused on content that is still model-visible.
+      const block = assistants.get(index)?.project() ?? blocks[index]!
+      // A pruned tool row only repeats the prune notice.
       if (block.kind === 'tool' && block.pruned === true) continue
       if (block.kind === 'assistant' && block.text === '' && (block.reasoning ?? '') === ''
         && block.starting !== true) continue
       visible.push(block)
       visibleSources.push(sources[index] ?? 0)
-      if (block.kind === 'assistant') {
-        if (block.revealing === true) holdAfterReveal = true
-        const at = assistant?.visibleAt ?? contentAt[index]
-        if (at !== undefined) lastAssistantAt = at
-      }
-      // The grace only covers rows that directly follow the assistant block; a
-      // new user turn, a failure and any other row end that adjacency.
-      else lastAssistantAt = undefined
     }
-    const pending = revealPending || settleHeld
-    const trimmed = trimTranscriptWindow(visible, visibleSources, options.maxEntries)
-    return { blocks: trimmed.blocks, retainedFrom: trimmed.retainedFrom, revealPending: pending }
+    return trimTranscriptWindow(visible, visibleSources, options.maxEntries)
   }
   return { append, reduce }
 }
