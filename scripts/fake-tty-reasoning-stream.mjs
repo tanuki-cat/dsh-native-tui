@@ -12,6 +12,7 @@
  *
  * Run:
  *   node scripts/fake-tty-reasoning-stream.mjs
+ *   PROBE_REASONING_REPEAT=70 PROBE_SETTLE_MS=0 node scripts/fake-tty-reasoning-stream.mjs
  */
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:http'
@@ -38,7 +39,8 @@ const settleDelayMs = Number(process.env.PROBE_SETTLE_MS ?? 1200)
 const reasoningDelayMs = Number(process.env.PROBE_REASONING_DELAY_MS ?? 300)
 const mark = 'RESPONSES-REASONING-START-'
 const endMark = '-RESPONSES-REASONING-END'
-const reasoning = mark + 'The gateway sent this reasoning as one completed output item. '.repeat(18) + endMark
+const reasoningRepeat = Number(process.env.PROBE_REASONING_REPEAT ?? 18)
+const reasoning = mark + 'The gateway sent this reasoning as one completed output item. '.repeat(reasoningRepeat) + endMark
 
 /** Stream a Responses turn with one completed reasoning item and a short answer. */
 function serveResponse(body, res) {
@@ -120,6 +122,10 @@ writeFileSync(join(profile, 'cordis.patch.yml'), `- id: llm-pi-ai
             reasoningEfforts:
               low: low
               high: high
+- id: native-tui
+  name: dsh-native-tui
+  config:
+    thinkingDisplay: detailed
 `)
 
 const child = spawn(process.execPath, [join(repo, 'scripts', 'fake-tty-entry.mjs'), '--profile', 'tui'], {
@@ -173,12 +179,12 @@ child.on('exit', (code, signal) => {
   // before the reasoning end marker.
   const answerOrdered = endAt !== undefined && finalAt !== undefined && finalAt >= endAt
   const waitingCovered = reasoningDelayMs < 1100 || waitingSeen
-  const pass = streaming && completed && answerOrdered && waitingCovered
+  const pass = code === 0 && signal === null && streaming && completed && answerOrdered && waitingCovered
     && text.includes(mark) && text.includes(endMark)
   console.log('EXIT', code, signal, 'phase', phase)
   console.log('settleDelayMs', settleDelayMs, 'reasoningDelayMs', reasoningDelayMs, 'waitingSeen', waitingSeen, 'answerOrdered', answerOrdered)
   console.log('prefixAt', prefixAt, 'endAt', endAt, 'finalAt', finalAt)
-  console.log('reasoning rendered', text.includes(mark), text.includes(endMark))
+  console.log('reasoning length', reasoning.length, 'rendered', text.includes(mark), text.includes(endMark))
   console.log('RESULT', pass ? 'PASS' : 'FAIL')
   if (!pass) {
     console.log('--- stdout tail ---')

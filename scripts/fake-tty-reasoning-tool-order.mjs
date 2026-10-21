@@ -184,10 +184,11 @@ child.on('exit', (code, signal) => {
   const streaming = prefixAt !== undefined && endAt !== undefined && endAt - prefixAt >= 100
   const ordered = endAt !== undefined && toolAt !== undefined && toolAt >= endAt
   const completed = finalAt !== undefined
-  const pass = streaming && ordered && completed
+  const clears = (out.match(/\x1b\[2J/g) ?? []).length
+  const pass = code === 0 && signal === null && streaming && ordered && completed && clears === 0
   console.log('EXIT', code, signal, 'phase', phase)
   console.log('prefixAt', prefixAt, 'endAt', endAt, 'toolAt', toolAt, 'finalAt', finalAt)
-  console.log('streaming', streaming, 'ordered', ordered, 'completed', completed)
+  console.log('streaming', streaming, 'ordered', ordered, 'completed', completed, 'clears', clears)
   console.log('RESULT', pass ? 'PASS' : 'FAIL')
   if (!pass) {
     console.log('--- stdout tail ---')

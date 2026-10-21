@@ -1,7 +1,7 @@
 import { isKeyRelease, matchesKey } from '@earendil-works/pi-tui'
 
 /** One global terminal shortcut handled before the focused component. */
-export type GlobalShortcut = 'cancel-turn' | 'clear-input' | 'exit'
+export type GlobalShortcut = 'cancel-turn' | 'clear-input' | 'exit' | 'toggle-write-preview'
 
 /** Terminal state that decides what a global shortcut means. */
 export interface ShortcutState {
@@ -29,6 +29,7 @@ export function globalShortcut(data: string, state: ShortcutState): GlobalShortc
     if (state.editorFocused && state.editorHasText) return 'clear-input'
     return state.running ? 'cancel-turn' : undefined
   }
+  if (state.editorFocused && matchesKey(data, 'ctrl+o')) return 'toggle-write-preview'
   if (matchesKey(data, 'ctrl+c')) return state.running ? 'cancel-turn' : 'exit'
   if (matchesKey(data, 'ctrl+d')) return 'exit'
   return undefined

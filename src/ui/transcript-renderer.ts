@@ -12,7 +12,9 @@
 import { Container, Spacer, type Component } from '@earendil-works/pi-tui'
 import { Rule } from './rule.js'
 import type { DisplayMode } from '../config.js'
-import { reduceTranscriptWindow, type TranscriptBlock, type TranscriptEntry, type TranscriptOptions } from './transcript.js'
+import { createTranscriptReducer, type TranscriptBlock, type TranscriptEntry, type TranscriptOptions } from './transcript.js'
+import { AssistantMessage } from './assistant-message.js'
+import { forgetStepReveal, rememberRevealProgress } from './reasoning-reveal.js'
 import { renderTranscriptBlock } from './transcript-render.js'
 import { STREAM_SETTLE_MIN_MS } from './stream-pacing.js'
 
@@ -49,6 +51,13 @@ class MemoBlock implements Component {
     return lines
   }
 
+  update(block: TranscriptBlock): boolean {
+    if (!(this.inner instanceof AssistantMessage) || block.kind !== 'assistant') return false
+    this.inner.update(block)
+    this.lines = undefined
+    return true
+  }
+
   invalidate(): void {
     this.lines = undefined
     this.width = -1
@@ -75,6 +84,12 @@ export function sameTranscriptBlock(left: TranscriptBlock, right: TranscriptBloc
     const before = (left as unknown as Record<string, unknown>)[key]
     const after = previous[key]
     if (before === after) continue
+    if (key === 'content' && left.kind === 'assistant' && right.kind === 'assistant') {
+      if (left.content?.length !== right.content?.length) return false
+      if (left.content?.every((part, index) => part.type === right.content?.[index]?.type
+        && part.text === right.content[index]?.text)) continue
+      return false
+    }
     if (Array.isArray(before) && Array.isArray(after)) {
       if (before.length !== after.length) return false
       for (let index = 0; index < before.length; index += 1) if (before[index] !== after[index]) return false
@@ -106,8 +121,8 @@ function sameTranscriptBlocks(left: readonly TranscriptBlock[], right: readonly 
 /**
  * Stable identity of one reduced block, for carrying its component across a
  * rebuild. `maxEntries` drops old rows from the front and shifts every later
- * block's index, so index alignment cannot decide reuse. A live assistant
- * block has no durable identity and is rebuilt every frame by design.
+ * block's index, so index alignment cannot decide reuse. Live assistant rows
+ * use the turn/step identity until their durable sequence is assigned.
  * @param block - one reduced block.
  * @returns a key stable for the block's lifetime, or undefined when it has none.
  */
@@ -115,7 +130,7 @@ function blockKey(block: TranscriptBlock): string | undefined {
   switch (block.kind) {
     case 'tool': return 'tool:' + block.callId
     case 'compaction': return 'compaction:' + block.compactionId
-    case 'assistant': return block.live || block.seq === undefined ? undefined : 'assistant:' + String(block.seq)
+    case 'assistant': return block.live ? 'live:' + block.streamKey : block.seq === undefined ? undefined : 'assistant:' + String(block.seq)
     case 'user': return block.seq === undefined ? undefined : 'user:' + String(block.seq)
     case 'context': return block.seq === undefined ? undefined : 'context:' + String(block.seq)
     case 'notice': return block.seq === undefined ? undefined : 'notice:' + String(block.seq)
@@ -140,6 +155,9 @@ export class TranscriptRenderer {
   /** Grace before rows after an assistant block, paced to the frame interval by {@link set}. */
   private settleMs = STREAM_SETTLE_MIN_MS
   private options: TranscriptOptions
+  private reducer: ReturnType<typeof createTranscriptReducer>
+  private reducedEntries: TranscriptEntry[] = []
+  private entryWindow: readonly TranscriptEntry[] | undefined
   /**
    * Separators are stateless, so one instance each serves every block. Reusing
    * them keeps a saturated rebuild from allocating thousands of components per
@@ -161,7 +179,7 @@ export class TranscriptRenderer {
     return this.liveChars
   }
 
-  /** True while a completed reasoning block is still being revealed across frames. */
+  /** True while ordered stream content or a settling row needs another frame. */
   get liveRevealPending(): boolean {
     return this.revealPending
   }
@@ -185,6 +203,7 @@ export class TranscriptRenderer {
         callBySeq: new Map(),
       },
     }
+    this.reducer = createTranscriptReducer(this.options)
     this.separator = new Rule(this.options.palette.dim)
   }
 
@@ -196,12 +215,25 @@ export class TranscriptRenderer {
     // can stay equal while its component must switch representation. Drop the
     // reuse window; otherwise the previous density keeps rendering.
     this.cached.clear()
+    this.paintedBlocks = undefined
+    this.resetReduction()
+    this.rebuild()
+  }
+
+  /** Toggle file-content previews without reparsing unchanged history components. */
+  toggleWritePreview(): void {
+    this.options = { ...this.options, writeExpanded: !this.options.writeExpanded }
+    for (const [key, cached] of this.cached) {
+      if (cached.block.kind === 'tool' && cached.block.name === 'write') this.cached.delete(key)
+    }
+    this.paintedBlocks = undefined
     this.rebuild()
   }
 
   /** Change the retained transcript row budget and rebuild. */
   setMaxEntries(maxEntries: number): void {
     this.options = { ...this.options, maxEntries }
+    this.resetReduction()
     this.rebuild()
   }
 
@@ -243,13 +275,47 @@ export class TranscriptRenderer {
     this.options.toolMemory?.prunedSeqs.clear()
     this.options.toolMemory?.callBySeq.clear()
     this.cached.clear()
+    this.resetReduction()
     this.paintedBlocks = undefined
     this.changed = false
     this.container.clear()
   }
 
+  /** Register a received burst even if its durable settlement replaces it before the first paint. */
+  track(entry: TranscriptEntry): void {
+    if (entry.type !== 'live') {
+      if (entry.event.type === 'assistant/attempt') {
+        const { turn, step } = entry.event.data
+        forgetStepReveal(this.options.revealProgress, String(turn) + ':' + String(step))
+      }
+      return
+    }
+    const { chunk, turn, step } = entry.event.data
+    const type = chunk.type === 'block-end' ? chunk.block.type : chunk.type === 'text-delta' ? 'text' : chunk.type === 'reasoning-delta' ? 'reasoning' : undefined
+    if (type !== 'text' && type !== 'reasoning') return
+    const prefix = type === 'text' ? 'text:' : 'reasoning:'
+    const key = prefix + String(turn) + ':' + String(step)
+    const progress = this.options.revealProgress!
+    if (!progress.has(key)) rememberRevealProgress(progress, key, { start: entry.event.time, visible: 0 })
+  }
+
+  private resetReduction(): void {
+    this.reducer = createTranscriptReducer(this.options)
+    this.reducedEntries = []
+    this.entryWindow = undefined
+  }
+
   private rebuild(): void {
-    const reduction = reduceTranscriptWindow(this.entries, this.options, Date.now(), this.settleMs)
+    const sameWindow = this.entryWindow === this.entries
+      && this.reducedEntries[0] === this.entries[0]
+      && this.reducedEntries.at(-1) === this.entries[this.reducedEntries.length - 1]
+    if (this.reducedEntries.length > this.entries.length
+      || !sameWindow && this.reducedEntries.some((entry, index) => entry !== this.entries[index])) this.resetReduction()
+    this.entryWindow = this.entries
+    const offset = this.reducedEntries.length
+    this.reducer.append(this.entries, offset)
+    for (let index = offset; index < this.entries.length; index += 1) this.reducedEntries.push(this.entries[index]!)
+    const reduction = this.reducer.reduce(Date.now(), this.settleMs)
     this.retained = reduction.retainedFrom
     this.revealPending = reduction.revealPending
     const durable = reduction.blocks
@@ -265,6 +331,7 @@ export class TranscriptRenderer {
     }
     blocks.push(...pending, ...trailing)
     this.changed = this.paintedBlocks === undefined || !sameTranscriptBlocks(this.paintedBlocks, blocks)
+    if (!this.changed) return
     this.paintedBlocks = blocks
     const next = new Map<string, { readonly block: TranscriptBlock; readonly component: Component }>()
     let liveChars = 0
@@ -278,10 +345,9 @@ export class TranscriptRenderer {
       }
       const key = blockKey(block)
       const previous = key === undefined ? undefined : this.cached.get(key)
-      // Streaming rewrites only the trailing live block. Reusing the rest by
-      // identity keeps their parsed Markdown cached even when the window is full
-      // and every block index just shifted by one.
-      const component = previous !== undefined && sameTranscriptBlock(previous.block, block)
+      // Identity survives window shifts; assistant updates retain completed leaves.
+      const component = previous !== undefined && (sameTranscriptBlock(previous.block, block)
+        || previous.component instanceof MemoBlock && previous.component.update(block))
         ? previous.component
         : new MemoBlock(renderTranscriptBlock(block, this.options))
       if (key !== undefined) next.set(key, { block, component })

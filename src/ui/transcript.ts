@@ -25,8 +25,8 @@ import type { Palette } from './theme.js'
 import type { DisplayMode } from '../config.js'
 import { resultFileDiffs, type FileDiff } from './diff.js'
 import { clip } from './tool-preview.js'
-import { REASONING_LIVE_PROGRESS_PREFIX, REASONING_REVEAL_RECENT_MS, reasoningRevealFrom, rememberRevealProgress, revealCompletedReasoning, revealDurableReasoning, revealStreamText, STREAM_TEXT_MAX_BACKLOG, STREAM_TEXT_PROGRESS_PREFIX, type RevealProgress } from './reasoning-reveal.js'
-import { debug } from '../debug.js'
+import { forgetStepReveal, type RevealProgress } from './reasoning-reveal.js'
+import { AssistantStream, type AssistantPart } from './transcript-stream.js'
 import { isCodeExecutionTool } from './transcript-render.js'
 import { STREAM_SETTLE_MIN_MS } from './stream-pacing.js'
 import { trimTranscriptWindow } from './transcript-window.js'
@@ -46,9 +46,12 @@ export type TranscriptBlock = ({
   readonly text: string
   readonly reasoning?: string
   readonly live: boolean
+  /** Text and reasoning in provider order. Absent on local, manually constructed rows. */
+  readonly content?: readonly AssistantPart[]
+  readonly streamKey?: string
   /** True while the reasoning block is open but has no content yet. */
   readonly starting?: boolean
-  /** True while this block's completed reasoning is still being revealed. */
+  /** True while ordered content remains to be displayed. */
   readonly revealing?: boolean
 } | {
   readonly kind: 'context'; readonly label: string; readonly text: string
@@ -110,13 +113,15 @@ export interface TranscriptOptions {
   readonly showReasoning: boolean
   readonly thinkingDisplay?: DisplayMode
   readonly runCodeDisplay?: DisplayMode
+  /** Application-local keyboard toggle, not a persisted setting. */
+  readonly writeExpanded?: boolean
   readonly maxEntries: number
   readonly palette: Palette
   readonly markdown: MarkdownTheme
   /**
-   * Per-step reveal clocks for the interactive renderer. Direct reducers omit
-   * it and use the block-end timestamp as before; the renderer supplies it so
-   * a delayed first frame starts at one grapheme instead of skipping ahead.
+   * Per-part visible offsets shared across live-to-durable replacement.
+   * Interactive rendering advances bounded steps; untracked reducers use the
+   * completed reasoning timestamp and render streamed deltas directly.
    */
   readonly revealProgress?: Map<string, RevealProgress>
   /**
@@ -203,10 +208,6 @@ function isRevealBoundary(block: TranscriptBlock): boolean {
   return block.kind === 'user' || (block.kind === 'notice' && block.tone !== 'info')
 }
 
-function reasoningKey(turn: number, step: number): string {
-  return 'reasoning:' + stepKey(turn, step)
-}
-
 /**
  * Whether one transient chunk proves the model started producing content the
  * live transcript can show. A bare block-start must not hide the wait row
@@ -279,6 +280,13 @@ export function reduceTranscriptWindow(
   now = Date.now(),
   settleMs = STREAM_SETTLE_MIN_MS,
 ): TranscriptReduction {
+  const reducer = createTranscriptReducer(options)
+  reducer.append(entries)
+  return reducer.reduce(now, settleMs)
+}
+
+/** Stateful event fold. Append immutable entries once; project as often as the UI paints. */
+export function createTranscriptReducer(options: TranscriptOptions) {
   const blocks: TranscriptBlock[] = []
   /** Entry index that created each block, parallel to `blocks`; every event appends at most one. */
   const sources: number[] = []
@@ -288,23 +296,9 @@ export function reduceTranscriptWindow(
    * the final thinking text never shares a frame with the tool card after it.
    */
   const contentAt: number[] = []
-  const liveByStep = new Map<string, {
-    index: number
-    text: string
-    /** The provider closed the text block, so this text is settled. */
-    textFinal: boolean
-    /** Characters already settled, so a later block resumes instead of re-revealing. */
-    settledLength: number
-    reasoning: string
-    revealing: boolean
-    /** Reasoning came from a completed block, so the completed reveal owns it. */
-    reasoningSettled: boolean
-    starting: boolean
-  }>()
-  let durableRevealPending = false
+  const liveByStep = new Map<string, number>()
+  const assistants = new Map<number, AssistantStream>()
   const finalizedSteps = new Set<string>()
-  /** Steps that already opened a live block, so a retry is recognisable. */
-  const startedSteps = new Set<string>()
   const toolByCall = new Map<string, number>()
   const hiddenCodeExecutionCalls = new Set<string>()
   /** Event sequence -> call identity, for both tool calls and tool results. */
@@ -312,9 +306,7 @@ export function reduceTranscriptWindow(
   const callIdBySeq = options.toolMemory?.callBySeq ?? new Map<number, string>()
   const prunedSeqs = options.toolMemory?.prunedSeqs ?? new Set<number>()
   const prunedCalls = options.toolMemory?.pruned ?? new Set<string>()
-  const thinkingDisplay = options.thinkingDisplay ?? 'detailed'
   const runCodeDisplay = options.runCodeDisplay ?? 'detailed'
-  const showReasoning = thinkingDisplay !== 'hidden' && (options.thinkingDisplay !== undefined || options.showReasoning)
   const compactionByCall = new Map<string, number>()
   /** PTC child call ids per parent `run_code`, so a pruned parent hides its cards. */
   const ptcByParent = new Map<string, Set<string>>()
@@ -323,24 +315,6 @@ export function reduceTranscriptWindow(
     const children = ptcByParent.get(parentCallId) ?? new Set<string>()
     children.add(subCallId)
     ptcByParent.set(parentCallId, children)
-  }
-  const revealDurable = (
-    text: string,
-    stream: readonly AssistantStreamRecord[] | undefined,
-    key: string,
-  ): { readonly text: string; readonly pending: boolean } => {
-    if (!showReasoning || text.trim() === '') return { text, pending: false }
-    const from = reasoningRevealFrom(stream)
-    const progressKey = 'reasoning:' + key
-    let progress = options.revealProgress?.get(progressKey)
-    if (options.revealProgress !== undefined && progress === undefined && from !== undefined
-      && now - from <= REASONING_REVEAL_RECENT_MS) {
-      progress = { start: now, visible: 0 }
-      rememberRevealProgress(options.revealProgress, progressKey, progress)
-    }
-    // Only the detailed display shows the whole block, so only it pays for the
-    // local reveal; compact shows one line and must not hold later rows.
-    return revealDurableReasoning(text, from, now, showReasoning && thinkingDisplay === 'detailed', progress, options.revealProgress !== undefined)
   }
   /**
    * Why an open compaction ended at this event, or undefined when it does not
@@ -381,607 +355,405 @@ export function reduceTranscriptWindow(
   const pushLive = (event: LiveChunkEntry): void => {
     const key = stepKey(event.data.turn, event.data.step)
     if (finalizedSteps.has(key)) return
-    let live = liveByStep.get(key)
-    if (live === undefined) {
-      const index = blocks.length
-      blocks.push({ kind: 'assistant', text: '', reasoning: '', live: true })
-      live = { index, text: '', textFinal: false, settledLength: 0, reasoning: '', revealing: false, reasoningSettled: false, starting: false }
-      liveByStep.set(key, live)
-      // A step only starts a second live block when a retry took over from the
-      // previous attempt. Its reasoning must reveal from the start instead of
-      // inheriting the settled attempt's completed count.
-      if (startedSteps.has(key)) options.revealProgress?.delete(reasoningKey(event.data.turn, event.data.step))
-      startedSteps.add(key)
+    let index = liveByStep.get(key)
+    if (index === undefined) {
+      index = blocks.length
+      blocks.push({ kind: 'assistant', text: '', live: true })
+      liveByStep.set(key, index)
+      assistants.set(index, new AssistantStream(key, options))
     }
-    const chunk: StreamChunk = event.data.chunk
-    if (chunk.type === 'block-start') {
-      // A reasoning block can stay open for a long time before its content
-      // arrives. Keep an empty-but-visible row so the page does not sit blank
-      // and then pop in a whole block.
-      if (chunk.blockType === 'reasoning' && showReasoning) live.starting = true
-    }
-    else if (chunk.type === 'text-delta') {
-      live.starting = false
-      // A block-end earlier in the step finalised this text; more deltas mean a
-      // later block is streaming again.
-      live.textFinal = false
-      live.text += chunk.text
-    }
-    else if (chunk.type === 'reasoning-delta' && showReasoning) {
-      live.starting = false
-      live.reasoning += chunk.text
-      live.reasoningSettled = false
-    }
-    else if (chunk.type === 'block-end') {
-      live.starting = false
-      if (chunk.block.type === 'text' && chunk.block.text.length >= live.text.length) {
-        live.text = chunk.block.text
-        // The provider closed the block, but a fast burst may still be behind
-        // the local reveal. Keep the progress: the settled text finishes
-        // revealing over the next frames instead of snapping in one paint.
-        live.textFinal = true
-        live.settledLength = live.text.length
-        const progressKey = STREAM_TEXT_PROGRESS_PREFIX + key
-        if (options.revealProgress !== undefined
-          && options.revealProgress.get(progressKey) === undefined
-          && live.text.length <= STREAM_TEXT_MAX_BACKLOG) {
-          rememberRevealProgress(options.revealProgress, progressKey, { start: now, visible: 0 })
-        }
-      }
-      else if (chunk.block.type === 'reasoning' && showReasoning && chunk.block.text.trim() !== '') {
-        const completed = chunk.block.text
-        if (live.reasoning === '') {
-          // Some Responses-compatible gateways send no reasoning deltas, only the
-          // terminal block. Reveal that block over frames instead of popping it in.
-          const progressKey = reasoningKey(event.data.turn, event.data.step)
-          let progress = options.revealProgress?.get(progressKey)
-          if (options.revealProgress !== undefined && progress === undefined) {
-            progress = { start: now, visible: 0 }
-            rememberRevealProgress(options.revealProgress, progressKey, progress)
-          }
-          const reveal = thinkingDisplay === 'detailed'
-            ? revealCompletedReasoning(completed, now, progress, event.time)
-            : { text: completed, pending: false }
-          live.reasoning = reveal.text
-          live.revealing = reveal.pending
-          live.reasoningSettled = true
-        }
-        else {
-          if (completed.length >= live.reasoning.length) live.reasoning = completed
-          live.revealing = false
-          live.reasoningSettled = false
-        }
-      }
-    }
-    contentAt[live.index] = event.time
-    blocks[live.index] = {
-      kind: 'assistant',
-      text: live.text,
-      ...(live.reasoning === '' ? {} : { reasoning: live.reasoning }),
-      live: true,
-      ...(live.starting ? { starting: true } : {}),
-      ...(live.revealing ? { revealing: true } : {}),
-    }
+    assistants.get(index)!.append(event.data.chunk, event.time)
+    contentAt[index] = event.time
   }
 
-  for (let position = 0; position < entries.length; position += 1) {
-    // Attribute every block the previous entry appended to that entry.
-    while (sources.length < blocks.length) sources.push(position - 1)
-    const entry = entries[position]!
-    if (entry.type === 'live') {
-      pushLive(entry.event)
-      continue
-    }
-    const event: SessionEvent = entry.event
-    const seq = Number(event.seq)
-    const extensionType = (event as unknown as { type: string }).type
-    if (extensionType.startsWith('compaction/')) {
-      const data = (event as unknown as { data: Record<string, unknown> }).data
-      if (extensionType === 'compaction/start') {
-        finishOpenCompactions(seq)
-        const id = String(data.compactionId)
-        compactionByCall.set(id, blocks.length)
-        blocks.push({ kind: 'compaction', compactionId: id, state: 'running', seq })
+  const append = (entries: readonly TranscriptEntry[], offset = 0): void => {
+    for (let position = offset; position < entries.length; position += 1) {
+      // Attribute every block the previous entry appended to that entry.
+      while (sources.length < blocks.length) sources.push(position - 1)
+      const entry = entries[position]!
+      if (entry.type === 'live') {
+        pushLive(entry.event)
+        continue
       }
-      else if (extensionType === 'compaction/summary') {
-        const id = String(data.compactionId)
-        const summary = clip(contentText(data.summary as readonly ContentBlock[] | undefined), 800)
-        const shadowedSeqs = Array.isArray(data.shadowedSeqs) ? data.shadowedSeqs : []
-        const range = data.shadowedRange as { readonly start?: unknown; readonly end?: unknown } | undefined
-        const rangeCount = typeof range?.start === 'number' && typeof range.end === 'number'
-          ? Math.max(0, range.end - range.start + 1)
-          : 0
-        const block: TranscriptBlock = {
-          kind: 'compaction',
-          compactionId: id,
-          state: 'running',
-          shadowedItems: shadowedSeqs.length > 0 ? shadowedSeqs.length : rangeCount,
-          ...(typeof data.shadowedTokenCount === 'number' ? { shadowedTokens: data.shadowedTokenCount } : {}),
-          ...(summary === '' ? {} : { summary }),
-          seq,
-        }
-        const index = compactionByCall.get(id)
-        if (index === undefined) {
+      const event: SessionEvent = entry.event
+      const seq = Number(event.seq)
+      const extensionType = (event as unknown as { type: string }).type
+      if (extensionType.startsWith('compaction/')) {
+        const data = (event as unknown as { data: Record<string, unknown> }).data
+        if (extensionType === 'compaction/start') {
+          finishOpenCompactions(seq)
+          const id = String(data.compactionId)
           compactionByCall.set(id, blocks.length)
-          blocks.push(block)
+          blocks.push({ kind: 'compaction', compactionId: id, state: 'running', seq })
         }
-        else {
-          blocks[index] = block
-        }
-      }
-      else if (extensionType === 'compaction/end') {
-        const id = String(data.compactionId)
-        const error = typeof data.error === 'string' ? data.error : undefined
-        const index = compactionByCall.get(id)
-        if (index === undefined) {
-          blocks.push({ kind: 'compaction', compactionId: id, state: error === undefined ? 'done' : 'error', ...(error === undefined ? {} : { error }), seq })
-        }
-        else {
-          const prior = blocks[index]
-          if (prior?.kind === 'compaction') {
-            blocks[index] = { ...prior, state: error === undefined ? 'done' : 'error', ...(error === undefined ? {} : { error }), seq }
-          }
-        }
-      }
-      else if (extensionType === 'compaction/prune') {
-        const shadowedSeqs = Array.isArray(data.shadowedSeqs) ? data.shadowedSeqs : []
-        for (const value of shadowedSeqs) {
-          if (typeof value !== 'number' || !Number.isSafeInteger(value)) continue
-          prunedSeqs.add(value)
-          const callId = callIdBySeq.get(value)
-          if (callId === undefined) continue
-          prunedCalls.add(callId)
-          const index = toolByCall.get(callId)
-          if (index !== undefined) {
-            const prior = blocks[index]
-            if (prior?.kind === 'tool') {
-              blocks[index] = {
-                ...prior,
-                result: undefined,
-                diffs: undefined,
-                pending: false,
-                pruned: true,
-              }
-            }
-          }
-          // A pruned run_code hides the write/edit cards it produced.
-          for (const subCallId of ptcByParent.get(callId) ?? []) {
-            prunedCalls.add(subCallId)
-            const childIndex = toolByCall.get(subCallId)
-            const child = childIndex === undefined ? undefined : blocks[childIndex]
-            if (childIndex !== undefined && child?.kind === 'tool') {
-              blocks[childIndex] = {
-                ...child,
-                result: undefined,
-                diffs: undefined,
-                pending: false,
-                pruned: true,
-              }
-            }
-          }
-        }
-        const count = shadowedSeqs.length
-        const tokens = typeof data.shadowedTokenCount === 'number' ? data.shadowedTokenCount : 0
-        blocks.push({ kind: 'notice', tone: 'info', text: 'Tool output pruned · ' + String(count) + ' item(s) · ~' + String(tokens) + ' tokens', seq })
-      }
-      continue
-    }
-    if (extensionType === 'tool/ptc-dispatch-start' || extensionType === 'tool/ptc-dispatch') {
-      const data = (event as unknown as { readonly data?: Record<string, unknown> }).data
-      const subCallId = data === undefined ? undefined : typeof data.subCallId === 'string' ? data.subCallId : undefined
-      const parentCallId = data === undefined ? undefined : typeof data.parentCallId === 'string' ? data.parentCallId : undefined
-      const name = data !== undefined && typeof data.name === 'string' && data.name !== '' ? data.name : 'tool'
-      const settle = extensionType === 'tool/ptc-dispatch'
-      const args = ptcArguments(data?.arguments)
-      const diffs = settle ? resultFileDiffs(data?.meta, args) : undefined
-      const pruned = subCallId === undefined || prunedSeqs.has(seq) || prunedCalls.has(subCallId)
-        || (parentCallId !== undefined && prunedCalls.has(parentCallId))
-      // Only file-editing sub-calls need their own card; the rest are already
-      // summarized by the parent run_code result.
-      if (subCallId !== undefined && !pruned && (PTC_CARD_TOOLS.has(name) || diffs !== undefined)) {
-        const index = toolByCall.get(subCallId)
-        const prior = index === undefined ? undefined : blocks[index]
-        if (!settle) {
-          if (index === undefined) {
-            toolByCall.set(subCallId, blocks.length)
-            callIdBySeq.set(seq, subCallId)
-            blocks.push({ kind: 'tool', callId: subCallId, name, args, pending: true, seq })
-            rememberPtcChild(parentCallId, subCallId)
-          }
-        }
-        else if (!(prior?.kind === 'tool' && prior.pending === false)) {
-          const settled: TranscriptBlock = {
-            kind: 'tool',
-            callId: subCallId,
-            name,
-            args,
-            result: contentText(ptcContent(data?.content)),
-            ...(data?.isError === true ? { isError: true } : {}),
-            ...(diffs === undefined ? {} : { diffs }),
-            pending: false,
+        else if (extensionType === 'compaction/summary') {
+          const id = String(data.compactionId)
+          const summary = clip(contentText(data.summary as readonly ContentBlock[] | undefined), 800)
+          const shadowedSeqs = Array.isArray(data.shadowedSeqs) ? data.shadowedSeqs : []
+          const range = data.shadowedRange as { readonly start?: unknown; readonly end?: unknown } | undefined
+          const rangeCount = typeof range?.start === 'number' && typeof range.end === 'number'
+            ? Math.max(0, range.end - range.start + 1)
+            : 0
+          const block: TranscriptBlock = {
+            kind: 'compaction',
+            compactionId: id,
+            state: 'running',
+            shadowedItems: shadowedSeqs.length > 0 ? shadowedSeqs.length : rangeCount,
+            ...(typeof data.shadowedTokenCount === 'number' ? { shadowedTokens: data.shadowedTokenCount } : {}),
+            ...(summary === '' ? {} : { summary }),
             seq,
           }
+          const index = compactionByCall.get(id)
           if (index === undefined) {
-            toolByCall.set(subCallId, blocks.length)
-            callIdBySeq.set(seq, subCallId)
-            blocks.push(settled)
-            rememberPtcChild(parentCallId, subCallId)
+            compactionByCall.set(id, blocks.length)
+            blocks.push(block)
           }
-          else if (prior?.kind === 'tool') {
-            blocks[index] = { ...prior, ...settled }
-          }
-          settledCalls.add(subCallId)
-        }
-      }
-      continue
-    }
-    const closeState = compactionCloseState(event)
-    if (closeState !== undefined) finishOpenCompactions(seq, closeState)
-    switch (event.type) {
-      case 'user/message': {
-        const source = event.data.source
-        if (source.kind === 'user') {
-          blocks.push({ kind: 'user', text: contentText(event.data.content), seq })
-        }
-        else if (String(source.kind) === 'compact-checkpoint') {
-          // The Host injects the checkpoint as model context as well as emitting
-          // compaction/summary. The card already shows the summary; keep only a
-          // short context row when the matching card is outside the window.
-          const compactionId = (source as unknown as { readonly compactionId?: unknown }).compactionId
-          if (typeof compactionId === 'string' && compactionByCall.has(compactionId)) break
-          const text = contentText(event.data.content)
-          if (text.trim() !== '') {
-            blocks.push({ kind: 'context', label: 'compact-checkpoint', text: clip(text, 240), seq })
+          else {
+            blocks[index] = block
           }
         }
-        else {
-          const text = contentText(event.data.content)
-          if (text.trim() !== '') {
-            const label = 'plugin' in source && typeof source.plugin === 'string'
-              ? source.plugin
-              : source.kind
-            blocks.push({ kind: 'context', label, text, seq })
+        else if (extensionType === 'compaction/end') {
+          const id = String(data.compactionId)
+          const error = typeof data.error === 'string' ? data.error : undefined
+          const index = compactionByCall.get(id)
+          if (index === undefined) {
+            blocks.push({ kind: 'compaction', compactionId: id, state: error === undefined ? 'done' : 'error', ...(error === undefined ? {} : { error }), seq })
           }
-        }
-        break
-      }
-      case 'assistant/message': {
-        const key = stepKey(event.data.turn, event.data.step)
-        finalizedSteps.add(key)
-        const text = contentText(event.data.message.content)
-        const fullReasoning = showReasoning ? contentReasoning(event.data.message.content) : ''
-        const revealProgress = options.revealProgress
-        const progressKey = STREAM_TEXT_PROGRESS_PREFIX + key
-        const progress = revealProgress?.get(progressKey)
-        let live = liveByStep.get(key)
-        // The subscription removes a step's live rows before appending the
-        // durable message, so the reducer may see only the message. Recreate a
-        // transient row from the settled text when a reveal is still pending;
-        // the progress map carries the prefix already on screen. A step that
-        // never streamed (history) stays static.
-        const pendingReveal = revealProgress !== undefined && text.trim() !== ''
-          && (live !== undefined || progress !== undefined)
-          && (progress === undefined
-            ? text.length <= STREAM_TEXT_MAX_BACKLOG
-            : progress.visible < text.length && text.length - progress.visible <= STREAM_TEXT_MAX_BACKLOG)
-        debug(`stream message: text=${String(text.length)} live=${live === undefined ? 'no' : 'yes'} progress=${progress === undefined ? 'none' : String(progress.visible)} pending=${String(pendingReveal)}`)
-        if (pendingReveal && revealProgress !== undefined) {
-          if (progress === undefined) {
-            rememberRevealProgress(revealProgress, progressKey, { start: now, visible: 0 })
-          }
-          if (live === undefined) {
-            const index = blocks.length
-            blocks.push({ kind: 'assistant', text: '', live: false })
-            live = {
-              index,
-              text: '',
-              textFinal: false,
-              settledLength: 0,
-              reasoning: '',
-              revealing: false,
-              reasoningSettled: false,
-              starting: false,
+          else {
+            const prior = blocks[index]
+            if (prior?.kind === 'compaction') {
+              blocks[index] = { ...prior, state: error === undefined ? 'done' : 'error', ...(error === undefined ? {} : { error }), seq }
             }
-            liveByStep.set(key, live)
           }
-          const reveal = revealDurable(fullReasoning, event.data.stream, key)
-          if (reveal.pending) durableRevealPending = true
-          live.text = text
-          live.textFinal = true
-          live.settledLength = text.length
-          if (fullReasoning.trim() !== '') {
-            if (live.reasoning === '') {
-              // No deltas arrived: the completed-reasoning reveal owns this text.
-              live.reasoning = reveal.text
-              live.reasoningSettled = true
-              live.revealing = reveal.pending
+        }
+        else if (extensionType === 'compaction/prune') {
+          const shadowedSeqs = Array.isArray(data.shadowedSeqs) ? data.shadowedSeqs : []
+          for (const value of shadowedSeqs) {
+            if (typeof value !== 'number' || !Number.isSafeInteger(value)) continue
+            prunedSeqs.add(value)
+            const callId = callIdBySeq.get(value)
+            if (callId === undefined) continue
+            prunedCalls.add(callId)
+            const index = toolByCall.get(callId)
+            if (index !== undefined) {
+              const prior = blocks[index]
+              if (prior?.kind === 'tool') {
+                blocks[index] = {
+                  ...prior,
+                  result: undefined,
+                  diffs: undefined,
+                  pending: false,
+                  pruned: true,
+                }
+              }
             }
-            else {
-              if (reveal.text.length > live.reasoning.length) live.reasoning = reveal.text
-              live.reasoningSettled = false
-              live.revealing = false
+            // A pruned run_code hides the write/edit cards it produced.
+            for (const subCallId of ptcByParent.get(callId) ?? []) {
+              prunedCalls.add(subCallId)
+              const childIndex = toolByCall.get(subCallId)
+              const child = childIndex === undefined ? undefined : blocks[childIndex]
+              if (childIndex !== undefined && child?.kind === 'tool') {
+                blocks[childIndex] = {
+                  ...child,
+                  result: undefined,
+                  diffs: undefined,
+                  pending: false,
+                  pruned: true,
+                }
+              }
+            }
+          }
+          const count = shadowedSeqs.length
+          const tokens = typeof data.shadowedTokenCount === 'number' ? data.shadowedTokenCount : 0
+          blocks.push({ kind: 'notice', tone: 'info', text: 'Tool output pruned · ' + String(count) + ' item(s) · ~' + String(tokens) + ' tokens', seq })
+        }
+        continue
+      }
+      if (extensionType === 'tool/ptc-dispatch-start' || extensionType === 'tool/ptc-dispatch') {
+        const data = (event as unknown as { readonly data?: Record<string, unknown> }).data
+        const subCallId = data === undefined ? undefined : typeof data.subCallId === 'string' ? data.subCallId : undefined
+        const parentCallId = data === undefined ? undefined : typeof data.parentCallId === 'string' ? data.parentCallId : undefined
+        const name = data !== undefined && typeof data.name === 'string' && data.name !== '' ? data.name : 'tool'
+        const settle = extensionType === 'tool/ptc-dispatch'
+        const args = ptcArguments(data?.arguments)
+        const diffs = settle ? resultFileDiffs(data?.meta, args) : undefined
+        const pruned = subCallId === undefined || prunedSeqs.has(seq) || prunedCalls.has(subCallId)
+          || (parentCallId !== undefined && prunedCalls.has(parentCallId))
+        // Only file-editing sub-calls need their own card; the rest are already
+        // summarized by the parent run_code result.
+        if (subCallId !== undefined && !pruned && (PTC_CARD_TOOLS.has(name) || diffs !== undefined)) {
+          const index = toolByCall.get(subCallId)
+          const prior = index === undefined ? undefined : blocks[index]
+          if (!settle) {
+            if (index === undefined) {
+              toolByCall.set(subCallId, blocks.length)
+              callIdBySeq.set(seq, subCallId)
+              blocks.push({ kind: 'tool', callId: subCallId, name, args, pending: true, seq })
+              rememberPtcChild(parentCallId, subCallId)
+            }
+          }
+          else if (!(prior?.kind === 'tool' && prior.pending === false)) {
+            const settled: TranscriptBlock = {
+              kind: 'tool',
+              callId: subCallId,
+              name,
+              args,
+              result: contentText(ptcContent(data?.content)),
+              ...(data?.isError === true ? { isError: true } : {}),
+              ...(diffs === undefined ? {} : { diffs }),
+              pending: false,
+              seq,
+            }
+            if (index === undefined) {
+              toolByCall.set(subCallId, blocks.length)
+              callIdBySeq.set(seq, subCallId)
+              blocks.push(settled)
+              rememberPtcChild(parentCallId, subCallId)
+            }
+            else if (prior?.kind === 'tool') {
+              blocks[index] = { ...prior, ...settled }
+            }
+            settledCalls.add(subCallId)
+          }
+        }
+        continue
+      }
+      const closeState = compactionCloseState(event)
+      if (closeState !== undefined) finishOpenCompactions(seq, closeState)
+      switch (event.type) {
+        case 'user/message': {
+          const source = event.data.source
+          if (source.kind === 'user') {
+            blocks.push({ kind: 'user', text: contentText(event.data.content), seq })
+          }
+          else if (String(source.kind) === 'compact-checkpoint') {
+            // The Host injects the checkpoint as model context as well as emitting
+            // compaction/summary. The card already shows the summary; keep only a
+            // short context row when the matching card is outside the window.
+            const compactionId = (source as unknown as { readonly compactionId?: unknown }).compactionId
+            if (typeof compactionId === 'string' && compactionByCall.has(compactionId)) break
+            const text = contentText(event.data.content)
+            if (text.trim() !== '') {
+              blocks.push({ kind: 'context', label: 'compact-checkpoint', text: clip(text, 240), seq })
             }
           }
           else {
-            live.revealing = false
-          }
-          contentAt[live.index] = event.time
-          blocks[live.index] = {
-            kind: 'assistant',
-            text,
-            ...(live.reasoning === '' ? {} : { reasoning: live.reasoning }),
-            live: false,
-            ...(live.revealing ? { revealing: true } : {}),
+            const text = contentText(event.data.content)
+            if (text.trim() !== '') {
+              const label = 'plugin' in source && typeof source.plugin === 'string'
+                ? source.plugin
+                : source.kind
+              blocks.push({ kind: 'context', label, text, seq })
+            }
           }
           break
         }
-        revealProgress?.delete(progressKey)
-        revealProgress?.delete(REASONING_LIVE_PROGRESS_PREFIX + key)
-        if (live !== undefined) {
-          live.revealing = false
-          blocks[live.index] = { kind: 'assistant', text: '', live: true }
+        case 'assistant/message': {
+          const key = stepKey(event.data.turn, event.data.step)
+          finalizedSteps.add(key)
+          const index = liveByStep.get(key) ?? blocks.length
+          const assistant = assistants.get(index) ?? new AssistantStream(key, options)
+          assistant.settle(event.data.message.content, event.data.stream, seq)
+          assistants.set(index, assistant)
+          blocks[index] = { kind: 'assistant', text: '', live: false, seq }
+          contentAt[index] = event.time
           liveByStep.delete(key)
+          break
         }
-        const reveal = revealDurable(fullReasoning, event.data.stream, key)
-        if (reveal.pending) durableRevealPending = true
-        if (text.trim() !== '' || fullReasoning.trim() !== '') {
+        case 'assistant/attempt': {
+          const key = stepKey(event.data.turn, event.data.step)
+          const index = liveByStep.get(key)
+          if (index !== undefined) {
+            assistants.delete(index)
+            blocks[index] = { kind: 'assistant', text: '', live: false }
+            liveByStep.delete(key)
+          }
+          if (index !== undefined) forgetStepReveal(options.revealProgress, key)
+          const assistant = new AssistantStream(key + ':attempt:' + String(seq), options)
+          assistant.settle(attemptContent(event.data.stream), event.data.stream, seq)
+          assistants.set(blocks.length, assistant)
           contentAt[blocks.length] = event.time
-          blocks.push({
-            kind: 'assistant',
-            text,
-            ...(reveal.text === '' ? {} : { reasoning: reveal.text }),
-            live: false,
-            ...(reveal.pending ? { revealing: true } : {}),
-            seq,
-          })
-        }
-        break
-      }
-      case 'assistant/attempt': {
-        const key = stepKey(event.data.turn, event.data.step)
-        // A retry restarts the same step with a different attempt; keeping this
-        // clock would let the retried block reveal from the old attempt's count.
-        options.revealProgress?.delete(reasoningKey(event.data.turn, event.data.step))
-        options.revealProgress?.delete(STREAM_TEXT_PROGRESS_PREFIX + key)
-        options.revealProgress?.delete(REASONING_LIVE_PROGRESS_PREFIX + key)
-        const live = liveByStep.get(key)
-        if (live !== undefined) {
-          // Settle the transient rows and drop the accumulator so a retry of the
-          // same step streams into a fresh block instead of being suppressed.
-          live.revealing = false
-          blocks[live.index] = { kind: 'assistant', text: '', live: true }
-          liveByStep.delete(key)
-        }
-        const content = attemptContent(event.data.stream)
-        const text = contentText(content)
-        const fullReasoning = showReasoning ? contentReasoning(content) : ''
-        const reveal = revealDurable(fullReasoning, event.data.stream, key)
-        if (reveal.pending) durableRevealPending = true
-        if (text.trim() !== '' || fullReasoning.trim() !== '') {
-          contentAt[blocks.length] = event.time
-          blocks.push({
-            kind: 'assistant',
-            text,
-            ...(reveal.text === '' ? {} : { reasoning: reveal.text }),
-            live: false,
-            ...(reveal.pending ? { revealing: true } : {}),
-            seq,
-          })
-        }
-        break
-      }
-      case 'tool/call': {
-        const callId = event.data.callId
-        const seenSeq = callIdBySeq.get(seq) === callId
-        const knownCall = seenSeq ? false : [...callIdBySeq.values()].some(value => value === callId)
-        callIdBySeq.set(seq, callId)
-        if (prunedSeqs.has(seq) || prunedCalls.has(callId)) {
-          prunedCalls.add(callId)
+          blocks.push({ kind: 'assistant', text: '', live: false, seq })
           break
         }
-        // A resumed/replayed call must not add a second card or overwrite the
-        // result mapping of the card that already exists. A normal rebuild sees
-        // its original seq, so persistent settlement must not suppress it.
-        if (toolByCall.has(callId) || hiddenCodeExecutionCalls.has(callId)) break
-        if (!seenSeq && (settledCalls.has(callId) || knownCall)) break
-        if (runCodeDisplay === 'hidden' && isCodeExecutionTool(event.data.name)) {
-          hiddenCodeExecutionCalls.add(callId)
-          break
-        }
-        const index = blocks.length
-        toolByCall.set(callId, index)
-        blocks.push({
-          kind: 'tool',
-          callId: event.data.callId,
-          name: event.data.name,
-          args: event.data.arguments,
-          pending: true,
-          seq,
-        })
-        break
-      }
-      case 'tool/result': {
-        const callId = event.data.message.source.callId
-        const seenSeq = callIdBySeq.get(seq) === callId
-        callIdBySeq.set(seq, callId)
-        // A duplicate result after a session resume/replay must not revive a
-        // call that was already settled or whose output was pruned.
-        if (hiddenCodeExecutionCalls.has(callId)) {
-          settledCalls.add(callId)
-          break
-        }
-        if (prunedSeqs.has(seq) || prunedCalls.has(callId)) {
-          prunedCalls.add(callId)
-          break
-        }
-        // Rebuilds replay the same seq and must render the original result;
-        // only a new seq for an already settled call is a duplicate.
-        if (!seenSeq && settledCalls.has(callId)) break
-        const index = toolByCall.get(callId)
-        const prior = index === undefined ? undefined : blocks[index]
-        if (prior?.kind === 'tool' && prior.pending === false) {
-          settledCalls.add(callId)
-          break
-        }
-        const result = toolResultText(event.data.message)
-        const isError = event.data.message.isError === true
-        const diffs = resultFileDiffs(event.data.meta, prior?.kind === 'tool' ? prior.args : '')
-        if (index === undefined) {
+        case 'tool/call': {
+          const callId = event.data.callId
+          const seenSeq = callIdBySeq.get(seq) === callId
+          const knownCall = seenSeq ? false : [...callIdBySeq.values()].some(value => value === callId)
+          callIdBySeq.set(seq, callId)
+          if (prunedSeqs.has(seq) || prunedCalls.has(callId)) {
+            prunedCalls.add(callId)
+            break
+          }
+          // A resumed/replayed call must not add a second card or overwrite the
+          // result mapping of the card that already exists. A normal rebuild sees
+          // its original seq, so persistent settlement must not suppress it.
+          if (toolByCall.has(callId) || hiddenCodeExecutionCalls.has(callId)) break
+          if (!seenSeq && (settledCalls.has(callId) || knownCall)) break
+          if (runCodeDisplay === 'hidden' && isCodeExecutionTool(event.data.name)) {
+            hiddenCodeExecutionCalls.add(callId)
+            break
+          }
+          const index = blocks.length
+          toolByCall.set(callId, index)
           blocks.push({
             kind: 'tool',
-            callId,
-            name: 'tool',
-            args: '',
-            result,
-            ...(isError ? { isError: true } : {}),
-            ...(diffs === undefined ? {} : { diffs }),
-            pending: false,
+            callId: event.data.callId,
+            name: event.data.name,
+            args: event.data.arguments,
+            pending: true,
             seq,
           })
-        } else if (prior?.kind === 'tool') {
-          blocks[index] = {
-            ...prior,
-            result,
-            ...(isError ? { isError: true } : {}),
-            ...(diffs === undefined ? {} : { diffs }),
-            pending: false,
-            seq,
+          break
+        }
+        case 'tool/result': {
+          const callId = event.data.message.source.callId
+          const seenSeq = callIdBySeq.get(seq) === callId
+          callIdBySeq.set(seq, callId)
+          // A duplicate result after a session resume/replay must not revive a
+          // call that was already settled or whose output was pruned.
+          if (hiddenCodeExecutionCalls.has(callId)) {
+            settledCalls.add(callId)
+            break
           }
+          if (prunedSeqs.has(seq) || prunedCalls.has(callId)) {
+            prunedCalls.add(callId)
+            break
+          }
+          // Rebuilds replay the same seq and must render the original result;
+          // only a new seq for an already settled call is a duplicate.
+          if (!seenSeq && settledCalls.has(callId)) break
+          const index = toolByCall.get(callId)
+          const prior = index === undefined ? undefined : blocks[index]
+          if (prior?.kind === 'tool' && prior.pending === false) {
+            settledCalls.add(callId)
+            break
+          }
+          const result = toolResultText(event.data.message)
+          const isError = event.data.message.isError === true
+          const diffs = resultFileDiffs(event.data.meta, prior?.kind === 'tool' ? prior.args : '')
+          if (index === undefined) {
+            blocks.push({
+              kind: 'tool',
+              callId,
+              name: 'tool',
+              args: '',
+              result,
+              ...(isError ? { isError: true } : {}),
+              ...(diffs === undefined ? {} : { diffs }),
+              pending: false,
+              seq,
+            })
+          } else if (prior?.kind === 'tool') {
+            blocks[index] = {
+              ...prior,
+              result,
+              ...(isError ? { isError: true } : {}),
+              ...(diffs === undefined ? {} : { diffs }),
+              pending: false,
+              seq,
+            }
+          }
+          settledCalls.add(callId)
+          break
         }
-        settledCalls.add(callId)
-        break
-      }
-      case 'turn/end': {
-        const reason = event.data.reason
-        if (reason.kind === 'error') {
-          blocks.push({
-            kind: 'notice',
-            tone: 'error',
-            text: `Turn failed: ${reason.error.code}: ${reason.error.message}`,
-            seq,
-          })
-        } else if (reason.kind === 'aborted') {
-          blocks.push({ kind: 'notice', tone: 'warning', text: 'Turn cancelled', seq })
-        } else if (reason.kind === 'max-tokens') {
-          blocks.push({ kind: 'notice', tone: 'warning', text: 'Turn stopped at the output-token limit', seq })
-        } else if (reason.kind === 'interrupted') {
-          // The Host appends this closer while resuming a log whose turn never
-          // ended. Without a row the transcript would simply stop mid-turn.
-          blocks.push({ kind: 'notice', tone: 'warning', text: 'Turn interrupted before it finished', seq })
+        case 'turn/end': {
+          const reason = event.data.reason
+          if (reason.kind === 'error') {
+            blocks.push({
+              kind: 'notice',
+              tone: 'error',
+              text: `Turn failed: ${reason.error.code}: ${reason.error.message}`,
+              seq,
+            })
+          } else if (reason.kind === 'aborted') {
+            blocks.push({ kind: 'notice', tone: 'warning', text: 'Turn cancelled', seq })
+          } else if (reason.kind === 'max-tokens') {
+            blocks.push({ kind: 'notice', tone: 'warning', text: 'Turn stopped at the output-token limit', seq })
+          } else if (reason.kind === 'interrupted') {
+            // The Host appends this closer while resuming a log whose turn never
+            // ended. Without a row the transcript would simply stop mid-turn.
+            blocks.push({ kind: 'notice', tone: 'warning', text: 'Turn interrupted before it finished', seq })
+          }
+          break
         }
-        break
-      }
-      case 'command/done': {
-        const result = event.data
-        if (result.text !== undefined && result.text !== '') {
-          blocks.push({
-            kind: 'notice',
-            tone: result.kind === 'error' ? 'error' : 'info',
-            text: result.text,
-            seq,
-          })
+        case 'command/done': {
+          const result = event.data
+          if (result.text !== undefined && result.text !== '') {
+            blocks.push({
+              kind: 'notice',
+              tone: result.kind === 'error' ? 'error' : 'info',
+              text: result.text,
+              seq,
+            })
+          }
+          break
         }
-        break
+        default:
+          break
       }
-      default:
-        break
     }
+
+    while (sources.length < blocks.length) sources.push(entries.length - 1)
   }
 
-  while (sources.length < blocks.length) sources.push(entries.length - 1)
-  // Spread streamed text over frames instead of painting a whole provider
-  // chunk at once. Only the interactive renderer tracks progress; direct
-  // reducers (tests, exports) render the received text as-is.
-  let textRevealPending = false
-  let reasoningLivePending = false
-  if (options.revealProgress !== undefined) {
-    for (const [key, live] of liveByStep) {
-      // A finalized step normally lets the durable block own the text. The one
-      // exception is a final message whose backlog is still being revealed.
-      if (live.text === '' || (finalizedSteps.has(key) && !live.textFinal)) continue
-      const progressKey = STREAM_TEXT_PROGRESS_PREFIX + key
-      let progress = options.revealProgress.get(progressKey)
-      if (progress === undefined) {
-        // Text settled earlier in this step is already on screen; only the new
-        // block is revealed.
-        progress = { start: now, visible: Math.min(live.settledLength, live.text.length) }
-        rememberRevealProgress(options.revealProgress, progressKey, progress)
+  const reduce = (now = Date.now(), settleMs = STREAM_SETTLE_MIN_MS): TranscriptReduction => {
+    let revealPending = false
+    const visible: TranscriptBlock[] = []
+    const visibleSources: number[] = []
+    let holdAfterReveal = false
+    /** Latest assistant content already emitted above the current row. */
+    let lastAssistantAt: number | undefined
+    let settleHeld = false
+    for (let index = 0; index < blocks.length; index += 1) {
+      let block = blocks[index]!
+      // A reasoning block that is still revealing keeps the rows after it back,
+      // so a tool card or the next step does not overtake the thinking text. The
+      // hold ends at the first row that must not be hidden -- a new user message
+      // or a warning/error notice -- and everything from that row on is shown in
+      // event order. Rows that arrived before the boundary stay held, so a tool
+      // card that preceded the failure cannot leak out ahead of the thinking.
+      const boundary = isRevealBoundary(block)
+      if (holdAfterReveal && !boundary) continue
+      if (holdAfterReveal) holdAfterReveal = false
+      // Followers wait from the last visible stream update; stateless history
+      // uses event timestamps. No later row may overtake a row held by grace.
+      const previousAssistantAt = lastAssistantAt
+      if (previousAssistantAt !== undefined
+        && (block.kind === 'assistant' || block.kind === 'tool' || block.kind === 'compaction'
+          || (block.kind === 'notice' && block.tone === 'info'))
+        && now - previousAssistantAt < settleMs) {
+        settleHeld = true
+        holdAfterReveal = true
+        continue
       }
-      const reveal = revealStreamText(live.text, progress, now)
-      if (reveal.pending) textRevealPending = true
-      const block = blocks[live.index]
-      if (block?.kind === 'assistant') blocks[live.index] = { ...block, text: reveal.text }
-    }
-    if (showReasoning) {
-      for (const [key, live] of liveByStep) {
-        if (live.reasoning === '' || live.revealing || live.reasoningSettled) continue
-        if (finalizedSteps.has(key) && !live.textFinal) continue
-        const progressKey = REASONING_LIVE_PROGRESS_PREFIX + key
-        let progress = options.revealProgress.get(progressKey)
-        if (progress === undefined) {
-          progress = { start: now, visible: 0 }
-          rememberRevealProgress(options.revealProgress, progressKey, progress)
+      const assistant = assistants.get(index)
+      if (assistant !== undefined) {
+        block = assistant.project(now)
+        if (block.kind === 'assistant' && block.revealing === true) {
+          revealPending = true
+          holdAfterReveal = true
         }
-        const reveal = revealStreamText(live.reasoning, progress, now)
-        if (reveal.pending) reasoningLivePending = true
-        const block = blocks[live.index]
-        if (block?.kind === 'assistant') blocks[live.index] = { ...block, reasoning: reveal.text }
       }
+      // A pruned tool row only repeats the prune notice; hiding the whole card
+      // keeps the transcript focused on content that is still model-visible.
+      if (block.kind === 'tool' && block.pruned === true) continue
+      if (block.kind === 'assistant' && block.text === '' && (block.reasoning ?? '') === ''
+        && block.starting !== true) continue
+      visible.push(block)
+      visibleSources.push(sources[index] ?? 0)
+      if (block.kind === 'assistant') {
+        if (block.revealing === true) holdAfterReveal = true
+        const at = assistant?.visibleAt ?? contentAt[index]
+        if (at !== undefined) lastAssistantAt = at
+      }
+      // The grace only covers rows that directly follow the assistant block; a
+      // new user turn, a failure and any other row end that adjacency.
+      else lastAssistantAt = undefined
     }
+    const pending = revealPending || settleHeld
+    const trimmed = trimTranscriptWindow(visible, visibleSources, options.maxEntries)
+    return { blocks: trimmed.blocks, retainedFrom: trimmed.retainedFrom, revealPending: pending }
   }
-  const revealPending = durableRevealPending
-    || textRevealPending
-    || reasoningLivePending
-    || [...liveByStep.values()].some(live => live.revealing)
-  const visible: TranscriptBlock[] = []
-  const visibleSources: number[] = []
-  let holdAfterReveal = false
-  /** Latest assistant content already emitted above the current row. */
-  let lastAssistantAt: number | undefined
-  let settleHeld = false
-  for (let index = 0; index < blocks.length; index += 1) {
-    const block = blocks[index]!
-    // A reasoning block that is still revealing keeps the rows after it back,
-    // so a tool card or the next step does not overtake the thinking text. The
-    // hold ends at the first row that must not be hidden -- a new user message
-    // or a warning/error notice -- and everything from that row on is shown in
-    // event order. Rows that arrived before the boundary stay held, so a tool
-    // card that preceded the failure cannot leak out ahead of the thinking.
-    const boundary = isRevealBoundary(block)
-    if (holdAfterReveal && !boundary) continue
-    if (holdAfterReveal) holdAfterReveal = false
-    // Content produced after an assistant block must not share its last frame.
-    // A delta path has no local reveal, yet its final thinking text and the
-    // tool call that follows it arrive within milliseconds, so without this
-    // grace the two land on the same paint and the card looks like it appeared
-    // the instant the thinking finished. The grace outlasts the current frame
-    // interval: with painting backed off, the first paint after the content can
-    // be a whole interval later, and a fixed grace would let the card into it.
-    const previousAssistantAt = lastAssistantAt
-    if (previousAssistantAt !== undefined
-      && (block.kind === 'tool' || block.kind === 'compaction'
-        || (block.kind === 'notice' && block.tone === 'info'))
-      && now - previousAssistantAt < settleMs) {
-      settleHeld = true
-      continue
-    }
-    // A pruned tool row only repeats the prune notice; hiding the whole card
-    // keeps the transcript focused on content that is still model-visible.
-    if (block.kind === 'tool' && block.pruned === true) continue
-    if (block.kind === 'assistant' && block.text === '' && (block.reasoning ?? '') === ''
-      && block.starting !== true) continue
-    visible.push(block)
-    visibleSources.push(sources[index] ?? 0)
-    if (block.kind === 'assistant') {
-      if (block.revealing === true) holdAfterReveal = true
-      const at = contentAt[index]
-      if (at !== undefined) lastAssistantAt = at
-    }
-    // The grace only covers rows that directly follow the assistant block; a
-    // new user turn, a failure and any other row end that adjacency.
-    else lastAssistantAt = undefined
-  }
-  const pending = revealPending || settleHeld
-  const trimmed = trimTranscriptWindow(visible, visibleSources, options.maxEntries)
-  return { blocks: trimmed.blocks, retainedFrom: trimmed.retainedFrom, revealPending: pending }
+  return { append, reduce }
 }

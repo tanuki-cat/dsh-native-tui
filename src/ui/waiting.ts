@@ -1,8 +1,28 @@
 /**
- * The transient model-wait row helpers.
+ * Model-wait reporting and its fixed-height status row.
  *
  * @module dsh-native-tui/ui/waiting
  */
+
+import { Container, TruncatedText } from '@earendil-works/pi-tui'
+import type { Palette } from './theme.js'
+
+/** A single chrome row, including while idle, so wait transitions cannot shift the prompt. */
+export class WaitStatusLine extends Container {
+  private text: string | undefined
+
+  constructor(private readonly palette: Palette) {
+    super()
+    this.setText('')
+  }
+
+  setText(text: string): void {
+    if (text === this.text) return
+    this.text = text
+    const label = text === '' ? '' : this.palette.accent('⟳ ') + this.palette.dim(text)
+    this.children = [new TruncatedText(label)]
+  }
+}
 
 /**
  * How long a request may be in flight before the wait row is worth showing.

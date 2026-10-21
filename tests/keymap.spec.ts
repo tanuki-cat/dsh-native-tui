@@ -42,6 +42,15 @@ describe('globalShortcut', () => {
     }
   })
 
+  it('toggles write previews with Ctrl+O only while the editor is focused', () => {
+    for (const data of ['\x0f', '\x1b[111;5u']) {
+      expect(globalShortcut(data, state())).toBe('toggle-write-preview')
+      expect(globalShortcut(data, state({ running: true, editorHasText: true }))).toBe('toggle-write-preview')
+      expect(globalShortcut(data, state({ editorFocused: false }))).toBeUndefined()
+    }
+    expect(globalShortcut('\x1b[111;5:3u', state())).toBeUndefined()
+  })
+
   it('maps Ctrl+D to exit and ignores other input', () => {
     for (const data of ['\x04', '\x1b[100;5u']) expect(globalShortcut(data, state({ running: true }))).toBe('exit')
     expect(globalShortcut('a', state({ running: true }))).toBeUndefined()

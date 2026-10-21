@@ -1,34 +1,19 @@
 /**
- * Local reveal of a completed reasoning block that arrived without deltas.
- *
- * Responses-compatible gateways can send the whole reasoning item in the
- * terminal `block-end`. The terminal reveals that text over frames so the
- * thinking area does not pop in as one block while the rest of the step is
- * still streaming.
- *
- * The reveal is paced by wall clock, not by frame count: a slow frame skips
- * ahead instead of stretching the animation, so one block never holds later
- * rows for longer than {@link REASONING_REVEAL_MAX_MS}.
- *
+ * Bounded interactive stream reveal and grapheme-safe preview clipping.
+ * Stateless reducers retain timestamp-based completed reasoning previews.
  * @module dsh-native-tui/ui/reasoning-reveal
  */
 
 import type { AssistantStreamRecord } from '@deepseek-ai/dsh-llm'
 import { debug } from '../debug.js'
 
-/** Maximum graphemes retained in one reasoning preview. */
-export const REASONING_PREVIEW = 3000
-
 /** Reveal rate for a completed reasoning block, in graphemes per millisecond. */
 const REASONING_REVEAL_GRAPHEMES_PER_MS = 4
 /**
- * Wall-clock budget for one local reasoning reveal. The reveal rate is raised
- * when needed so the whole preview finishes inside this budget, and it keeps
- * finishing on time when frames are slow.
+ * Wall-clock budget for untracked, stateless reasoning previews.
+ * Interactive rendering uses the per-frame budget instead.
  */
 export const REASONING_REVEAL_MAX_MS = 600
-/** A durable settlement this recent may still be a live reveal without its live entry. */
-export const REASONING_REVEAL_RECENT_MS = 1_000
 /** Tracked reveal entries retained before the oldest is dropped. */
 const REVEAL_PROGRESS_LIMIT = 64
 /** Completed reasoning texts whose grapheme boundaries stay cached. */
@@ -37,17 +22,21 @@ const GRAPHEME_CACHE_LIMIT = 8
 /** Shared grapheme segmenter for reveal cuts and preview clipping. */
 const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
 
-/** Process-local progress of one completed-reasoning reveal. */
+/** Process-local progress of one interactive content part. */
 export interface RevealProgress {
-  /** Wall clock of the first frame of the burst being revealed. */
+  /** Wall clock of the last advance, used for diagnostics. */
   start: number
-  /** Graphemes already shown. */
+  /** UTF-16 offset already shown. */
   visible: number
+  /** Last visible prefix update; survives live-to-durable event-window replacement. */
+  paintedAt?: number
   /**
    * Characters per frame for the answer burst being revealed. Absent once the
    * burst is drained, so the next chunk is planned on its own.
    */
   step?: number
+  /** A trailing high surrogate was held for one frame awaiting its low half. */
+  dangling?: boolean
 }
 
 /** Process-local grapheme cache for one reasoning text. */
@@ -56,6 +45,7 @@ interface GraphemeEntry {
   count?: number
   /** Grapheme strings built so far, in order. */
   readonly segments: string[]
+  iterator?: Iterator<Intl.SegmentData>
 }
 
 /**
@@ -92,11 +82,11 @@ function graphemeCount(text: string, entry: GraphemeEntry): number {
 function graphemePrefix(text: string, limit: number, entry: GraphemeEntry): string {
   if (limit <= 0) return ''
   const segments = entry.segments
-  if (segments.length < limit) {
-    for (const segment of graphemeSegmenter.segment(text)) {
-      if (segments.length >= limit) break
-      segments.push(segment.segment)
-    }
+  entry.iterator ??= graphemeSegmenter.segment(text)[Symbol.iterator]()
+  while (segments.length < limit) {
+    const next = entry.iterator.next()
+    if (next.done) break
+    segments.push(next.value.segment)
   }
   return segments.length <= limit ? segments.join('') : segments.slice(0, limit).join('')
 }
@@ -128,18 +118,12 @@ export function rememberRevealProgress(
   }
 }
 
-/** Prefix of an answer-text reveal, so retries and reasoning keys cannot collide. */
-export const STREAM_TEXT_PROGRESS_PREFIX = 'text:'
-
-/** Prefix of a live reasoning-delta reveal. */
-export const REASONING_LIVE_PROGRESS_PREFIX = 'reasoning-live:'
-
-/**
- * Largest unread answer backlog still spread over frames. A burst bigger than
- * this is a non-streaming gateway sending a whole block at once; delaying that
- * behind an animation would only make the UI lag the model.
- */
-export const STREAM_TEXT_MAX_BACKLOG = 600
+/** Forget only the settled attempt's part offsets; another step keeps its progress. */
+export function forgetStepReveal(map: Map<string, RevealProgress> | undefined, key: string): void {
+  for (const progressKey of map?.keys() ?? []) {
+    if (['reasoning:', 'text:'].some(prefix => progressKey === prefix + key || progressKey.startsWith(prefix + key + ':part:'))) map?.delete(progressKey)
+  }
+}
 
 /**
  * Frames one burst is spread over. The step is planned once per burst instead
@@ -194,20 +178,12 @@ export function revealStreamText(
     return { text, pending: false }
   }
   const backlog = total - progress.visible
-  // A whole-block settlement is not a stream: show it, do not animate it.
-  if (backlog > STREAM_TEXT_MAX_BACKLOG) {
-    progress.visible = total
-    progress.step = undefined
-    progress.start = now
-    return { text, pending: false }
-  }
   // A token-sized delta is already the provider's own granularity.
   if (progress.step === undefined && backlog <= STREAM_TEXT_INSTANT_BACKLOG) {
-    progress.visible = total
+    progress.step = backlog
     progress.start = now
-    return { text, pending: false }
   }
-  if (progress.step === undefined) {
+  else if (progress.step === undefined) {
     progress.step = Math.max(1, Math.min(STREAM_TEXT_MAX_STEP, Math.ceil(backlog / STREAM_TEXT_REVEAL_FRAMES)))
     // A new burst starts its own clock: the idle gap before it says nothing
     // about how fast this burst should be revealed.
@@ -223,13 +199,24 @@ export function revealStreamText(
   const step = progress.step ?? 1
   const advance = Math.min(backlog, step)
   let next = progress.visible + advance
+  // Keep combining marks and emoji sequences with the base grapheme.
+  if (next < total) {
+    const suffix = text.slice(progress.visible)
+    let boundary = progress.visible
+    for (const segment of graphemeSegmenter.segment(suffix)) {
+      const end = progress.visible + segment.index + segment.segment.length
+      if (end > next && boundary > progress.visible) break
+      boundary = end
+      if (end >= next) break
+    }
+    next = boundary
+  }
   // Never cut a surrogate pair: a lone half renders as a replacement glyph.
   if (next < total && isHighSurrogate(text.charCodeAt(next - 1))) next += 1
-  // A chunk can end inside a pair. Hold that half-written pair until its low
-  // half arrives, unless holding would stop the reveal from advancing.
-  if (next === total && total - 1 > progress.visible && isHighSurrogate(text.charCodeAt(total - 1))) {
-    next = total - 1
-  }
+  // Wait one frame for a split surrogate, but let malformed settled input drain.
+  const dangling = next === total && isHighSurrogate(text.charCodeAt(total - 1)) && !progress.dangling
+  if (dangling) next = total - 1
+  progress.dangling = dangling
   progress.visible = next
   progress.start = now
   const pending = next < total
@@ -239,34 +226,24 @@ export function revealStreamText(
 }
 
 /**
- * Reveal one completed reasoning block over frames. The visible length follows
- * elapsed wall clock, so a slow frame catches up instead of stretching the
- * reveal; a tracked progress never moves backwards.
+ * Project a completed reasoning preview for a stateless reducer.
  * @param text - completed reasoning text.
  * @param now - current wall clock.
- * @param progress - tracked reveal state, or undefined for a direct reducer.
- * @param fallbackStart - block-end time used when no progress is tracked.
+ * @param from - block-end timestamp.
  * @returns the visible prefix and whether more remains.
  */
 export function revealCompletedReasoning(
   text: string,
   now: number,
-  progress?: RevealProgress,
-  fallbackStart?: number,
+  from: number,
 ): { readonly text: string; readonly pending: boolean } {
   if (text === '') return { text: '', pending: false }
   const entry = entryFor(text)
   const total = graphemeCount(text, entry)
-  const displayTotal = Math.min(total, REASONING_PREVIEW)
-  const rate = Math.max(REASONING_REVEAL_GRAPHEMES_PER_MS, displayTotal / REASONING_REVEAL_MAX_MS)
-  const start = progress?.start ?? fallbackStart ?? now
-  const elapsed = Math.max(0, now - start)
-  const target = Math.min(displayTotal, Math.max(1, Math.floor(elapsed * rate)))
-  const visible = progress === undefined
-    ? target
-    : Math.min(displayTotal, Math.max(progress.visible, target))
-  if (progress !== undefined) progress.visible = visible
-  if (visible >= displayTotal) return { text, pending: false }
+  const rate = Math.max(REASONING_REVEAL_GRAPHEMES_PER_MS, total / REASONING_REVEAL_MAX_MS)
+  const elapsed = Math.max(0, now - from)
+  const visible = Math.min(total, Math.max(1, Math.floor(elapsed * rate)))
+  if (visible >= total) return { text, pending: false }
   return { text: graphemePrefix(text, visible, entry), pending: true }
 }
 
@@ -291,31 +268,4 @@ export function reasoningRevealFrom(stream: readonly AssistantStreamRecord[] | u
     }
   }
   return sawDeltas ? undefined : completedAt
-}
-
-/**
- * Reveal a completed reasoning block carried by a durable settlement.
- * @param text - full reasoning text from the message content.
- * @param from - block-end timestamp, or undefined when deltas already streamed.
- * @param now - current wall clock.
- * @param reveal - false when the thinking display does not show the full block.
- * @param progress - tracked live reveal, when one exists.
- * @param tracked - true when the caller supplies a reveal-progress map.
- * @returns the visible prefix and whether more remains.
- */
-export function revealDurableReasoning(
-  text: string,
-  from: number | undefined,
-  now: number,
-  reveal: boolean,
-  progress: RevealProgress | undefined,
-  tracked: boolean,
-): { readonly text: string; readonly pending: boolean } {
-  if (!reveal || text.trim() === '') return { text, pending: false }
-  if (from === undefined) return { text, pending: false }
-  if (tracked) {
-    if (progress === undefined) return { text, pending: false }
-    return revealCompletedReasoning(text, now, progress)
-  }
-  return revealCompletedReasoning(text, now, undefined, from)
 }

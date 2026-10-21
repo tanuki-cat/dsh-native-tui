@@ -1,9 +1,11 @@
 import { Container, Text, TuiMainScreen } from '@earendil-works/pi-tui'
-import { describe, expect, it } from 'vitest'
-import { createPalette, markdownTheme } from '../src/ui/theme.js'
+import { describe, expect, it, vi } from 'vitest'
+import { createPalette, editorTheme, markdownTheme } from '../src/ui/theme.js'
 import { renderTranscriptBlock } from '../src/ui/transcript-render.js'
 import type { TranscriptBlock, TranscriptEntry } from '../src/ui/transcript.js'
 import { TranscriptRenderer } from '../src/ui/transcript-renderer.js'
+import { WaitStatusLine } from '../src/ui/waiting.js'
+import { PromptEditor } from '../src/ui/prompt-editor.js'
 
 /**
  * The renderer under test needs a terminal, but the assertion is about pi-tui's
@@ -85,6 +87,18 @@ describe('main-screen card lifecycle', () => {
     expect(redrawsForSwap(pending, settled)).toBe(0)
   })
 
+  it.each(['write', 'edit'])('settles a %s card without a full repaint', name => {
+    const pending: TranscriptBlock = {
+      kind: 'tool', callId: 'file-1', name, pending: true,
+      args: JSON.stringify({ file_path: 'example.ts', content: 'long body\n'.repeat(100) }),
+    }
+    const settled: TranscriptBlock = {
+      ...pending, pending: false, result: 'Success',
+      diffs: [{ path: 'example.ts', oldText: 'before', newText: 'after\n'.repeat(80) }],
+    }
+    expect(redrawsForSwap(pending, settled)).toBe(0)
+  })
+
   it('patches a compaction card whose state moves to the tail row', () => {
     // A long summary makes the card taller than the viewport, so its head row
     // sits above the visible area once the card has settled.
@@ -121,6 +135,123 @@ describe('main-screen card lifecycle', () => {
     tui.renderNow()
     expect(tui.fullRedraws - baseline).toBeGreaterThan(0)
     tui.stop()
+  })
+})
+
+describe('main-screen stream settlement', () => {
+  it.each(['reasoning', 'text'] as const)('keeps long displayed %s steps on screen when live entries are replaced', type => {
+    const tui = new TuiMainScreen(new FakeTerminal(100, 30) as never, false)
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(1_000)
+      const firstText = Array.from({ length: 48 }, (_, index) => 'FIRST ' + index).join('\n')
+      const secondText = Array.from({ length: 48 }, (_, index) => 'SECOND ' + index).join('\n')
+      const prefix = type === 'reasoning' ? 'reasoning:' : 'text:'
+      const renderer = new TranscriptRenderer({ ...options, revealProgress: new Map([
+        [prefix + '1:1', { start: 1_000, visible: firstText.length, paintedAt: 1_000 }],
+        [prefix + '1:2', { start: 1_200, visible: secondText.length, paintedAt: 1_200 }],
+      ]) })
+      const first = { type: 'event', event: { type: 'assistant/message', seq: 1, time: 1_000, data: {
+        turn: 1, step: 1, message: { content: [{ type, text: firstText }] }, stream: [],
+      } } } as unknown as TranscriptEntry
+      const call = { type: 'event', event: { type: 'tool/call', seq: 2, time: 1_000, data: {
+        turn: 1, step: 1, callId: 'c1', name: 'read', arguments: '{}',
+      } } } as TranscriptEntry
+      const result = { type: 'event', event: { type: 'tool/result', seq: 3, time: 1_000, data: {
+        turn: 1, step: 1, message: { source: { callId: 'c1' }, content: [{ type: 'text', text: 'OK' }] },
+      } } } as unknown as TranscriptEntry
+      const history = [first, call, result]
+      tui.addChild(renderer.container)
+      tui.addChild(new Text('EDITOR', 0, 0))
+      tui.start()
+      renderer.setEntries(history)
+      tui.renderNow()
+      vi.setSystemTime(1_200)
+      renderer.setEntries([...history, { type: 'live', event: { type: 'assistant/live-chunk', seq: 1, time: 1_200, data: {
+        attemptId: 'a2', turn: 1, step: 2, chunk: { type: type + '-delta', index: 0, text: secondText },
+      } } } as TranscriptEntry])
+      tui.renderNow()
+      const before = renderer.container.render(100).join('\n')
+      expect(before.includes('SECOND 47')).toBe(true)
+      const redraws = tui.fullRedraws
+      vi.setSystemTime(1_400)
+      renderer.setEntries([...history, { type: 'event', event: { type: 'assistant/message', seq: 4, time: 1_400, data: {
+        turn: 1, step: 2, message: { content: [{ type, text: secondText }] }, stream: [],
+      } } } as unknown as TranscriptEntry])
+      tui.renderNow()
+      expect(tui.fullRedraws - redraws).toBe(0)
+      expect(renderer.container.render(100).join('\n') === before).toBe(true)
+      expect(renderer.liveRevealPending).toBe(false)
+    }
+    finally {
+      tui.stop()
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('main-screen chrome stability', () => {
+  it('keeps status and prompt rows fixed while a wait clears before the next step is visible', () => {
+    const tui = new TuiMainScreen(new FakeTerminal(100, 30) as never, false)
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(1_000)
+      const reasoning = Array.from({ length: 48 }, (_, index) => 'THINKING ' + index).join('\n')
+      const renderer = new TranscriptRenderer({ ...options, revealProgress: new Map([
+        ['reasoning:1:1', { start: 1_000, visible: reasoning.length, paintedAt: 1_000 }],
+      ]) })
+      const wait = new WaitStatusLine(palette)
+      const editor = new PromptEditor(tui, editorTheme(palette))
+      const first = { type: 'event', event: { type: 'assistant/message', seq: 1, time: 1_000, data: {
+        turn: 1, step: 1, message: { content: [{ type: 'reasoning', text: reasoning }] }, stream: [],
+      } } } as unknown as TranscriptEntry
+      const entries = [first]
+      renderer.setEntries(entries)
+      wait.setText('waiting for response · 1s')
+      tui.addChild(renderer.container)
+      tui.addChild(new Text('CHROME STATUS\n\nCHROME HINT', 0, 0))
+      tui.addChild(wait)
+      tui.addChild(editor)
+      tui.addChild(new Text('METRICS\nCONTEXT', 0, 0))
+      tui.setFocus(editor)
+      tui.start()
+      tui.renderNow()
+      const rows = () => {
+        const state = tui.captureRenderState()
+        return {
+          status: state.previousLines.findIndex(line => line.includes('CHROME STATUS')) - state.previousViewportTop,
+          editor: state.previousLines.findIndex(line => line.startsWith('> ')) - state.previousViewportTop,
+        }
+      }
+      const before = rows()
+      expect(before.status).toBeGreaterThanOrEqual(0)
+      expect(before.editor).toBeGreaterThan(before.status)
+      const redraws = tui.fullRedraws
+      vi.setSystemTime(1_001)
+      entries.push({ type: 'live', event: { type: 'assistant/live-chunk', seq: 1, time: 1_001, data: {
+        attemptId: 'a2', turn: 1, step: 2, chunk: { type: 'reasoning-delta', index: 0, text: 'NEXT STEP' },
+      } } } as TranscriptEntry)
+      renderer.setEntries(entries)
+      wait.setText('')
+      tui.renderNow()
+      expect(renderer.container.render(100).join('\n').includes('NEXT STEP')).toBe(false)
+      expect(rows()).toEqual(before)
+      vi.setSystemTime(1_200)
+      renderer.setEntries(entries)
+      tui.renderNow()
+      expect(renderer.container.render(100).join('\n')).toContain('NEXT STEP')
+      expect(rows()).toEqual(before)
+      for (const label of ['generating ' + 'a-long-tool-name-'.repeat(20), 'retry 2/5 after TRANSPORT', '']) {
+        wait.setText(label)
+        tui.renderNow()
+        expect(rows()).toEqual(before)
+      }
+      expect(tui.fullRedraws - redraws).toBe(0)
+    }
+    finally {
+      tui.stop()
+      vi.useRealTimers()
+    }
   })
 })
 

@@ -1,8 +1,9 @@
 /**
  * Real-Host check for a long API wait followed by one large reasoning block.
  *
- * Verifies the thinking placeholder, no whole-block pop-in, the wait row, and
- * that the thinking text is revealed progressively. The answer may appear
+ * Verifies the thinking placeholder, no whole-block pop-in, the wait row, that
+ * the thinking text is revealed progressively, and that the status block and
+ * prompt keep their rows across the wait-to-stream transition. The answer may appear
  * while the reveal is still running: it is real streamed content and the
  * transcript no longer hides it behind the animation.
  *
@@ -15,7 +16,7 @@
  */
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:http'
-import { cpSync, existsSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -126,9 +127,22 @@ writeFileSync(join(profile, 'cordis.patch.yml'), `- id: llm-pi-ai
     thinkingDisplay: detailed
 `)
 
+const geometryLog = join(home, 'chrome-geometry.jsonl')
 const child = spawn(process.execPath, ['scripts/fake-tty-entry.mjs', '--profile', 'tui'], {
   cwd: repo,
-  env: { ...process.env, DSH_HOME: home, MOCK_API_KEY: 'dummy', COLUMNS: '120', LINES: '40', TERM: 'xterm-256color', COLORTERM: 'truecolor' },
+  env: {
+    ...process.env,
+    DSH_HOME: home,
+    MOCK_API_KEY: 'dummy',
+    COLUMNS: '120',
+    LINES: '40',
+    TERM: 'xterm-256color',
+    COLORTERM: 'truecolor',
+    FAKE_TTY_GEOMETRY_LOG: geometryLog,
+    FAKE_TTY_GEOMETRY_MARKS: startMark + ',' + 'SLOW ANSWER DONE',
+    NODE_OPTIONS: [process.env.NODE_OPTIONS, '--import=' + fileURLToPath(new URL('./fake-tty-chrome-trace.mjs', import.meta.url))]
+      .filter(Boolean).join(' '),
+  },
   stdio: ['pipe', 'pipe', 'pipe'],
 })
 let out = ''
@@ -185,11 +199,24 @@ child.on('exit', (code, signal) => {
     && (startAt === undefined || placeholderAt <= startAt)
   const waitingOrdered = waitingAt !== undefined
     && (startAt === undefined || waitingAt <= startAt)
+  // Chrome geometry: once a wait row is on screen, the status block and prompt
+  // must keep their rows through the wait clearing and the next stream content.
+  // Before that the viewport is still filling from empty, which legitimately
+  // pushes the prompt down.
+  const frames = readFileSync(geometryLog, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
+  const firstWait = frames.findIndex(frame => frame.wait === true)
+  const streamedFrames = firstWait < 0 ? [] : frames.slice(firstWait)
+  const chromeRows = new Set(streamedFrames.map(frame => String(frame.statusRow) + '/' + String(frame.editorRow)))
+  const sawWait = firstWait >= 0
+  const sawThinking = streamedFrames.some(frame => String(frame.mark).includes(startMark))
+  const sawAnswer = streamedFrames.some(frame => String(frame.mark).includes('SLOW ANSWER DONE'))
+  const chromeStable = chromeRows.size === 1 && sawWait && sawThinking && sawAnswer
   const pass = placeholderOrdered && waitingOrdered
-    && startAt !== undefined && !firstChunkHadMiddle && streamed && answered
+    && startAt !== undefined && !firstChunkHadMiddle && streamed && answered && chromeStable
   console.log('EXIT', code, signal, 'phase', phase)
   console.log('placeholderAt', placeholderAt, 'waitingAt', waitingAt)
   console.log('startAt', startAt, 'middleAt', middleAt, 'answerAt', answerAt, 'firstChunkHadMiddle', firstChunkHadMiddle)
+  console.log('chromeFrames', frames.length, 'streamedFrames', streamedFrames.length, 'chromeRows', [...chromeRows].join(' '), 'sawWait', sawWait, 'sawThinking', sawThinking, 'sawAnswer', sawAnswer, 'chromeStable', chromeStable)
   console.log('RESULT', pass ? 'PASS' : 'FAIL')
   if (!pass) {
     console.log('--- stdout tail ---')

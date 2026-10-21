@@ -1,7 +1,6 @@
 import { spawn } from 'node:child_process'
 import {
   Box,
-  Editor,
   ProcessTerminal,
   ScrollView,
   Spacer,
@@ -38,9 +37,10 @@ import { subscribeSessionEvents } from './session-events.js'
 import { liveChunkHasOutput, type TranscriptBlock, type TranscriptEntry } from './transcript.js'
 import { frameCostMs, frameOverrunMs, nextFrameDelay, nextStreamInterval, settleGraceMs, STREAM_MIN_INTERVAL_MS, transcriptFrameChanged } from './stream-pacing.js'
 import { TranscriptRenderer } from './transcript-renderer.js'
-import { WAIT_ROW_DELAY_MS, waitSubjectAfter, waitingText, waitingVisible, type WaitRetry, type WaitSubject } from './waiting.js'
+import { WAIT_ROW_DELAY_MS, WaitStatusLine, waitSubjectAfter, waitingText, waitingVisible, type WaitRetry, type WaitSubject } from './waiting.js'
 import { holdProcessWarnings, type WarningGuard } from './warnings.js'
 import { Rule } from './rule.js'
+import { PromptEditor } from './prompt-editor.js'
 
 
 /** Terminal application lifecycle. */
@@ -117,8 +117,9 @@ export async function startTerminalApp(
   const statusRule = new Rule(text => palette.reasoning(reasoningEffort)(text))
   const status = new Text('', 0, 0)
   const footer = new Text('', 0, 0)
-  // The editor paints its border and content across the full width it is given.
-  const editor = new Editor(tui, editorTheme(palette, () => reasoningEffort))
+  const waitStatus = new WaitStatusLine(palette)
+  // The native padding reserves the prompt gutter without shifting the full-width borders.
+  const editor = new PromptEditor(tui, editorTheme(palette, () => reasoningEffort))
   const markdown = markdownTheme(palette)
   const renderer = new TranscriptRenderer({
     showReasoning: config.showReasoning,
@@ -148,7 +149,7 @@ export async function startTerminalApp(
       },
       { component: statusRule, basis: 'auto' },
       { component: status, basis: 'auto' },
-      { component: new Spacer(1), basis: 'auto' },
+      { component: waitStatus, basis: 'auto' },
       { component: editor, basis: 'auto' },
       { component: footer, basis: 'auto' },
     ]))
@@ -159,7 +160,7 @@ export async function startTerminalApp(
     tui.addChild(transcript)
     tui.addChild(statusRule)
     tui.addChild(status)
-    tui.addChild(new Spacer(1))
+    tui.addChild(waitStatus)
     tui.addChild(editor)
     tui.addChild(footer)
   }
@@ -288,10 +289,11 @@ export async function startTerminalApp(
     const started = performance.now()
     const pending = waitingBlock()
     const pendingText = pending === undefined ? '' : pending.text
+    waitStatus.setText(pendingText)
     // The grace has to outlast the gap to this content's first paint, which is
     // the interval the frame was scheduled on. A fixed grace would let a
     // backed-off window paint the final text and the next tool card together.
-    renderer.set(entries, pending === undefined ? localNotices : [...localNotices, pending], settleGraceMs(transcriptInterval))
+    renderer.set(entries, localNotices, settleGraceMs(transcriptInterval))
     if (renderer.contentChanged) transcriptRevision += 1
     const revision = transcriptRevision
     // Bound the next rebuild before pacing it.
@@ -314,7 +316,7 @@ export async function startTerminalApp(
     debug(`stream frame: rebuild=${rebuildMs.toFixed(1)}ms slipped=${slippedMs.toFixed(1)}ms cost=${frameMs.toFixed(1)}ms sincePaint=${sincePaint.toFixed(1)}ms interval=${String(transcriptInterval)}ms live=${String(renderer.liveContentLength)} reveal=${String(renderer.liveRevealPending)}`)
     const revealing = renderer.liveRevealPending
     const mark = { revision, wait: pendingText }
-    if (transcriptFrameChanged(painted, mark, revealing)) {
+    if (transcriptFrameChanged(painted, mark)) {
       painted = mark
       lastPaintAt = performance.now()
       tui.requestRender()
@@ -337,11 +339,7 @@ export async function startTerminalApp(
         clearTimeout(transcriptTimer)
         transcriptTimer = undefined
       }
-      // Painted inline. A burst's first frame is what starts a local reveal, so
-      // deferring it lets a gateway that sends the whole block together with its
-      // settlement settle the step first, and the reveal of a live entry that
-      // never existed is dropped. There is no scheduled due time, so this frame
-      // charges no slip to the next interval.
+      // An inline frame has no scheduled due time and charges no timer slip.
       frameDueAt = undefined
       renderTranscript()
       return
@@ -486,15 +484,8 @@ export async function startTerminalApp(
             }
           }
         }
+        renderer.track(entry)
         entries.push(entry)
-        // Start the placeholder or first revealed chunk without waiting for the
-        // current transcript timer, which may be up to 100ms away.
-        if (chunk?.type === 'block-start' && chunk.blockType === 'reasoning' && thinkingDisplayMode !== 'hidden') {
-          scheduleTranscript(true)
-        }
-        else if (chunk?.type === 'block-end' && (chunk.block.type === 'text' || chunk.block.type === 'reasoning')) {
-          scheduleTranscript(true)
-        }
       },
       replaceEntries: update => { entries = update(entries) },
       notice: text => pushNotice('info', text),
@@ -777,6 +768,12 @@ export async function startTerminalApp(
       editorHasText: editor.getText() !== '',
     })
     if (shortcut === undefined) return undefined
+    if (shortcut === 'toggle-write-preview') {
+      if (tui.hasOverlay()) return undefined
+      renderer.toggleWritePreview()
+      tui.requestRender()
+      return { consume: true }
+    }
     if (shortcut === 'clear-input') {
       editor.setText('')
       return { consume: true }

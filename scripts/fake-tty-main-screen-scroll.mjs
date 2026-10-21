@@ -121,12 +121,14 @@ const strip = text => text.replace(/\x1b\][^\x07]*\x07/g, '').replace(/\x1b\[[0-
 let out = ''
 let err = ''
 let prompted = false
+let promptMarkerSeen = false
 let secondTurn = false
 let exitSent = false
 child.stdout.on('data', data => {
   out += String(data)
   const text = strip(out)
   if (!prompted && text.includes('enter send')) {
+    promptMarkerSeen = text.includes('> ')
     prompted = true
     child.stdin.write('ctx' + String.fromCharCode(13))
     return
@@ -153,8 +155,8 @@ child.on('exit', code => {
   const clears = (out.match(/\x1b\[2J/g) ?? []).length
   const chunkLogs = err.split(String.fromCharCode(10)).filter(line => line.includes('stream chunk: text-delta')).length
   const finalVisible = words.every(word => clean.includes(word))
-  const pass = code === 0 && clears === 0 && finalVisible && chunkLogs >= 10
-  console.log('EXIT', code, 'turns', turns, 'clears', clears, 'chunkLogs', chunkLogs, 'finalVisible', finalVisible, 'pass', pass)
+  const pass = code === 0 && promptMarkerSeen && clears === 0 && finalVisible && chunkLogs >= 10
+  console.log('EXIT', code, 'turns', turns, 'promptMarkerSeen', promptMarkerSeen, 'clears', clears, 'chunkLogs', chunkLogs, 'finalVisible', finalVisible, 'pass', pass)
   if (clears > 0) console.log('FULL REPAINT during a streaming turn: pi-tui cleared the screen and scrollback')
   if (!finalVisible) console.log('streamed answer missing words; last screen tail:', JSON.stringify(clean.slice(-1200)))
   process.exit(pass ? 0 : 1)

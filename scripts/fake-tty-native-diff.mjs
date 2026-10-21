@@ -5,6 +5,8 @@ mkdirSync('.tmp', { recursive: true })
 rmSync('.tmp/native-diff-demo.txt', { force: true })
 const home = '/tmp/dsh-native-tui-native-diff-home'
 mkdirSync(home + '/profiles/tui', { recursive: true })
+const previewTail = 'WRITE-CONTENT-LAST-LINE'
+const content = ['before', ...Array.from({ length: 81 }, (_, index) => 'write-line-' + String(index + 2)), previewTail].join('\n')
 
 const server = createServer((req, res) => {
   if (req.url === '/v1/models') {
@@ -33,7 +35,7 @@ const server = createServer((req, res) => {
           index: 0,
           id: 'call-native-write',
           type: 'function',
-          function: { name: 'write', arguments: JSON.stringify({ file_path: '.tmp/native-diff-demo.txt', content: 'before' }) },
+          function: { name: 'write', arguments: JSON.stringify({ file_path: '.tmp/native-diff-demo.txt', content }) },
         }] }, finish_reason: null }] })
         send({ ...base(), choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })
       }
@@ -106,26 +108,48 @@ child.stderr.on('data', d => { err += String(d) })
 const strip = text => text.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
 let phase = 0
 let seenAt = 0
+let collapseOffset = 0
+let collapsedInitially = false
+let expanded = false
+let collapsedAgain = false
 const tick = setInterval(() => {
   const text = strip(out)
   if (phase === 0 && text.includes('enter send')) { phase = 1; try { child.stdin.write('run the native diff probe\r') } catch {} }
-  else if (phase === 1 && text.includes('│ + after')) { phase = 2; seenAt = Date.now() }
-  else if (phase === 2 && Date.now() - seenAt > 800) { phase = 3; try { child.stdin.write('\x04') } catch {} }
+  else if (phase === 1 && text.includes('ctrl+o to expand')) {
+    collapsedInitially = !text.includes(previewTail)
+    phase = 2
+    try { child.stdin.write('\x0f') } catch {}
+  }
+  else if (phase === 2 && text.includes(previewTail)) {
+    expanded = true
+    collapseOffset = out.length
+    phase = 3
+    try { child.stdin.write('\x0f') } catch {}
+  }
+  else if (phase === 3 && strip(out.slice(collapseOffset)).includes('ctrl+o to expand') && text.includes('│ + after')) {
+    collapsedAgain = true
+    phase = 4
+    seenAt = Date.now()
+  }
+  else if (phase === 4 && Date.now() - seenAt > 800) { phase = 5; try { child.stdin.write('\x04') } catch {} }
 }, 200)
 const hard = setTimeout(() => { try { child.kill('SIGTERM') } catch {} }, 30000)
 child.on('exit', (code, signal) => {
   clearInterval(tick); clearTimeout(hard); server.close()
   const clean = strip(out)
-  const pass = clean.includes('⚙ write')
-    && clean.includes('⚙ edit')
-    && clean.includes('├ diff')
-    && clean.includes('│ + before')
+  const pass = code === 0 && signal === null && phase === 5
+    && collapsedInitially && expanded && collapsedAgain
+    && clean.includes('write .tmp/native-diff-demo.txt')
+    && clean.includes('diff .tmp/native-diff-demo.txt')
+    && !clean.includes('⚙ write') && !clean.includes('⚙ edit')
+    && !clean.includes('├ args') && !clean.includes('├ result')
+    && !clean.includes('│ + before')
     && clean.includes('│ - before')
     && clean.includes('│ + after')
     && !clean.includes('⚙ run_code')
-  console.log('EXIT', code, signal, 'phase', phase, 'pass', pass)
+  console.log('EXIT', code, signal, 'phase', phase, 'collapsedInitially', collapsedInitially, 'expanded', expanded, 'collapsedAgain', collapsedAgain, 'pass', pass)
   console.log(clean.slice(-14000))
   console.log('--- STDERR ---')
   console.log(err.slice(-4000))
-  process.exit(0)
+  process.exit(pass ? 0 : 1)
 })

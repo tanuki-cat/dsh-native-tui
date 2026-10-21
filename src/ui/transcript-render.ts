@@ -9,11 +9,12 @@
  * @module dsh-native-tui/ui/transcript-render
  */
 
-import { Box, Container, Markdown, Spacer, Text, type Component } from '@earendil-works/pi-tui'
+import { Box, Container, Text, type Component } from '@earendil-works/pi-tui'
+import { AssistantMessage } from './assistant-message.js'
 import { BarText } from './bar-text.js'
+import { renderWriteCard } from './write-card.js'
 import { diffLines } from './diff.js'
 import { clip, compactCodeExecutionPreview, formatToolArguments } from './tool-preview.js'
-import { clipGraphemes, REASONING_PREVIEW } from './reasoning-reveal.js'
 import type { TranscriptBlock, TranscriptOptions } from './transcript.js'
 
 /** Tools whose cards follow the code-execution density setting. */
@@ -27,6 +28,18 @@ const CODE_EXECUTION_TOOLS: ReadonlySet<string> = new Set(['run_code', 'bash', '
  */
 export function isCodeExecutionTool(name: string): boolean {
   return CODE_EXECUTION_TOOLS.has(name)
+}
+
+function fileToolPath(name: string, args: string): string | undefined {
+  if (name !== 'write' && name !== 'edit') return undefined
+  try {
+    const value: unknown = JSON.parse(args)
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+    const record = value as { file_path?: unknown; path?: unknown }
+    const path = record.file_path ?? record.path
+    return typeof path === 'string' && path.trim() !== '' ? path : undefined
+  }
+  catch { return undefined }
 }
 
 /**
@@ -49,51 +62,7 @@ export function renderTranscriptBlock(block: TranscriptBlock, options: Transcrip
       container.addChild(new Text(block.text, 0, 0))
       return band(container, palette.userBand)
     }
-    case 'assistant': {
-      const container = new Container()
-      // The head line must not change after the block exists. In main-screen
-      // mode pi-tui can only patch rows inside the viewport, so a change to a
-      // row that already scrolled into scrollback makes it clear the screen
-      // (and the scrollback) and repaint the whole transcript. The live state
-      // is reported by the status row instead.
-      const label = palette.bold(palette.accent('◆ assistant'))
-      container.addChild(new Text(label, 0, 0))
-      const mode = options.thinkingDisplay ?? 'detailed'
-      if (block.starting === true) {
-        if (mode === 'compact') {
-          container.addChild(new Spacer(1))
-          container.addChild(new Text(palette.dim('thinking · …'), 0, 0))
-        }
-        else if (mode !== 'hidden') {
-          const reasoning = new Container()
-          reasoning.addChild(new Text(palette.dim('thinking …'), 0, 0))
-          container.addChild(new Spacer(1))
-          container.addChild(band(reasoning, palette.thinkingBand))
-        }
-      }
-      else if (block.reasoning !== undefined && block.reasoning.trim() !== '') {
-        if (mode === 'compact') {
-          const firstLine = block.reasoning.split('\n').map(line => line.trim()).find(line => line !== '') ?? ''
-          container.addChild(new Spacer(1))
-          container.addChild(new Text(palette.dim('thinking · ' + clipGraphemes(firstLine, 240)), 0, 0))
-        }
-        else if (mode !== 'hidden') {
-          const reasoning = new Container()
-          reasoning.addChild(new Text(palette.dim('thinking'), 0, 0))
-          reasoning.addChild(new Text(palette.dim(clipGraphemes(block.reasoning, REASONING_PREVIEW)), 0, 0))
-          container.addChild(new Spacer(1))
-          container.addChild(band(reasoning, palette.thinkingBand))
-        }
-      }
-      // The answer streams on its own schedule; a still-revealing reasoning
-      // body above it must not hold it back, or the whole answer pops in on the
-      // frame the reasoning finishes.
-      if (block.text.trim() !== '') {
-        container.addChild(new Spacer(1))
-        container.addChild(new Markdown(block.text, 0, 0, options.markdown))
-      }
-      return container
-    }
+    case 'assistant': return new AssistantMessage(block, options)
     case 'context': {
       const container = new Container()
       container.addChild(new Text(palette.dim('◇ context · ' + block.label), 0, 0))
@@ -101,11 +70,33 @@ export function renderTranscriptBlock(block: TranscriptBlock, options: Transcrip
       return container
     }
     case 'tool': {
+      if (block.name === 'write') return band(renderWriteCard(block, palette, options.writeExpanded), palette.toolBand)
       // The head line must stay identical for the block's whole life: a change
       // above the main-screen viewport makes pi-tui clear the screen and the
       // scrollback to repaint the transcript. The run state is reported by the
       // status row appended last, which main-screen can patch or extend safely.
       const status = '└ ' + (block.pending ? palette.warning('running…') : block.isError === true ? palette.error('error') : palette.success('done'))
+      const diffs = block.diffs ?? []
+      const filePath = fileToolPath(block.name, block.args)
+      if (diffs.length > 0 || filePath !== undefined) {
+        const lines: string[] = []
+        if (diffs.length === 0) lines.push(palette.bold(palette.accent('diff ' + filePath)))
+        for (const diff of diffs) {
+          // Keep native single-file headers stable from call through settlement.
+          const path = diffs.length === 1 ? filePath ?? diff.path : diff.path
+          lines.push(palette.bold(palette.accent('diff ' + path)))
+          for (const row of diffLines(diff.oldText, diff.newText, 60)) {
+            lines.push(row.kind === 'add'
+              ? palette.success('│ + ' + row.text)
+              : row.kind === 'remove' ? palette.error('│ - ' + row.text) : palette.dim('│   ' + row.text))
+          }
+        }
+        if (block.pending || block.isError === true || diffs.length === 0) {
+          if (block.result?.trim()) lines.push(block.isError === true ? palette.error(clip(block.result)) : clip(block.result))
+          lines.push(status)
+        }
+        return band(new Text(lines.join('\n'), 0, 0), palette.toolBand)
+      }
       const compact = isCodeExecutionTool(block.name) && (options.runCodeDisplay ?? 'detailed') === 'compact'
       const container = new Container()
       container.addChild(new Text(palette.bold(palette.accent('⚙ ' + block.name)), 0, 0))
@@ -126,18 +117,6 @@ export function renderTranscriptBlock(block: TranscriptBlock, options: Transcrip
           block.isError === true ? palette.error : line => line,
           block.isError === true ? palette.error : palette.dim,
         ))
-      }
-      if (block.diffs !== undefined) {
-        const lines = [palette.dim('├ diff')]
-        for (const diff of block.diffs) {
-          lines.push(palette.bold(palette.accent('│ diff ' + diff.path)))
-          for (const row of diffLines(diff.oldText, diff.newText, 60)) {
-            lines.push(row.kind === 'add'
-              ? palette.success('│ + ' + row.text)
-              : row.kind === 'remove' ? palette.error('│ - ' + row.text) : palette.dim('│   ' + row.text))
-          }
-        }
-        container.addChild(new Text(lines.join('\n'), 0, 0))
       }
       container.addChild(new Text(status, 0, 0))
       return band(container, palette.toolBand)

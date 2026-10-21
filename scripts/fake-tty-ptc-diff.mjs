@@ -1,12 +1,16 @@
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:http'
-import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 mkdirSync('.tmp', { recursive: true })
-const home = '/tmp/dsh-native-tui-ptc-diff-home'
+const workspace = mkdtempSync('.tmp/ptc-diff-')
+const file = workspace + '/demo.txt'
+const home = mkdtempSync(join(tmpdir(), 'dsh-native-tui-ptc-diff-'))
 mkdirSync(home + '/profiles/tui', { recursive: true })
 const program = [
-  "const w = await tools.write({ file_path: '.tmp/ptc-diff-demo.txt', content: 'before' })",
-  "const e = await tools.edit({ file_path: '.tmp/ptc-diff-demo.txt', old_string: 'before', new_string: 'after' })",
+  `const w = await tools.write({ file_path: ${JSON.stringify(file)}, content: 'before' })`,
+  `const e = await tools.edit({ file_path: ${JSON.stringify(file)}, old_string: 'before', new_string: 'after' })`,
   'console.log(JSON.stringify({ w, e }))',
 ].join('\n')
 const server = createServer((req, res) => {
@@ -118,15 +122,18 @@ const hard = setTimeout(() => { try { child.kill('SIGTERM') } catch {} }, 30000)
 child.on('exit', (code, signal) => {
   clearInterval(tick); clearTimeout(hard); server.close()
   const clean = strip(out)
-  const pass = clean.includes('⚙ write')
-    && clean.includes('⚙ edit')
-    && clean.includes('├ diff')
-    && clean.includes('│ + before')
+  const pass = code === 0 && signal === null && phase === 3
+    && clean.includes('write ' + file)
+    && clean.includes('diff ' + file)
+    && !clean.includes('⚙ write') && !clean.includes('⚙ edit')
+    && !clean.includes('│ + before')
     && clean.includes('│ - before')
     && clean.includes('│ + after')
   console.log('EXIT', code, signal, 'phase', phase, 'pass', pass)
   console.log(clean.slice(-14000))
   console.log('--- STDERR ---')
   console.log(err.slice(-4000))
+  rmSync(workspace, { recursive: true, force: true })
+  rmSync(home, { recursive: true, force: true })
   process.exit(pass ? 0 : 1)
 })

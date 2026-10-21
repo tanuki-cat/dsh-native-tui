@@ -7,7 +7,7 @@ import { createPalette, markdownTheme } from '../src/ui/theme.js'
 import { contentText, liveChunkHasOutput, reduceTranscript, reduceTranscriptWindow, type TranscriptBlock, type TranscriptEntry } from '../src/ui/transcript.js'
 import { frameCostMs, frameOverrunMs, nextFrameDelay, nextStreamInterval, settleGraceMs, STREAM_MIN_INTERVAL_MS, STREAM_PAINT_CEILING_MS, transcriptFrameChanged } from '../src/ui/stream-pacing.js'
 import { renderTranscriptBlock } from '../src/ui/transcript-render.js'
-import { REASONING_REVEAL_MAX_MS, revealStreamText, STREAM_TEXT_MAX_BACKLOG } from '../src/ui/reasoning-reveal.js'
+import { revealStreamText, STREAM_TEXT_MAX_STEP } from '../src/ui/reasoning-reveal.js'
 import { sameTranscriptBlock, TranscriptRenderer } from '../src/ui/transcript-renderer.js'
 import { formatToolArguments } from '../src/ui/tool-preview.js'
 import { WAIT_ROW_DELAY_MS, waitSubjectAfter, waitingText, waitingVisible, type WaitSubject } from '../src/ui/waiting.js'
@@ -229,17 +229,17 @@ describe('reduceTranscript', () => {
     const firstBlock = first.blocks[0]
     expect(firstBlock?.kind).toBe('assistant')
     if (firstBlock?.kind !== 'assistant') throw new Error('expected an assistant block')
-    expect(firstBlock.reasoning).toHaveLength(1)
+    expect(firstBlock.reasoning).toHaveLength(STREAM_TEXT_MAX_STEP)
     expect(first.revealPending).toBe(true)
 
     const next = reduceTranscriptWindow(entries, tracked, 1_233)
     const nextBlock = next.blocks[0]
     expect(nextBlock?.kind).toBe('assistant')
     if (nextBlock?.kind !== 'assistant') throw new Error('expected an assistant block')
-    expect(nextBlock.reasoning).toHaveLength(132)
+    expect(nextBlock.reasoning).toHaveLength(STREAM_TEXT_MAX_STEP * 2)
   })
 
-  it('catches up instead of stretching a reveal when a frame is late', () => {
+  it('caps the thinking advance even when a frame is late', () => {
     const reasoning = 'x'.repeat(400)
     const entries: TranscriptEntry[] = [
       liveChunk(1, 1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: reasoning } }, 1_000),
@@ -248,35 +248,36 @@ describe('reduceTranscript', () => {
     const tracked = { ...options, revealProgress }
 
     reduceTranscriptWindow(entries, tracked, 1_000)
-    // The next frame arrives 100ms later: the reveal advances 100ms worth of
-    // text rather than one capped step, so a dropped frame costs no animation time.
     const late = reduceTranscriptWindow(entries, tracked, 1_100)
     const lateBlock = late.blocks[0]
     expect(lateBlock?.kind).toBe('assistant')
     if (lateBlock?.kind !== 'assistant') throw new Error('expected an assistant block')
-    expect((lateBlock.reasoning ?? '').length).toBeGreaterThan(160)
+    expect((lateBlock.reasoning ?? '').length).toBe(STREAM_TEXT_MAX_STEP * 2)
     expect(revealProgress.size).toBe(1)
   })
 
-  it('finishes every reveal inside the wall-clock budget even on slow frames', () => {
+  it('drains a large thinking backlog without wall-clock catch-up', () => {
     const reasoning = 'x'.repeat(3_000)
     const entries: TranscriptEntry[] = [
       liveChunk(1, 1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: reasoning } }, 1_000),
     ]
     const revealProgress = new Map()
     const tracked = { ...options, revealProgress }
-    // A terminal repainting at 10fps must not turn the 600ms budget into 1.9s.
-    let now = 1_000
-    let pending = true
-    while (pending && now - 1_000 <= REASONING_REVEAL_MAX_MS + 100) {
-      pending = reduceTranscriptWindow(entries, tracked, now).revealPending
-      now += 100
+    let shown = 0
+    let result
+    for (let frame = 0; frame < 150; frame += 1) {
+      result = reduceTranscriptWindow(entries, tracked, 1_000 + frame * 500)
+      const block = result.blocks[0]
+      const length = block?.kind === 'assistant' ? block.reasoning?.length ?? 0 : 0
+      expect(length - shown).toBeLessThanOrEqual(STREAM_TEXT_MAX_STEP)
+      shown = length
+      if (!result.revealPending) break
     }
-    expect(pending).toBe(false)
-    expect(now - 1_000).toBeLessThanOrEqual(REASONING_REVEAL_MAX_MS + 100)
+    expect(result?.revealPending).toBe(false)
+    expect(shown).toBe(reasoning.length)
   })
 
-  it('drops a settled step reveal clock so a retry starts from one grapheme', () => {
+  it('drops a settled step reveal clock so a retry starts from its first frame', () => {
     const first = 'a'.repeat(400)
     const retry = 'b'.repeat(400)
     const entries: TranscriptEntry[] = [
@@ -298,7 +299,7 @@ describe('reduceTranscript', () => {
     if (retriedBlock?.kind !== 'assistant') throw new Error('expected an assistant block')
     // The retried attempt reveals from the start instead of inheriting the
     // first attempt's completed count.
-    expect(retriedBlock.reasoning).toHaveLength(1)
+    expect(retriedBlock.reasoning).toHaveLength(STREAM_TEXT_MAX_STEP)
     expect(retried.revealPending).toBe(true)
   })
 
@@ -345,7 +346,7 @@ describe('reduceTranscript', () => {
     expect(full.revealPending).toBe(false)
   })
 
-  it('stops holding once the displayed reasoning limit is revealed', () => {
+  it('reveals a long completed reasoning block in full', () => {
     const reasoning = 'x'.repeat(6_000)
     const entries: TranscriptEntry[] = [
       liveChunk(1, 1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: reasoning } }, 1_000),
@@ -354,7 +355,7 @@ describe('reduceTranscript', () => {
     const partialBlock = partial.blocks[0]
     expect(partialBlock?.kind).toBe('assistant')
     if (partialBlock?.kind !== 'assistant') throw new Error('expected an assistant block')
-    expect(partialBlock.reasoning).toHaveLength(2_995)
+    expect(partialBlock.reasoning).toHaveLength(5_990)
     expect(partial.revealPending).toBe(true)
 
     const full = reduceTranscriptWindow(entries, options, 1_600)
@@ -595,7 +596,9 @@ describe('reduceTranscript', () => {
       diffs: [{ path: 'a.ts', oldText: 'old', newText: 'new' }],
     })
     const output = renderTranscriptBlock(blocks[1]!, options).render(100).join('\n')
-    expect(output).toContain('├ diff')
+    expect(output).toContain('diff a.ts')
+    expect(output).not.toContain('├ args')
+    expect(output).not.toContain('updated a.ts')
     expect(output).toContain('│ - old')
     expect(output).toContain('│ + new')
   })
@@ -664,7 +667,9 @@ describe('reduceTranscript', () => {
       diffs: [{ path: 'c.ts', oldText: null, newText: 'hello' }],
     })
     const output = renderTranscriptBlock(blocks[0]!, options).render(100).join('\n')
-    expect(output).toContain('│ + hello')
+    expect(output).toContain('write c.ts')
+    expect(output).toContain('hello')
+    expect(output).not.toContain('│ + hello')
   })
 
   it('deduplicates PTC events and rebuilds the same nested card', () => {
@@ -1117,7 +1122,7 @@ describe('TranscriptRenderer', () => {
     expect(compactThinking).toContain('long code body')
   })
 
-  it('streams the answer while its reasoning is still revealing', () => {
+  it('holds the answer until its reasoning has finished revealing', () => {
     const renderer = new TranscriptRenderer({ ...options, thinkingDisplay: 'detailed' })
     const reasoning = 'x'.repeat(400)
     const entries: TranscriptEntry[] = [
@@ -1129,13 +1134,13 @@ describe('TranscriptRenderer', () => {
     renderer.set(entries, [])
     const partial = renderer.container.render(80).join('\n')
     expect(partial).toContain('thinking')
-    // The answer is real streamed content, so it is not held behind the
-    // reasoning reveal; it starts appearing on the first frame as a small
-    // revealed prefix rather than as a whole provider chunk.
-    expect(partial).toContain('fi')
+    expect(partial).not.toContain('final answer')
+    expect(partial).not.toContain('fi')
 
-    vi.setSystemTime(1_200)
-    renderer.set(entries, [])
+    for (let frame = 1; frame < 20; frame += 1) {
+      vi.setSystemTime(1_000 + frame * 33)
+      renderer.set(entries, [])
+    }
     const full = renderer.container.render(80).join('\n')
     expect(full).toContain('final answer')
   })
@@ -1144,9 +1149,9 @@ describe('TranscriptRenderer', () => {
     // Main-screen pi-tui repaints the whole transcript when a row above the
     // viewport changes, so card heads must never encode run state. The state
     // lives on the tail row, which main-screen patches or extends safely.
-    const pending = renderTranscriptBlock({ kind: 'tool', callId: 'c1', name: 'write', args: '{}', pending: true }, options)
-    const settled = renderTranscriptBlock({ kind: 'tool', callId: 'c1', name: 'write', args: '{}', result: 'ok', pending: false }, options)
-    const failed = renderTranscriptBlock({ kind: 'tool', callId: 'c1', name: 'write', args: '{}', result: 'no', isError: true, pending: false }, options)
+    const pending = renderTranscriptBlock({ kind: 'tool', callId: 'c1', name: 'read', args: '{}', pending: true }, options)
+    const settled = renderTranscriptBlock({ kind: 'tool', callId: 'c1', name: 'read', args: '{}', result: 'ok', pending: false }, options)
+    const failed = renderTranscriptBlock({ kind: 'tool', callId: 'c1', name: 'read', args: '{}', result: 'no', isError: true, pending: false }, options)
     const pendingHead = pending.render(80)[0]
     expect(pendingHead).toBe(settled.render(80)[0])
     expect(pendingHead).toBe(failed.render(80)[0])
@@ -1483,12 +1488,12 @@ describe('revealStreamText', () => {
     expect(late.text.length).toBe(72)
   })
 
-  it('shows a whole-block settlement at once', () => {
-    const text = 'x'.repeat(STREAM_TEXT_MAX_BACKLOG + 1)
+  it('caps large settlements instead of snapping when the backlog exceeds 600', () => {
+    const text = 'x'.repeat(6_001)
     const state = progress()
     const reveal = advance(text, state, 0)
-    expect(reveal.pending).toBe(false)
-    expect(reveal.text).toBe(text)
+    expect(reveal.pending).toBe(true)
+    expect(reveal.text).toHaveLength(STREAM_TEXT_MAX_STEP)
   })
 
   it('keeps a settled block visible and resumes after it', () => {
@@ -1710,16 +1715,16 @@ describe('transcriptFrameChanged', () => {
   const painted = { revision: 7, wait: '' }
 
   it('paints a new revision or a changed wait row', () => {
-    expect(transcriptFrameChanged(painted, { revision: 8, wait: '' }, false)).toBe(true)
-    expect(transcriptFrameChanged(painted, { revision: 7, wait: 'waiting · 2s' }, false)).toBe(true)
+    expect(transcriptFrameChanged(painted, { revision: 8, wait: '' })).toBe(true)
+    expect(transcriptFrameChanged(painted, { revision: 7, wait: 'waiting · 2s' })).toBe(true)
   })
 
   it('skips a frame with nothing new', () => {
-    expect(transcriptFrameChanged(painted, { revision: 7, wait: '' }, false)).toBe(false)
+    expect(transcriptFrameChanged(painted, { revision: 7, wait: '' })).toBe(false)
   })
 
-  it('always paints while a reasoning block is still revealing', () => {
-    expect(transcriptFrameChanged(painted, { revision: 7, wait: '' }, true)).toBe(true)
+  it('paints the next reveal frame only when its visible prefix changes', () => {
+    expect(transcriptFrameChanged(painted, { revision: 8, wait: '' })).toBe(true)
   })
 })
 
@@ -1746,14 +1751,15 @@ describe('TranscriptRenderer component reuse', () => {
     expect(after[after.length - 1]).toBe(before[before.length - 1])
   })
 
-  it('rebuilds only the block whose text changed', () => {
+  it('updates the assistant leaf without replacing either row', () => {
     const renderer = new TranscriptRenderer(options)
     renderer.set([user(1, 'hello'), assistant(2, 'first')], [])
     const before = [...renderer.container.children]
     renderer.set([user(1, 'hello'), assistant(2, 'second')], [])
     const after = [...renderer.container.children]
     expect(after[0]).toBe(before[0])
-    expect(after[after.length - 1]).not.toBe(before[before.length - 1])
+    expect(after[after.length - 1]).toBe(before[before.length - 1])
+    expect(renderer.container.render(80).join('\n')).toContain('second')
   })
 
   it('reuses surviving block components when a full window drops its oldest row', () => {
@@ -1916,6 +1922,9 @@ describe('TranscriptRenderer settle grace', () => {
     ]
     const renderer = new TranscriptRenderer(options)
     const text = (): string => renderer.container.render(120).join(String.fromCharCode(10))
+    renderer.set(entries, [])
+    expect(text()).not.toContain('run_code')
+    vi.setSystemTime(1_702)
     renderer.set(entries, [])
     expect(text()).toContain('run_code')
     renderer.set(entries, [], settleGraceMs(STREAM_PAINT_CEILING_MS))

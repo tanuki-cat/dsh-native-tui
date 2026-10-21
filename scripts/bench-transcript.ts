@@ -6,23 +6,8 @@
  *
  * Run with: node_modules/.bin/tsx scripts/bench-transcript.ts
  *
- * 2026-10-17 baseline, before component reuse: 600 turns cost 76.5 ms/frame and
- * a streaming frame with 100 pending chunks cost 24.4 ms - both above the 33 ms
- * render throttle, which is what "laggy streaming" looked like. Reusing
- * unchanged block components moved those to 2.4 ms and 0.4 ms.
- *
- * 2026-10-18 baseline, before identity-keyed reuse: once the window was full,
- * one more row re-parsed every retained Markdown because index alignment lost
- * every predecessor - 9.6 ms/frame at 200 entries and 64.9 ms at 2000. Keying
- * the reuse window by block identity moved those to 0.6 ms and 2.0 ms.
- *
- * 2026-10-21 baseline, before the per-row paint memo: pi-tui walks every child
- * on every paint even when each leaf has its own cache, so the container render
- * grew with the retained window - 45.6 ms for 2000 rows on a real session. That
- * walk ran on the loop that reads the model stream, so a long session stretched
- * its chunk timestamps and reported a falling tok/s while the Web, whose host
- * is a separate process, did not. Memoizing each row on its width moved the
- * container render to 0.15 ms and the whole frame to 10 ms at 2000 rows.
+ * F includes 10,000 live deltas in a long session with an active detailed
+ * thinking reveal; each frame appends one delta without replaying prior ones.
  */
 import { createPalette, markdownTheme } from '../src/ui/theme.js'
 import { reduceTranscriptWindow, type TranscriptEntry } from '../src/ui/transcript.js'
@@ -163,4 +148,28 @@ for (const turns of [200, 600, 2000]) {
   measure(turns + ' turns repainted at the same width', () => {
     renderer.container.render(120)
   })
+}
+
+console.log('')
+console.log('=== F. long session + 10,000 thinking deltas, active detailed reveal ===')
+{
+  const entries = makeEntries(600)
+  let seq = 900000
+  const append = (): void => {
+    entries.push({ type: 'live', event: {
+      type: 'assistant/live-chunk', seq: seq++, time: 0,
+      data: { attemptId: 'long', turn: 601, step: 0, chunk: { type: 'reasoning-delta', index: 0, text: 'thought ' } },
+    } } as never)
+  }
+  for (let index = 0; index < 10_000; index += 1) append()
+  const renderer = new TranscriptRenderer(options)
+  for (let frame = 0; frame < 130; frame += 1) {
+    renderer.set(entries, [])
+    renderer.container.render(120)
+  }
+  measure('600 turns + 10,000 deltas (append + set + render)', () => {
+    append()
+    renderer.set(entries, [])
+    renderer.container.render(120)
+  }, 9)
 }

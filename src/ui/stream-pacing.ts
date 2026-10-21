@@ -155,17 +155,15 @@ export interface TranscriptPaintMark {
  * Whether a rebuild has anything new to paint.
  *
  * Frames are scheduled on a cadence, so some rebuild the same rows as the last
- * one. Repainting an identical screen only costs terminal writes; a local
- * reveal is the one case with no incoming data that still needs frames.
+ * one. A pending reveal schedules another projection, not a repaint of
+ * identical terminal lines.
  * @param painted - state the last painted frame reflected.
  * @param current - state the rebuild just produced.
- * @param revealing - whether a completed reasoning block is still expanding.
  * @returns true when the frame must be painted.
  */
 export function transcriptFrameChanged(
   painted: TranscriptPaintMark,
   current: TranscriptPaintMark,
-  revealing: boolean,
 ): boolean {
-  return revealing || current.revision !== painted.revision || current.wait !== painted.wait
+  return current.revision !== painted.revision || current.wait !== painted.wait
 }
