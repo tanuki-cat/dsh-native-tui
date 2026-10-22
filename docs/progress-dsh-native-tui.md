@@ -89,7 +89,7 @@ EXIT 0
 - Plugin market 列出官方 claude-code/codex；本地 probe bundle 的 inspect/install/remove 成功。
 - 剪贴板 RGB PNG → `/attach paste` → `/attach preview` → `/attachments` → 图片 overlay。
 - `@@` 在真实 profile 中列出其他 Session 候选；Tab 插入后的发送未完整验证。
-- `fullscreen: true` 启动、`/help`、Ctrl+D 退出；桌面鼠标拖拽未验证。
+- `fullscreen: true` 启动、`/help`、Ctrl+D 退出；2026-10-22 普通终端复验：鼠标滚轮滚动、文本选择复制、退出后终端恢复均正常；桌面鼠标拖拽未验证。
 - 等待提示行：mock SSE provider + 真实 Host + 真实 TUI 抓取渲染流，确认 `⟳ waiting for response · Ns` 逐秒递增、首个可渲染输出到达时消失（裸 block-start 不提前清除）；mock 首次返回 500 时显示 `retry 1/5 after SERVER (automatic)` 并在重放成功后清除。工具调用流式生成期间提示行改为 `⟳ generating run_code call · Ns`（`scripts/fake-tty-wait-tool-phase.mjs` 验证 request → tool 阶段的先后顺序）。
 
 ### 未完成真实验证
@@ -97,7 +97,6 @@ EXIT 0
 - **没有模型凭据**，真实模型流式回合、真实工具调用、真实审批/问答 waterfall 仍未在真实凭据下跑通；只验证了事件管线、失败 turn、UI 路径和 Host 服务。2026-10-18 更新：审批与问答已分别用 mock 模型 + 真实 Host 的 E2E 覆盖（`scripts/fake-tty-approval.mjs`、`scripts/fake-tty-question.mjs`），真实凭据回合仍待验收。
 - 沙箱无法创建真实 PTY，使用 fake-TTY 包装验证。
 - 真实 `present` 工具事件未触发，deliverables panel/reveal 只有格式化和空缺路径验证。
-- 真实终端鼠标拖拽/选择复制未验证。
 
 ## 5. 主要产物
 
@@ -179,7 +178,7 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 
 1. 配置 `DEEPSEEK_API_KEY`，启动真实会话，验收流式文本、工具卡片、审批/问答。
 2. 让模型执行 write/edit 与 present，验收 `/diff`、`/deliverables panel`、ZIP/HTML 导出。
-3. 在真实 PTY 终端验证 `fullscreen: true` 的滚动、鼠标选择复制、Ctrl+D 恢复。
+3. ~~在真实 PTY 终端验证 `fullscreen: true` 的滚动、鼠标选择复制、Ctrl+D 恢复。~~ 2026-10-22 已在普通终端验收通过。
 4. Review Host-native 架构偏差与已知差距，决定是否继续补 PDF/Office、远端连接。
 5. 如需发布，补 git 初始化、commit、版本策略与 CI。
 
@@ -205,7 +204,7 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 
 ### P2
 
-- [ ] **真实 PTY**：fullscreen 鼠标滚动、选择复制、Ctrl+D 恢复尚未在普通终端验收。
+- [x] **真实 PTY（2026-10-22）**：`fullscreen: true` 下鼠标滚轮滚动、文本选择复制、Ctrl+D 退出后终端恢复，已在普通终端验收通过。
 - [x] **Settings wizard 自动化测试（2026-10-20）**：新增 `tests/settings-tui.spec.ts`（字段覆盖、生效时机、fallback、暂存/reset/保存回执）、`tests/settings-host.spec.ts`（嵌套/数组/dict/secret 枚举）、`tests/settings-common.spec.ts`（冲突重试）、`tests/settings.spec.ts` 扩展（schema 投影、类型解析、路径工具）与命令路由测试。真实 Host 探针 `scripts/fake-tty-settings-guided.mjs`（引导页改 thinkingDisplay 并保存、Host 内嵌编辑器浏览）、`scripts/fake-tty-settings-title.mjs`（title 保存后 header 即时生效）、`scripts/fake-tty-settings-host-edit.mjs`（`llm-pi-ai.providers.command-code.models[0].name` 嵌套数组项写入且数组条目数 102→102）均通过；旧 settings 探针（list/edit/nested/nested2/array）同步到新编辑器流程，在隔离 profile 上均 PASS。
 
 ### P3
