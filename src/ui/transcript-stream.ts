@@ -19,7 +19,12 @@ export class AssistantStream {
   private dirty = true
   private projected: TranscriptBlock | undefined
 
-  constructor(readonly key: string, private readonly options: TranscriptOptions) {}
+  constructor(
+    readonly key: string,
+    private readonly options: TranscriptOptions,
+    /** Row identity kept when an attempt replaces this stream. */
+    private readonly rowKey: string = key,
+  ) {}
 
   append(chunk: StreamChunk): void {
     if (chunk.type === 'block-start') {
@@ -85,7 +90,7 @@ export class AssistantStream {
       live: this.live,
       // Kept after settlement so a notice raised mid-stream can stay under this
       // row instead of jumping above it once the durable message assigns a seq.
-      streamKey: this.key,
+      streamKey: this.rowKey,
       ...(this.seq === undefined ? {} : { seq: this.seq }),
       ...(content.length === 0 && this.starting && mode !== 'hidden' ? { starting: true } : {}),
     }

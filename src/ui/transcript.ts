@@ -186,11 +186,16 @@ function ptcContent(value: unknown): readonly ContentBlock[] | undefined {
 }
 
 /** Identity of the assistant row one turn/step streams into. */
-export function liveStreamKey(turn: number, step: number): string {
+function liveStreamKey(turn: number, step: number): string {
   return `${String(turn)}:${String(step)}`
 }
 
-/** Durable events that close the row a live chunk streamed into. */
+/**
+ * Durable events that close the row a live chunk streamed into.
+ *
+ * Mirrors the reducer's `assistant/message`, `assistant/attempt` and `turn/end`
+ * cases; a new settlement event must be added here as well.
+ */
 const LIVE_CLOSERS: ReadonlySet<string> = new Set(['assistant/message', 'assistant/attempt', 'turn/end'])
 
 /**
@@ -527,7 +532,9 @@ export function createTranscriptReducer(options: TranscriptOptions) {
             blocks[index] = { kind: 'assistant', text: '', live: false }
             liveByStep.delete(key)
           }
-          const assistant = new AssistantStream(key + ':attempt:' + String(seq), options)
+          // The attempt replaces the row the notice was raised under, so keep
+          // that row's key for placement even though the stream has its own.
+          const assistant = new AssistantStream(key + ':attempt:' + String(seq), options, key)
           assistant.settle(attemptContent(event.data.stream), seq)
           assistants.set(blocks.length, assistant)
           blocks.push({ kind: 'assistant', text: '', live: false, seq })
