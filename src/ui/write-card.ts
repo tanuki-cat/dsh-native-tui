@@ -1,33 +1,13 @@
-import { basename, extname } from 'node:path'
 import { Container, Spacer, Text, type Component } from '@earendil-works/pi-tui'
-import { highlight, supportsLanguage } from 'cli-highlight'
 import type { Palette } from './theme.js'
 import type { TranscriptBlock } from './transcript.js'
+import { highlightCode, languageForPath } from './code-preview.js'
 import { clip } from './tool-preview.js'
 
 type ToolBlock = Extract<TranscriptBlock, { kind: 'tool' }>
 const PREVIEW_LINES = 10
-const LANGUAGE_ALIASES: Readonly<Record<string, string>> = {
-  mjs: 'javascript', cjs: 'javascript', jsx: 'javascript', tsx: 'typescript',
-  zsh: 'bash', ps1: 'powershell', h: 'c', hpp: 'cpp',
-}
 
 const escapeControl = (character: string): string => '\\x' + character.charCodeAt(0).toString(16).padStart(2, '0')
-
-function highlightSource(source: string, path: string | undefined, palette: Palette): string {
-  if (palette.plain || path === undefined) return source
-  const extension = extname(path).slice(1).toLowerCase() || basename(path).toLowerCase()
-  const language = LANGUAGE_ALIASES[extension] ?? extension
-  if (!supportsLanguage(language)) return source
-  try {
-    return highlight(source, { language, ignoreIllegals: true, theme: {
-      keyword: palette.accent, built_in: palette.accent, type: palette.accent,
-      string: palette.success, number: palette.warning, literal: palette.warning,
-      comment: palette.dim, default: text => text,
-    } })
-  }
-  catch { return source }
-}
 
 /** File content preview; successful writes never duplicate their result or masquerade as a diff. */
 export function renderWriteCard(block: ToolBlock, palette: Palette, expanded = false): Component {
@@ -52,7 +32,7 @@ export function renderWriteCard(block: ToolBlock, palette: Palette, expanded = f
     if (lines.length > 0) {
       const visible = expanded ? lines : lines.slice(0, PREVIEW_LINES)
       container.addChild(new Spacer(1))
-      container.addChild(new Text(highlightSource(visible.join('\n'), path, palette), 0, 0))
+      container.addChild(new Text(highlightCode(visible.join('\n'), languageForPath(path), palette), 0, 0))
       if (lines.length > PREVIEW_LINES) {
         container.addChild(new Text(palette.dim(expanded
           ? `… (${String(lines.length)} total lines, ctrl+o to collapse)`

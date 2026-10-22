@@ -81,8 +81,9 @@ describe('TranscriptRenderer', () => {
     renderer.set(entries, [])
     const detailed = renderer.container.render(100).join('\n')
     expect(detailed).toContain('second thought')
-    expect(detailed).toContain('├ args')
-    expect(detailed).toContain('long code body')
+    expect(detailed).toContain('⚙ run_code · Press AC')
+    expect(detailed).toContain('│ long code body')
+    expect(detailed).not.toContain('├ args')
 
     renderer.setDisplayModes('detailed', 'compact')
     const compactRunCode = renderer.container.render(100).join('\n')
@@ -95,8 +96,8 @@ describe('TranscriptRenderer', () => {
     const compactThinking = renderer.container.render(100).join('\n')
     expect(compactThinking).toContain('thinking · first thought')
     expect(compactThinking).not.toContain('second thought')
-    expect(compactThinking).toContain('├ args')
-    expect(compactThinking).toContain('long code body')
+    expect(compactThinking).toContain('⚙ run_code · Press AC')
+    expect(compactThinking).toContain('│ long code body')
   })
 
   it('keeps tool and compaction head rows identical across their lifecycle', () => {
@@ -133,6 +134,109 @@ describe('TranscriptRenderer', () => {
     const liveHead = live.render(80)[0]
     expect(liveHead).toBe(settled.render(80)[0])
     expect(liveHead).not.toContain('streaming')
+  })
+
+  it('renders code execution cards from parsed arguments', () => {
+    const output = renderTranscriptBlock({
+      kind: 'tool',
+      callId: 'c1',
+      name: 'run_code',
+      pending: false,
+      args: JSON.stringify({ description: 'Press AC', code: 'const x = 1\nconsole.log(x)' }),
+      result: '1',
+    }, options).render(100).join('\n')
+    expect(output).toContain('⚙ run_code · Press AC')
+    expect(output).toContain('│ const x = 1')
+    expect(output).toContain('│ console.log(x)')
+    expect(output).toContain('├ result')
+    expect(output).toContain('│ 1')
+    expect(output).toContain('└ done')
+    expect(output).not.toContain('├ args')
+  })
+
+  it('renders shell cards with the command and description', () => {
+    const output = renderTranscriptBlock({
+      kind: 'tool',
+      callId: 'c2',
+      name: 'bash',
+      pending: false,
+      args: JSON.stringify({ command: 'pnpm check', description: 'run repository gate' }),
+      result: 'ok',
+    }, options).render(100).join('\n')
+    expect(output).toContain('⚙ bash · run repository gate')
+    expect(output).toContain('│ pnpm check')
+    expect(output).toContain('└ done')
+  })
+
+  it('shows call options that change what a shell command means', () => {
+    const output = renderTranscriptBlock({
+      kind: 'tool',
+      callId: 'c5',
+      name: 'bash',
+      pending: false,
+      args: JSON.stringify({
+        command: 'pnpm check',
+        description: 'run repository gate',
+        timeoutMs: 600000,
+        workdir: 'packages/client',
+        run_in_background: true,
+        sandbox_permissions: 'workspace-write',
+      }),
+    }, options).render(120).join('\n')
+    expect(output).toContain('workdir packages/client')
+    expect(output).toContain('timeout 600s')
+    expect(output).toContain('background')
+    expect(output).toContain('sandbox workspace-write')
+  })
+
+  it('names a description-less command by its first line', () => {
+    const output = renderTranscriptBlock({
+      kind: 'tool',
+      callId: 'c6',
+      name: 'bash',
+      pending: false,
+      args: JSON.stringify({ command: 'ls -la' }),
+    }, options).render(100).join('\n')
+    expect(output).toContain('⚙ bash · ls -la')
+    expect(output).toContain('│ ls -la')
+  })
+
+  it('shows the run_code timeout in the meta line', () => {
+    const output = renderTranscriptBlock({
+      kind: 'tool',
+      callId: 'c7',
+      name: 'run_code',
+      pending: false,
+      args: JSON.stringify({ description: 'demo', timeoutMs: 1500, code: 'const x = 1' }),
+    }, options).render(100).join('\n')
+    expect(output).toContain('timeout 1500ms')
+  })
+
+  it('truncates long code without dropping the tail count', () => {
+    const code = Array.from({ length: 15 }, (_, index) => 'line ' + String(index)).join('\n')
+    const output = renderTranscriptBlock({
+      kind: 'tool',
+      callId: 'c3',
+      name: 'run_code',
+      pending: false,
+      args: JSON.stringify({ description: 'long script', code }),
+    }, options).render(120).join('\n')
+    expect(output).toContain('line 11')
+    expect(output).not.toContain('line 12')
+    expect(output).toContain('… (3 more lines, 15 total)')
+    expect(output).toContain('└ done')
+  })
+
+  it('falls back to the argument dump for an unknown payload', () => {
+    const output = renderTranscriptBlock({
+      kind: 'tool',
+      callId: 'c4',
+      name: 'bash',
+      pending: false,
+      args: 'not json',
+    }, options).render(100).join('\n')
+    expect(output).toContain('├ args')
+    expect(output).toContain('not json')
   })
 
   it('labels blocks and keeps reasoning with the answer', () => {
