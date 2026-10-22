@@ -35,6 +35,7 @@ DeepSeek Harness 的 host-native 终端前端，基于 pi-tui。
 - 问答/审批在 preset Agent 上仍可用（question probe 已通过）。
 - `@file` 主机端补全（file-reference-local）与 `/` 本地/宿主命令+技能补全：`@` 菜单每行是「文件名 + 类型 · 完整路径」（与 pi agent 的文件补全一致），类型放在第二列开头，路径过长时被截断的是路径而不是「这是文件还是目录」；长路径只截断第一列的文件名，不会让所有行停在同一个公共目录前缀上；`/` 菜单在命令之后列出 Host `ctx.skills` 的用户可调用技能（仅用户可调用的标注 `user-only`），选中插入 `/skill-name`，回车按普通 prompt 发送，由 `dsh-tool-skill` 读取 `/name` 手势并注入技能正文；选中的路径作为普通 prompt 文本，模型需用 read 工具读取。
 - 会话列表/按 id 恢复、状态、清屏、安全退出、终端恢复；恢复 Session 时读取持久化的 model/selection 与 request/header，恢复模型、reasoning effort 和 preset；退出后打印 Session ID 和可直接执行的 `--resume` 命令。
+- Host/插件日志不会覆盖画面：TUI 占用终端的整个生命周期内接管 `console`（与 `warnings.ts` 接管 `process.emitWarning` 同一思路），`warn`/`error` 转成 transcript notice，`log`/`info`/`debug`/`trace` 只进 `DSH_NATIVE_TUI_DEBUG=1` 的 stderr 追踪，退出时恢复原方法。此前 Host 插件（如 `dsh-llm-deepseek-account` 的 model listing）用 `console.info` 直接写终端，落点正好在光标处，把状态栏或输入框的某一行替换成日志文本；下一次差分重绘认为该行未变，污染会一直留在屏幕上。探针 `scripts/fake-tty-console-lines.mjs` 覆盖：无原始写入、warning 以 notice 出现、info 只进 debug 追踪、输入框保持完整。
 - 非 TTY 显式失败；Ctrl+C/Ctrl+D/SIGTERM/SIGHUP 安全退出。
 
 ## 安装

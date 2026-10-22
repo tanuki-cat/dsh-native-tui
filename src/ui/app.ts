@@ -39,6 +39,7 @@ import { frameCostMs, frameOverrunMs, nextFrameDelay, nextStreamInterval, STREAM
 import { TranscriptRenderer } from './transcript-renderer.js'
 import { WAIT_ROW_TICK_MS, WaitStatusLine, waitingText, type WaitRetry } from './waiting.js'
 import { holdProcessWarnings, type WarningGuard } from './warnings.js'
+import { consoleTone, holdConsoleOutput, type ConsoleGuard } from './console-guard.js'
 import { Rule } from './rule.js'
 import { PromptEditor } from './prompt-editor.js'
 
@@ -213,6 +214,8 @@ export async function startTerminalApp(
   let disposed = false
   /** Holds Node warnings while the UI owns the screen; released once it is restored. */
   let warningGuard: WarningGuard | undefined
+  /** Holds Host/dependency console output for the same span. */
+  let consoleGuard: ConsoleGuard | undefined
   let reportedSession = false
   let exiting = false
   let switching = false
@@ -729,6 +732,10 @@ export async function startTerminalApp(
     catch {
       // The terminal may already be gone; restoration is best-effort here.
     }
+    // Both guards kept output off the screen while it was live; restore them
+    // before anything else writes to the terminal again.
+    consoleGuard?.restore()
+    consoleGuard = undefined
     // Warnings were kept off the screen while it was live; with the terminal
     // restored they can be reported where a raw stderr write is harmless.
     for (const warning of warningGuard?.restore() ?? []) {
@@ -790,6 +797,19 @@ export async function startTerminalApp(
   process.once('SIGHUP', onSignal)
   try {
     warningGuard = holdProcessWarnings()
+    // Host plugins log through `console`; a raw write lands inside the painted
+    // frame and eats a status or prompt row. Failures become transcript notices;
+    // routine info (a model listing loading on every catalogue refresh) stays off
+    // the screen and goes to the opt-in debug trace.
+    consoleGuard = holdConsoleOutput({
+      onLine: (line) => {
+        if (line.level === 'warn' || line.level === 'error') {
+          pushNotice(consoleTone(line.level), line.text)
+          return
+        }
+        debug('console.' + line.level + ': ' + line.text)
+      },
+    })
     registerInteractions()
     warmTranscript()
     subscribeActive()
