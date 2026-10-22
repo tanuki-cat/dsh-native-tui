@@ -41,6 +41,7 @@ import { WAIT_ROW_TICK_MS, WaitStatusLine, waitingText, type WaitRetry } from '.
 import { holdProcessWarnings, type WarningGuard } from './warnings.js'
 import { consoleTone, holdConsoleOutput, type ConsoleGuard } from './console-guard.js'
 import { Rule } from './rule.js'
+import { scrollToEndLabel } from './scroll-indicator.js'
 import { PromptEditor } from './prompt-editor.js'
 
 
@@ -108,7 +109,14 @@ export async function startTerminalApp(
   let reasoningEffort: string | undefined
   const terminal = new ProcessTerminal()
   const tui = config.fullscreen
-    ? new TuiAltScreen(terminal, false, undefined, { mouse: true })
+    ? new TuiAltScreen(terminal, false, undefined, {
+      mouse: true,
+      // The fullscreen viewport owns its scroll offset, so a reader who scrolled
+      // up has no way back without a target to click. pi-tui composites this on
+      // the last row of the follow-end primary scroll view only while that view
+      // is away from its end, and resumes following on a click.
+      scrollToEndIndicator: () => scrollToEndLabel(palette),
+    })
     : new TuiMainScreen(terminal, false)
   // Every row uses the width the terminal reports: no stored horizontal inset,
   // so transcript, status, prompt, and the divider rules share one left edge

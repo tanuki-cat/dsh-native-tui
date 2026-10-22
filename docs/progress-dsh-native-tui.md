@@ -49,7 +49,7 @@ dsh --profile tui
 | 附件 | 路径/剪贴板图片、`/attach preview`、`/attachments` 管理器 |
 | 引用 | `@file`、`@@session` canonical mention |
 | Web 附加 | `/changes`、`/deliverables` panel/preview/reveal、JSONL/ZIP/HTML 导出 |
-| 终端 | 可选 `fullscreen`（TuiAltScreen + ScrollView + mouse）、安全终端恢复 |
+| 终端 | 可选 `fullscreen`（TuiAltScreen + ScrollView + mouse + `↓ jump to latest`）、安全终端恢复 |
 
 ## 4. 验证证据
 
@@ -90,6 +90,7 @@ EXIT 0
 - 剪贴板 RGB PNG → `/attach paste` → `/attach preview` → `/attachments` → 图片 overlay。
 - `@@` 在真实 profile 中列出其他 Session 候选；Tab 插入后的发送未完整验证。
 - `fullscreen: true` 启动、`/help`、Ctrl+D 退出；2026-10-22 普通终端复验：鼠标滚轮滚动、文本选择复制、退出后终端恢复均正常；桌面鼠标拖拽未验证。
+- `fullscreen` 的 `↓ jump to latest`（2026-10-22）：视口离开末尾时在末行合成、点击恢复跟随，由 `tests/fullscreen-jump-latest.spec.ts` 用假 Terminal 驱动真实 `TuiAltScreen` 覆盖（未在末尾无标签、滚走后标签出现且尾行不可见、点击后尾行回到屏幕并恢复 `isFollowingOutput`）；移除接线时 3 个用例中 2 个失败，确认测试针对该缺陷。真实终端点击未单独复验。
 - 等待提示行：mock SSE provider + 真实 Host + 真实 TUI 抓取渲染流，确认 `⟳ waiting for response · Ns` 逐秒递增、首个可渲染输出到达时消失（裸 block-start 不提前清除）；mock 首次返回 500 时显示 `retry 1/5 after SERVER (automatic)` 并在重放成功后清除。工具调用流式生成期间提示行改为 `⟳ generating run_code call · Ns`（`scripts/fake-tty-wait-tool-phase.mjs` 验证 request → tool 阶段的先后顺序）。
 
 ### 未完成真实验证
