@@ -3,7 +3,7 @@ import { Spacer } from '@earendil-works/pi-tui'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import { Rule } from '../src/ui/rule.js'
 import { createPalette, markdownTheme } from '../src/ui/theme.js'
-import { contentText, reduceTranscript, reduceTranscriptWindow, type TranscriptBlock, type TranscriptEntry } from '../src/ui/transcript.js'
+import { contentText, reduceTranscript, reduceTranscriptWindow, streamingRowKey, type TranscriptBlock, type TranscriptEntry } from '../src/ui/transcript.js'
 import { frameCostMs, frameOverrunMs, nextFrameDelay, nextStreamInterval, STREAM_MIN_INTERVAL_MS, STREAM_PAINT_CEILING_MS, transcriptFrameChanged } from '../src/ui/stream-pacing.js'
 import { renderTranscriptBlock } from '../src/ui/transcript-render.js'
 import { sameTranscriptBlock, TranscriptRenderer } from '../src/ui/transcript-renderer.js'
@@ -819,6 +819,73 @@ describe('TranscriptRenderer notice ordering', () => {
     const output = renderer.container.render(80).join('\n')
     expect(output.indexOf('before turn')).toBeLessThan(output.indexOf('▌ You'))
     expect(output.indexOf('after turn')).toBeGreaterThan(output.indexOf('answer'))
+  })
+
+  it('keeps a notice below the row that was streaming when it was raised', () => {
+    const renderer = new TranscriptRenderer(options)
+    renderer.set([
+      durable('user/message', { content: [{ type: 'text', text: 'hello' }], source: { kind: 'user' } }, 1),
+      liveChunk(2, 1, 1, { type: 'reasoning-delta', text: 'THINKING NOW' }),
+    ], [
+      { kind: 'notice', tone: 'info', text: 'Session: demo', afterSeq: 1, afterStreamKey: '1:1' },
+    ])
+    const output = renderer.container.render(80).join('\n')
+    expect(output.indexOf('THINKING NOW')).toBeGreaterThanOrEqual(0)
+    expect(output.indexOf('Session: demo')).toBeGreaterThan(output.indexOf('THINKING NOW'))
+  })
+
+  it('keeps the notice under the row after that row settles', () => {
+    const renderer = new TranscriptRenderer(options)
+    const entries: TranscriptEntry[] = [
+      durable('user/message', { content: [{ type: 'text', text: 'hello' }], source: { kind: 'user' } }, 1),
+      liveChunk(2, 1, 1, { type: 'text-delta', text: 'ANSWER' }),
+    ]
+    const notices: TranscriptBlock[] = [{ kind: 'notice', tone: 'info', text: 'Session: demo', afterSeq: 1, afterStreamKey: '1:1' }]
+    renderer.set(entries, notices)
+    renderer.set([
+      ...entries,
+      durable('assistant/message', { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'ANSWER' }] } }, 3),
+    ], notices)
+    const output = renderer.container.render(80).join('\n')
+    expect(output.indexOf('Session: demo')).toBeGreaterThan(output.indexOf('ANSWER'))
+  })
+
+  it('keeps a notice above a row that starts streaming after it', () => {
+    const renderer = new TranscriptRenderer(options)
+    renderer.set([
+      durable('user/message', { content: [{ type: 'text', text: 'hello' }], source: { kind: 'user' } }, 1),
+      liveChunk(2, 1, 1, { type: 'reasoning-delta', text: 'THINKING NOW' }),
+    ], [
+      { kind: 'notice', tone: 'info', text: 'Session: demo', afterSeq: 1 },
+    ])
+    const output = renderer.container.render(80).join('\n')
+    expect(output.indexOf('Session: demo')).toBeLessThan(output.indexOf('THINKING NOW'))
+  })
+})
+
+describe('streamingRowKey', () => {
+  const live = (turn: number, step: number): TranscriptEntry => liveChunk(0, turn, step, { type: 'text-delta', text: 'x' })
+  const user = (seq: number): TranscriptEntry => durable('user/message', { content: [{ type: 'text', text: 'hi' }], source: { kind: 'user' } }, seq)
+  const settled = (seq: number): TranscriptEntry => durable('assistant/message', {
+    turn: 1,
+    step: 1,
+    message: { content: [{ type: 'text', text: 'done' }] },
+  }, seq)
+
+  it('reports the row fed by the tail live chunk', () => {
+    expect(streamingRowKey([])).toBeUndefined()
+    expect(streamingRowKey([user(1)])).toBeUndefined()
+    expect(streamingRowKey([user(1), live(1, 2)])).toBe('1:2')
+  })
+
+  it('stops at the event that settled the row', () => {
+    expect(streamingRowKey([user(1), live(1, 1), settled(2)])).toBeUndefined()
+    expect(streamingRowKey([live(1, 1), settled(2), live(1, 2)])).toBe('1:2')
+  })
+
+  it('ignores trailing durable events that do not settle the row', () => {
+    const tool = durable('tool/call', { turn: 1, step: 1, callId: 'c1', name: 'read', arguments: '{}' }, 3)
+    expect(streamingRowKey([live(1, 1), tool])).toBe('1:1')
   })
 })
 

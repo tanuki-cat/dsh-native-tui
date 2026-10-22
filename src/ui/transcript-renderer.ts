@@ -288,7 +288,14 @@ export class TranscriptRenderer {
     const blocks: TranscriptBlock[] = []
     const pending = [...anchored]
     for (const block of durable) {
-      while (pending.length > 0 && pending[0]!.afterSeq < (block.seq ?? Number.POSITIVE_INFINITY)) {
+      while (pending.length > 0) {
+        const notice = pending[0]!
+        // A row still streaming carries no durable sequence, so the plain seq
+        // test would lift the notice above it. A notice raised while that row
+        // was live belongs under it instead.
+        if (notice.afterStreamKey !== undefined && block.kind === 'assistant'
+          && block.streamKey === notice.afterStreamKey) break
+        if (notice.afterSeq >= (block.seq ?? Number.POSITIVE_INFINITY)) break
         blocks.push(pending.shift()!)
       }
       blocks.push(block)

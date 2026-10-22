@@ -89,6 +89,8 @@ export type TranscriptBlock = ({
   readonly seq?: number
   /** Local notice placement: show after this durable sequence. */
   readonly afterSeq?: number
+  /** Local notice placement: show after the assistant row this stream fed. */
+  readonly afterStreamKey?: string
 }
 
 /** Session-level tool identities that must survive transcript window slicing. */
@@ -183,8 +185,30 @@ function ptcContent(value: unknown): readonly ContentBlock[] | undefined {
   return Array.isArray(value) ? value as readonly ContentBlock[] : undefined
 }
 
-function stepKey(turn: number, step: number): string {
+/** Identity of the assistant row one turn/step streams into. */
+export function liveStreamKey(turn: number, step: number): string {
   return `${String(turn)}:${String(step)}`
+}
+
+/** Durable events that close the row a live chunk streamed into. */
+const LIVE_CLOSERS: ReadonlySet<string> = new Set(['assistant/message', 'assistant/attempt', 'turn/end'])
+
+/**
+ * Identity of the assistant row still streaming at the tail of `entries`.
+ *
+ * A local notice uses it to stay under the row it was raised from: that row has
+ * no durable sequence yet, so sequence-based placement would lift the notice
+ * above it.
+ * @param entries - durable and transient entries, oldest first.
+ * @returns the live row key, or undefined when nothing is streaming.
+ */
+export function streamingRowKey(entries: readonly TranscriptEntry[]): string | undefined {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index]!
+    if (entry.type === 'live') return liveStreamKey(entry.event.data.turn, entry.event.data.step)
+    if (LIVE_CLOSERS.has(String(entry.event.type))) return undefined
+  }
+  return undefined
 }
 
 /** One reduction plus the entry prefix no retained block still needs. */
@@ -290,7 +314,7 @@ export function createTranscriptReducer(options: TranscriptOptions) {
   }
 
   const pushLive = (event: LiveChunkEntry): void => {
-    const key = stepKey(event.data.turn, event.data.step)
+    const key = liveStreamKey(event.data.turn, event.data.step)
     if (finalizedSteps.has(key)) return
     let index = liveByStep.get(key)
     if (index === undefined) {
@@ -485,7 +509,7 @@ export function createTranscriptReducer(options: TranscriptOptions) {
           break
         }
         case 'assistant/message': {
-          const key = stepKey(event.data.turn, event.data.step)
+          const key = liveStreamKey(event.data.turn, event.data.step)
           finalizedSteps.add(key)
           const index = liveByStep.get(key) ?? blocks.length
           const assistant = assistants.get(index) ?? new AssistantStream(key, options)
@@ -496,7 +520,7 @@ export function createTranscriptReducer(options: TranscriptOptions) {
           break
         }
         case 'assistant/attempt': {
-          const key = stepKey(event.data.turn, event.data.step)
+          const key = liveStreamKey(event.data.turn, event.data.step)
           const index = liveByStep.get(key)
           if (index !== undefined) {
             assistants.delete(index)

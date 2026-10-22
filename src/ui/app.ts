@@ -34,7 +34,7 @@ import type { AgentDefaultModelService, LLM, SessionProjectionsService, SkillsCa
 import { openTuiSettings, showHostSettings } from './commands/settings.js'
 import { errorMessage } from './commands/shared.js'
 import { subscribeSessionEvents } from './session-events.js'
-import type { TranscriptBlock, TranscriptEntry } from './transcript.js'
+import { streamingRowKey, type TranscriptBlock, type TranscriptEntry } from './transcript.js'
 import { frameCostMs, frameOverrunMs, nextFrameDelay, nextStreamInterval, STREAM_MIN_INTERVAL_MS, transcriptFrameChanged } from './stream-pacing.js'
 import { TranscriptRenderer } from './transcript-renderer.js'
 import { WAIT_ROW_TICK_MS, WaitStatusLine, waitingText, type WaitRetry } from './waiting.js'
@@ -374,7 +374,14 @@ export async function startTerminalApp(
   }
 
   const pushNotice = (tone: 'info' | 'warning' | 'error', text: string): void => {
-    localNotices.push({ kind: 'notice', tone, text, afterSeq: lastDurableSeq() ?? 0 })
+    const streamKey = streamingRowKey(entries)
+    localNotices.push({
+      kind: 'notice',
+      tone,
+      text,
+      afterSeq: lastDurableSeq() ?? 0,
+      ...(streamKey === undefined ? {} : { afterStreamKey: streamKey }),
+    })
     if (localNotices.length > MAX_NOTICES) localNotices = localNotices.slice(-MAX_NOTICES)
     scheduleTranscript(true)
   }

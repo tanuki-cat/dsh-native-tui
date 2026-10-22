@@ -83,7 +83,9 @@ export class AssistantStream {
       ...(content.some(part => part.type === 'reasoning') ? { reasoning: content.filter(part => part.type === 'reasoning').map(part => part.text).join('') } : {}),
       content,
       live: this.live,
-      ...(this.live ? { streamKey: this.key } : {}),
+      // Kept after settlement so a notice raised mid-stream can stay under this
+      // row instead of jumping above it once the durable message assigns a seq.
+      streamKey: this.key,
       ...(this.seq === undefined ? {} : { seq: this.seq }),
       ...(content.length === 0 && this.starting && mode !== 'hidden' ? { starting: true } : {}),
     }
