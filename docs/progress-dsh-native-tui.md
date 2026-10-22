@@ -115,7 +115,7 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 .tmp/dsh-native-tui-0.2.1-rc.2.tgz
 ```
 
-依赖：`@earendil-works/pi-tui@1.3.0`、`@deepseek-ai/schemastery@3.18.5`、`fflate@^0.8.3`，以及官方 `computer-use`、`experimental-computer-use-cua-driver-native`、`mcp-client`、`mcp-resources`、`session-stats` 的 `0.2.1-rc.2`。
+依赖：`@earendil-works/pi-tui@1.4.0`、`@deepseek-ai/schemastery@3.18.5`、`fflate@^0.8.3`，以及官方 `computer-use`、`experimental-computer-use-cua-driver-native`、`mcp-client`、`mcp-resources`、`session-stats` 的 `0.2.1-rc.2`。
 
 已初始化本地 git 仓库（main）；首次提交 `50ced8d`，第三方模型引导见后续提交。
 

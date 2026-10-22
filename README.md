@@ -476,7 +476,7 @@ Plugin Manager 官方目录之外的市场搜索（官方目录浏览已实现�
 
 - 已在全局 dsh 0.2.1-rc.2 上安装并启动；生产与开发依赖统一为 0.2.1-rc.2。
 - Preset patch 从 `@deepseek-ai/dsh-web-app` 的 standard/ptc/minimal/cordis 复制而来；standard/ptc/minimal 需要 `subagent-model-selection-settings` Host 行，cordis 需要 cordis host-runner 与 tool-cordis/host。`@file` 补全依赖 `@deepseek-ai/dsh-file-reference-local`。
-- pi-tui 1.3.0；Node 22.23.3。
+- pi-tui 1.4.0；Node 22.23.3。
 
 ## License
 

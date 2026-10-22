@@ -46,9 +46,6 @@
     - id: computer-use-cua-driver-native
       name: '@deepseek-ai/dsh-experimental-computer-use-cua-driver-native'
 
-    - id: mcp-resources
-      name: '@deepseek-ai/dsh-mcp-resources'
-
     - id: session-stats
       name: '@deepseek-ai/dsh-session-stats'
 
