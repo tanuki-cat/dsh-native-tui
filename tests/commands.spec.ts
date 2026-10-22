@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import type { CommandContext } from '../src/ui/commands/context.js'
 import { mcpCommand } from '../src/ui/commands/mcp.js'
 import { providerCommand } from '../src/ui/commands/provider.js'
-import { jobsCommand } from '../src/ui/commands/runtime-status.js'
+import { agentsCommand, jobsCommand } from '../src/ui/commands/runtime-status.js'
+import { sessionsCommand } from '../src/ui/commands/sessions.js'
+import { formatLocalTimestamp } from '../src/ui/format-time.js'
 import { settingsCommand } from '../src/ui/commands/settings.js'
 import { scheduleCommand, workspacesCommand } from '../src/ui/commands/workspace.js'
 
@@ -161,6 +163,42 @@ describe('command handler argument paths', () => {
     const ctx = contextOf({ jobs: { list: () => [], kill: () => 'requested' } })
     jobsCommand(ctx, 'kill ')
     expect(allText(ctx)).toContain('Usage: /jobs kill <job-id>')
+  })
+})
+
+describe('notice timestamps', () => {
+  const createdAt = Date.UTC(2026, 9, 22, 0, 51, 19)
+
+  it('lists stored sessions with the host-local creation time', async () => {
+    const ctx = contextOf({
+      sessionPersistence: {
+        list: async () => [{ header: { id: 'native-tui-1', cwd: '/tmp/work', createdAt } }],
+      },
+    })
+    await sessionsCommand(ctx)
+    expect(allText(ctx)).toContain(formatLocalTimestamp(createdAt))
+    expect(allText(ctx)).not.toContain('Z')
+  })
+
+  it('lists subagents with the host-local dispatch time', async () => {
+    const ctx = contextOf({
+      subagents: {
+        listChildren: async () => [{ id: 'native-tui-child', createdAt, mode: 'continuable', label: 'read app' }],
+      },
+    })
+    await agentsCommand(ctx)
+    expect(allText(ctx)).toContain(formatLocalTimestamp(createdAt))
+  })
+
+  it('lists background jobs with the host-local dispatch time', () => {
+    const ctx = contextOf({
+      jobs: {
+        list: () => [{ id: 'job-1', status: 'running', kind: 'bash', label: 'build', startedAt: createdAt }],
+        kill: () => 'requested',
+      },
+    })
+    jobsCommand(ctx, '')
+    expect(allText(ctx)).toContain(formatLocalTimestamp(createdAt))
   })
 })
 

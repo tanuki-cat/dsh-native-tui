@@ -5,6 +5,7 @@
  */
 
 import { showChoice } from '../dialogs.js'
+import { formatLocalTimestamp } from '../format-time.js'
 import type { CommandContext } from './context.js'
 import type { JobsService, PermissionPresets, SubagentsService } from './services.js'
 import { NL, errorMessage } from './shared.js'
@@ -74,6 +75,7 @@ export function jobsCommand(ctx: CommandContext, args: string): void {
       return
     }
     ctx.notice('info', 'Jobs:' + NL + rows.map(row => row.id + '  ' + row.status + '  ' + row.kind + '  ' + row.label
+      + '  ' + formatLocalTimestamp(row.startedAt)
       + (row.progress === undefined ? '' : '  ' + row.progress)
       + (row.detail === undefined ? '' : '  ' + row.detail)).join(NL))
   } catch (error) {
@@ -95,7 +97,7 @@ export async function agentsCommand(ctx: CommandContext): Promise<void> {
       return
     }
     ctx.notice('info', 'Subagents:' + NL + rows.map(row => row.id + '  ' + row.mode + '  ' + (row.label ?? '')
-      + '  ' + new Date(row.createdAt).toISOString()).join(NL))
+      + '  ' + formatLocalTimestamp(row.createdAt)).join(NL))
   } catch (error) {
     ctx.notice('error', 'Could not list subagents: ' + errorMessage(error))
   }

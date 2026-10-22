@@ -9,6 +9,7 @@
 
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { ownStoredSessions, selectListedSessions } from '../../runtime/session-list.js'
+import { formatLocalTimestamp } from '../format-time.js'
 import type { CommandContext } from './context.js'
 import { NL, errorMessage } from './shared.js'
 
@@ -39,7 +40,7 @@ export async function sessionsCommand(ctx: CommandContext): Promise<void> {
     const selection = selectListedSessions(stored, ctx.active.id, MAX_LISTED_SESSIONS)
     const lines = selection.shown.map(row => {
       const marker = row.id === ctx.active.id ? '*' : ' '
-      return marker + ' ' + row.id + '  ' + (row.cwd ?? '') + '  ' + new Date(row.createdAt).toISOString()
+      return marker + ' ' + row.id + '  ' + (row.cwd ?? '') + '  ' + formatLocalTimestamp(row.createdAt)
     })
     const heading = selection.hidden === 0
       ? 'Sessions:'

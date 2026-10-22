@@ -5,6 +5,7 @@
  * @module dsh-native-tui/ui/commands/session
  */
 
+import { formatLocalTimestamp } from '../format-time.js'
 import type { CommandContext } from './context.js'
 import type { AgentPresetsService, SkillsCatalog } from './services.js'
 import { NL } from './shared.js'
@@ -48,7 +49,7 @@ export function statusCommand(ctx: CommandContext): void {
     'State: ' + ctx.active.agent.status,
     'Preset: ' + ((ctx.host.get('agentPresets') as AgentPresetsService | undefined)?.composedPreset(ctx.active.agent.ctx) ?? '(none)'),
     'Events: ' + String(ctx.active.agent.session.snapshotEvents().length),
-    'Created: ' + new Date(headerInfo.createdAt).toISOString(),
+    'Created: ' + formatLocalTimestamp(headerInfo.createdAt),
   ].join(NL))
 }
 
