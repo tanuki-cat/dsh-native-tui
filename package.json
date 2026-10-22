@@ -5,7 +5,7 @@
   "license": "MIT",
   "description": "DeepSeek Harness host-native terminal front door built on pi-tui",
   "type": "module",
-  "packageManager": "pnpm@12.3.4",
+  "packageManager": "pnpm@12.14.0",
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
   },
