@@ -43,8 +43,20 @@ function fileToolPath(name: string, args: string): string | undefined {
   catch { return undefined }
 }
 
-/** Code lines a detailed code-execution card shows before truncating. */
+/**
+ * Code preview bounds: lines, characters per line, and total characters.
+ *
+ * The card stays in the retained transcript until maxEntries drops it, and
+ * pi-tui re-walks every retained row on each paint. A single long line can wrap
+ * into dozens of rows, so the preview is bounded the same way the old argument
+ * dump was (it clipped each string at 900 characters).
+ */
 const CODE_PREVIEW_LINES = 12
+const CODE_LINE_CHARS = 160
+const CODE_PREVIEW_CHARS = 1600
+
+/** Result lines a detailed code-execution card shows before truncating. */
+const RESULT_PREVIEW_LINES = 12
 
 /** highlight.js language per code-execution tool. */
 const CODE_EXECUTION_LANGUAGES: Readonly<Record<string, string>> = {
@@ -158,28 +170,49 @@ function renderCodeExecutionCard(
   if (source !== undefined) {
     const lines = source.replace(/\r\n?/g, '\n').replaceAll('\t', '  ').split('\n')
     while (lines.at(-1) === '') lines.pop()
-    if (lines.length > 0) {
+    const preview: string[] = []
+    let used = 0
+    let shortened = false
+    for (const line of lines) {
+      if (preview.length >= CODE_PREVIEW_LINES || used >= CODE_PREVIEW_CHARS) break
+      const budget = Math.min(CODE_LINE_CHARS, CODE_PREVIEW_CHARS - used)
+      const text = line.length > budget ? line.slice(0, Math.max(0, budget - 1)) + '…' : line
+      if (text.length !== line.length) shortened = true
+      preview.push(text)
+      used += text.length
+    }
+    if (preview.length > 0) {
       container.addChild(new BarText(
-        highlightCode(lines.slice(0, CODE_PREVIEW_LINES).join('\n'), CODE_EXECUTION_LANGUAGES[block.name], palette),
+        highlightCode(preview.join('\n'), CODE_EXECUTION_LANGUAGES[block.name], palette),
         '│ ',
         text => text,
         palette.dim,
       ))
-      if (lines.length > CODE_PREVIEW_LINES) {
-        container.addChild(new Text(palette.dim(
-          '… (' + String(lines.length - CODE_PREVIEW_LINES) + ' more lines, ' + String(lines.length) + ' total)',
-        ), 0, 0))
+      const notes: string[] = []
+      const hidden = lines.length - preview.length
+      if (hidden > 0) notes.push(String(hidden) + ' more lines, ' + String(lines.length) + ' total')
+      if (shortened) notes.push('long lines shortened')
+      if (notes.length > 0) {
+        container.addChild(new Text(palette.dim('… (' + notes.join('; ') + ')'), 0, 0))
       }
     }
   }
   if (block.result !== undefined && block.result.trim() !== '') {
+    const resultLines = block.result.replace(/\r\n?/g, '\n').split('\n')
+    while (resultLines.at(-1) === '') resultLines.pop()
+    const visibleResult = resultLines.slice(0, RESULT_PREVIEW_LINES)
     container.addChild(new Text(palette.dim('├ result'), 0, 0))
     container.addChild(new BarText(
-      clip(block.result),
+      clip(visibleResult.join('\n')),
       '│ ',
       block.isError === true ? palette.error : text => text,
       block.isError === true ? palette.error : palette.dim,
     ))
+    if (resultLines.length > RESULT_PREVIEW_LINES) {
+      container.addChild(new Text(palette.dim(
+        '… (' + String(resultLines.length - RESULT_PREVIEW_LINES) + ' more lines)',
+      ), 0, 0))
+    }
   }
   else if (source === undefined && block.args.trim() !== '') {
     // An unrecognized payload keeps the generic dump rather than an empty card.

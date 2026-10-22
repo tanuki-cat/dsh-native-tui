@@ -14,7 +14,7 @@ import { Rule } from './rule.js'
 import type { DisplayMode } from '../config.js'
 import { createTranscriptReducer, type TranscriptBlock, type TranscriptEntry, type TranscriptOptions } from './transcript.js'
 import { AssistantMessage } from './assistant-message.js'
-import { renderTranscriptBlock } from './transcript-render.js'
+import { isCodeExecutionTool, renderTranscriptBlock } from './transcript-render.js'
 
 /**
  * One transcript row component, memoized on the width it last painted at.
@@ -147,6 +147,7 @@ export class TranscriptRenderer {
   /** Block list from the previous rebuild, for detecting a frame with nothing new. */
   private paintedBlocks: readonly TranscriptBlock[] | undefined
   private changed = false
+  private cold = false
   private retained = 0
   private liveChars = 0
   private options: TranscriptOptions
@@ -180,6 +181,16 @@ export class TranscriptRenderer {
   }
 
   /**
+   * True when the last rebuild had no previous rows to compare against.
+   *
+   * Such a frame re-creates every component, so its cost is a one-off startup
+   * or mode-change spike; the stream pacer must not treat it as a steady cost.
+   */
+  get coldRebuild(): boolean {
+    return this.cold
+  }
+
+  /**
    * @param options - reduction and styling options.
    */
   constructor(options: TranscriptOptions) {
@@ -200,10 +211,16 @@ export class TranscriptRenderer {
   setDisplayModes(thinkingDisplay: DisplayMode, runCodeDisplay: DisplayMode): void {
     if (this.options.thinkingDisplay === thinkingDisplay && this.options.runCodeDisplay === runCodeDisplay) return
     this.options = { ...this.options, thinkingDisplay, runCodeDisplay }
-    // Density is a render option rather than part of TranscriptBlock, so a block
-    // can stay equal while its component must switch representation. Drop the
-    // reuse window; otherwise the previous density keeps rendering.
-    this.cached.clear()
+    // Density is a render option rather than part of TranscriptBlock, so the
+    // rows it changes must be rebuilt. Everything else keeps its component: a
+    // long session would otherwise re-render its whole transcript on one setting
+    // change, stalling the loop that also reads the model stream.
+    for (const [key, cached] of this.cached) {
+      if (cached.block.kind === 'assistant'
+        || (cached.block.kind === 'tool' && isCodeExecutionTool(cached.block.name))) {
+        this.cached.delete(key)
+      }
+    }
     this.paintedBlocks = undefined
     this.resetReduction()
     this.rebuild()
@@ -301,7 +318,10 @@ export class TranscriptRenderer {
       blocks.push(block)
     }
     blocks.push(...pending, ...trailing)
-    this.changed = this.paintedBlocks === undefined || !sameTranscriptBlocks(this.paintedBlocks, blocks)
+    const previous = this.paintedBlocks
+    const cold = previous === undefined
+    this.changed = previous === undefined || !sameTranscriptBlocks(previous, blocks)
+    this.cold = cold && this.changed
     if (!this.changed) return
     this.paintedBlocks = blocks
     const next = new Map<string, { readonly block: TranscriptBlock; readonly component: Component }>()

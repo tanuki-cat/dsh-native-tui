@@ -28,6 +28,29 @@ function liveChunk(seq: number, turn: number, step: number, chunk: unknown, time
 }
 
 describe('TranscriptRenderer', () => {
+  it('marks the first rebuild cold and later frames warm', () => {
+    const renderer = new TranscriptRenderer(options)
+    const entries: TranscriptEntry[] = [
+      durable('user/message', { content: [{ type: 'text', text: 'hello' }], source: { kind: 'user' } }, 1),
+    ]
+    renderer.set(entries, [])
+    expect(renderer.coldRebuild).toBe(true)
+    renderer.set(entries, [])
+    expect(renderer.coldRebuild).toBe(false)
+  })
+
+  it('keeps unaffected components when only display modes change', () => {
+    const renderer = new TranscriptRenderer({ ...options, thinkingDisplay: 'detailed', runCodeDisplay: 'detailed' })
+    const entries: TranscriptEntry[] = [
+      durable('user/message', { content: [{ type: 'text', text: 'hello' }], source: { kind: 'user' } }, 1),
+      durable('assistant/message', { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'answer' }] } }, 2),
+    ]
+    renderer.set(entries, [])
+    const userRow = renderer.container.children[0]
+    renderer.setDisplayModes('compact', 'compact')
+    expect(renderer.container.children[0]).toBe(userRow)
+  })
+
   it('rebuilds when display modes change live', () => {
     const renderer = new TranscriptRenderer({ ...options, thinkingDisplay: 'detailed', runCodeDisplay: 'detailed' })
     const entries: TranscriptEntry[] = [
@@ -210,6 +233,33 @@ describe('TranscriptRenderer', () => {
       args: JSON.stringify({ description: 'demo', timeoutMs: 1500, code: 'const x = 1' }),
     }, options).render(100).join('\n')
     expect(output).toContain('timeout 1500ms')
+  })
+
+  it('shortens long code lines instead of wrapping them', () => {
+    const output = renderTranscriptBlock({
+      kind: 'tool',
+      callId: 'c8',
+      name: 'run_code',
+      pending: false,
+      args: JSON.stringify({ description: 'long line', code: 'const long = "' + 'x'.repeat(500) + '"' }),
+    }, options).render(120).join('\n')
+    expect(output).toContain('long lines shortened')
+    expect(output).not.toContain('x'.repeat(200))
+  })
+
+  it('caps the result preview', () => {
+    const result = Array.from({ length: 15 }, (_, index) => 'result line ' + String(index)).join('\n')
+    const output = renderTranscriptBlock({
+      kind: 'tool',
+      callId: 'c9',
+      name: 'bash',
+      pending: false,
+      args: JSON.stringify({ command: 'run', description: 'many lines' }),
+      result,
+    }, options).render(120).join('\n')
+    expect(output).toContain('result line 11')
+    expect(output).not.toContain('result line 12')
+    expect(output).toContain('… (3 more lines)')
   })
 
   it('truncates long code without dropping the tail count', () => {
@@ -560,9 +610,13 @@ describe('TranscriptRenderer paint memo', () => {
     expect(row.render(80)).toBe(painted)
   })
 
-  it('drops the memo when the display density changes', () => {
-    const renderer = new TranscriptRenderer(options)
-    renderer.set([user(1, 'hello')], [])
+  it('drops the memo of rows whose density changes', () => {
+    const renderer = new TranscriptRenderer({ ...options, thinkingDisplay: 'detailed', runCodeDisplay: 'detailed' })
+    renderer.set([durable('assistant/message', {
+      turn: 1,
+      step: 1,
+      message: { content: [{ type: 'reasoning', text: 'thought' }, { type: 'text', text: 'answer' }] },
+    }, 1)], [])
     const before = firstRow(renderer)
     const painted = before.render(80)
     renderer.setDisplayModes('compact', 'compact')

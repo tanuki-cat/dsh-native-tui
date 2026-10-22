@@ -228,6 +228,8 @@ export async function startTerminalApp(
   /** When the pending frame is due, so a late one can measure what held the loop. */
   let frameDueAt: number | undefined
   let transcriptInterval = STREAM_MIN_INTERVAL_MS
+  /** The previous frame was a cold rebuild, so its paint cost is not steady cost. */
+  let coldPaintPending = false
   /** Bumped whenever a rebuild changes the rows the transcript paints. */
   let transcriptRevision = 0
   /** What the last painted frame showed, so an identical one can be skipped. */
@@ -268,6 +270,20 @@ export async function startTerminalApp(
   }
 
   /**
+   * Build the initial transcript before the first frame paints it.
+   *
+   * Opening or resuming a long session otherwise creates every row on the first
+   * frame, which lands exactly when output starts; warming here pays that
+   * component construction once, before the terminal shows anything. The paint
+   * itself is unchanged.
+   */
+  const warmTranscript = (): void => {
+    if (entries.length === 0) return
+    renderer.set(entries, localNotices)
+    renderer.container.render(Math.max(1, terminal.columns))
+  }
+
+  /**
    * Rebuild the transcript and paint it.
    *
    * Rebuilds are scheduled on a cadence while streaming and once a second while
@@ -305,8 +321,16 @@ export async function startTerminalApp(
     // ~90 ms a paint, which starved the loop that reads the model stream and
     // stretched the timings the decode rate is measured from — the fall a long
     // session showed in tok/s.
-    const frameMs = frameCostMs(rebuildMs, slippedMs, transcriptInterval)
-    transcriptInterval = nextStreamInterval(transcriptInterval, frameMs)
+    // A cold rebuild re-creates every row (session open, resume, density
+    // change). Letting that one-off cost steer the pacer would hold streaming at
+    // twice its duration for seconds, which reads as stutter; resume from the
+    // floor instead and let the next frames measure the steady cost.
+    const cold = renderer.coldRebuild
+    const frameMs = frameCostMs(rebuildMs, coldPaintPending ? 0 : slippedMs, transcriptInterval)
+    transcriptInterval = cold || coldPaintPending
+      ? STREAM_MIN_INTERVAL_MS
+      : nextStreamInterval(transcriptInterval, frameMs)
+    coldPaintPending = cold
     debug(`stream frame: rebuild=${rebuildMs.toFixed(1)}ms slipped=${slippedMs.toFixed(1)}ms cost=${frameMs.toFixed(1)}ms sincePaint=${sincePaint.toFixed(1)}ms interval=${String(transcriptInterval)}ms live=${String(renderer.liveContentLength)}`)
     const mark = { revision, wait: pendingText }
     if (transcriptFrameChanged(painted, mark)) {
@@ -767,6 +791,7 @@ export async function startTerminalApp(
   try {
     warningGuard = holdProcessWarnings()
     registerInteractions()
+    warmTranscript()
     subscribeActive()
     tui.start()
     tui.setFocus(editor)
