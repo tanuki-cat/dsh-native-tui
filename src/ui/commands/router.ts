@@ -14,6 +14,7 @@ import type {} from '@deepseek-ai/dsh-commands'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { createHostSession, resumeHostSession, type HostSession } from '../../runtime/agent.js'
 import { runCodebuddyCommand, type CodeBuddyCommandDeps } from '../../runtime/codebuddy-command.js'
+import { codexCommand } from './codex.js'
 import type { CodeBuddyService } from '../../codebuddy.js'
 import { INIT_AGENTS_PROMPT } from '../../runtime/init-prompt.js'
 import { openUrlInBrowser } from '../../runtime/open.js'
@@ -188,6 +189,9 @@ export async function runCommandLine(line: string, deps: CommandRouterDeps): Pro
       return
     case 'mcp':
       await mcpCommand(ctx(), args)
+      return
+    case 'codex':
+      await codexCommand(ctx(), args)
       return
     case 'codebuddy':
       await runCodebuddyCommand(args, {

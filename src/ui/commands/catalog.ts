@@ -25,6 +25,7 @@ export const HELP_LINES: readonly string[] = [
   '/tools · /tool <index> · /diff [index] · /exit',
   '/attach <path>|paste|preview <i>|list|clear · /attachments · /exit',
   '/codebuddy [status|login|logout|models [refresh]|quota|checkin|prompt [show|reset]|doctor]',
+  '/codex [status|setup|login [browser|device]|logout|models]',
   '@@<query> references another session · /exit',
 ]
 
@@ -88,6 +89,13 @@ export const LOCAL_COMMANDS: readonly CommandSuggestion[] = [
     { name: 'checkin', description: 'claim today credits', hint: '[cn|en]' },
     { name: 'prompt', description: 'guided system-prompt setup or show/reset', hint: '[show|reset]' },
     { name: 'doctor', description: 'endpoint and catalogue probe' },
+  ] },
+  { name: 'codex', description: 'ChatGPT Codex sign-in, route setup and models', input: { hint: '[status|setup|login [browser|device]|logout|models]' }, keepExactSubmit: true, subcommands: [
+    { name: 'status', description: 'sign-in state, credential expiry, route and usage' },
+    { name: 'setup', description: 'ensure the openai-codex route without signing in' },
+    { name: 'login', description: 'sign in with ChatGPT', hint: '[browser|device]' },
+    { name: 'logout', description: 'remove the shared credential after confirmation' },
+    { name: 'models', description: 'list openai-codex models' },
   ] },
   { name: 'provider', description: 'guided third-party model provider setup', input: { hint: '[add|list|edit|models|input|remove <route>]' }, subcommands: [
     { name: 'add', description: 'guide a new provider route' },

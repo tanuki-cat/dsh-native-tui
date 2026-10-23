@@ -105,6 +105,12 @@ describe('command router', () => {
     expect(typeof h.switched[0]).toBe('function')
   })
 
+  it('dispatches /codex to the local handler', async () => {
+    const h = harness()
+    await runCommandLine('/codex status', h.deps)
+    expect(h.notices.map(notice => notice.text).join('\n')).toContain('credential store is unavailable')
+  })
+
   it('passes an unknown name to the host before noticing it', async () => {
     const h = harness()
     await runCommandLine('/nope', h.deps)

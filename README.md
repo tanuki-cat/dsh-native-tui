@@ -80,6 +80,7 @@ dnt --resume <session-id>
 | /model [provider/model] | 打开可搜索的模型列表或直接切换；选择同时保存为默认模型 |
 | /reasoning [effort|default|map] | 列出或切换当前模型的思考强度并保存；default 清除显式 effort；map 引导编辑当前模型的 level → wire 映射 |
 | /provider [add|list|edit [route]|models <route>|input [provider/model]|remove <route>] | 配置/查看 provider；打开配置获取可用模型；编辑模型输入类型；刷新或删除 route |
+| /codex [status\|setup\|login [browser\|device]\|logout\|models] | ChatGPT Codex：status 查看登录/路由/模型并查询 5 小时与周额度，setup 只补 openai-codex 路由，login 走 OAuth（共享凭据），logout 确认后删除凭据，models 列出模型 |
 | /mcp [add|list|remove <name>] | 配置、查看或删除 MCP 服务 |
 | /permissions [preset] | 列出或切换权限预设 |
 | /jobs [kill <id>] | 列出或终止后台任务 |

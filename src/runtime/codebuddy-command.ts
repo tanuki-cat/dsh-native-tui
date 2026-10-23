@@ -23,6 +23,7 @@ import {
 } from '../codebuddy/profiles.js'
 import { REQUEST_SHAPE } from '../codebuddy/profiles.js'
 import { PROMPT_PLACEHOLDER } from '../codebuddy/prompt.js'
+import { isSettingsConflict } from './settings-write.js'
 
 /** One authorization flow as the terminal drives it. */
 interface AuthorizationLike {
@@ -458,12 +459,6 @@ function configuredPromptOf(descriptor: PromptDescriptor | undefined): string | 
   if (user === null || typeof user !== 'object') return undefined
   const value = (user as Record<string, unknown>).systemPrompt
   return typeof value === 'string' && value !== '' ? value : undefined
-}
-
-/** Whether a failed settings write is the Host's stale-revision refusal. */
-function isSettingsConflict(error: unknown): boolean {
-  return error !== null && typeof error === 'object'
-    && (error as { readonly code?: unknown }).code === 'SETTINGS_CONFLICT'
 }
 
 /** Key and semantics hint shared by the editor and the confirmation. */
