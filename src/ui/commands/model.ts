@@ -11,6 +11,12 @@ import { openReasoningMapEditor } from './reasoning-map.js'
 import type { LLM } from './services.js'
 import { errorMessage } from './shared.js'
 
+/** One route's catalogue as the picker collects it. */
+interface ProviderListing {
+  readonly provider: { readonly id: string }
+  readonly models: readonly { readonly id: string; readonly name: string; readonly description?: string }[]
+}
+
 /**
  * Apply one `provider/model` selection, or a bare model on the current provider.
  * @param ctx - command context.
@@ -60,15 +66,22 @@ export async function modelCommand(ctx: CommandContext, args: string): Promise<v
     await selectModel(ctx, llm, args)
     return
   }
-  const items: Array<{ value: string; label: string; description?: string }> = []
-  for (const provider of llm.listProviders()) {
-    let models: readonly { id: string; name: string; description?: string }[] = []
+  // Ask every route at once. A listing can be a network round trip (CodeBuddy
+  // reads /v3/config), so awaiting the routes in turn made the picker wait for
+  // the sum of those round trips instead of the slowest one. Resolving in
+  // provider order keeps the rows the picker has always shown.
+  const listings = await Promise.all(llm.listProviders().map(async (provider): Promise<ProviderListing> => {
     try {
-      models = await llm.listModels(provider.id)
+      return { provider, models: await llm.listModels(provider.id) }
     }
     catch {
-      continue
+      // A route without credentials, or one whose catalogue is unreachable,
+      // advertises nothing; the picker still lists the other providers.
+      return { provider, models: [] }
     }
+  }))
+  const items: Array<{ value: string; label: string; description?: string }> = []
+  for (const { provider, models } of listings) {
     for (const model of models) {
       const value = provider.id + '/' + model.id
       const current = ctx.modelSelection.current?.provider === provider.id && ctx.modelSelection.current?.model === model.id

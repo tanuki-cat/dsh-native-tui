@@ -484,6 +484,7 @@ node scripts/fake-tty-thinking-tool.mjs      # reasoning 占位符与工具调�
 node scripts/fake-tty-window-title.mjs       # 终端窗口标题（OSC 0）
 node scripts/fake-tty-stream-smooth.mjs      # 流式大 chunk
 node scripts/fake-tty-main-screen-scroll.mjs # main-screen 长 transcript
+node scripts/fake-tty-model-picker.mjs       # /model 选择器与冷/热路径耗时（需网络：查 CodeBuddy 目录）
 ~~~
 
 普通终端环境可运行真实 PTY 冒烟：
