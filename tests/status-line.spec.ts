@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createPalette, type Palette } from '../src/ui/theme.js'
-import { renderStatusRows, splitContextLine, splitSessionMetrics, type StatusInput } from '../src/ui/status-line.js'
+import { renderStatusRows, splitContextLine, splitSessionMetrics, terminalWindowTitle, type StatusInput } from '../src/ui/status-line.js'
 
 function identity(text: string): string { return text }
 
@@ -123,6 +123,34 @@ describe('renderStatusRows', () => {
     expect(state.footer).toContain('↳ 2 turns')
     expect(state.footer).toContain('50 tok/s')
     expect(state.footer).toContain('\n  ctx 40%')
+  })
+})
+
+describe('terminalWindowTitle', () => {
+  it('pairs the product with the workspace directory name', () => {
+    expect(terminalWindowTitle('DeepSeek Harness', '/Users/me/work/dsh-native-tui'))
+      .toBe('DeepSeek Harness · dsh-native-tui')
+  })
+
+  it('ignores a trailing separator and handles a bare root', () => {
+    expect(terminalWindowTitle('dsh', '/Users/me/work/repo/')).toBe('dsh · repo')
+    expect(terminalWindowTitle('dsh', '/')).toBe('dsh')
+    expect(terminalWindowTitle('dsh', '')).toBe('dsh')
+  })
+
+  it('keeps the last segment of a Windows path', () => {
+    expect(terminalWindowTitle('dsh', 'C:\\Users\\me\\repo')).toBe('dsh · repo')
+  })
+
+  it('flattens control characters that would truncate the OSC sequence', () => {
+    // BEL terminates OSC 0, so a raw one would cut the title short.
+    expect(terminalWindowTitle('dsh', '/tmp/a\u0007b')).toBe('dsh · a b')
+    expect(terminalWindowTitle('d\nsh', '/tmp/repo')).toBe('d sh · repo')
+  })
+
+  it('bounds the workspace label', () => {
+    const label = terminalWindowTitle('dsh', '/tmp/' + 'x'.repeat(80))
+    expect(label).toBe('dsh · ' + 'x'.repeat(47) + '…')
   })
 })
 

@@ -121,6 +121,33 @@ export function renderStatusRows(
   )
 }
 
+/** Longest workspace label woven into the terminal window title. */
+const WINDOW_TITLE_WORKSPACE_CHARS = 48
+
+/**
+ * Terminal window title naming the workspace this session edits.
+ *
+ * A terminal tab otherwise shows only the launcher name, so several sessions
+ * opened from different checkouts are indistinguishable in the tab strip. The
+ * label pairs the product with the working directory's last segment, mirroring
+ * how pi titles its tabs (`π − <workspace>`).
+ * @param title - configured product title.
+ * @param cwd - workspace directory the session runs in.
+ * @returns one single-line title, safe for an OSC 0 sequence.
+ */
+export function terminalWindowTitle(title: string, cwd: string): string {
+  // OSC 0 is terminated by BEL, so control characters would truncate the title
+  // or inject a second sequence; the label is flattened to visible text.
+  const clean = (text: string): string => text.replace(/[\x00-\x1f\x7f]/g, ' ').trim()
+  const product = clean(title)
+  const workspace = clean(cwd).replace(/[\\/]+$/u, '').split(/[\\/]/u).at(-1) ?? ''
+  const label = workspace.length <= WINDOW_TITLE_WORKSPACE_CHARS
+    ? workspace
+    : workspace.slice(0, WINDOW_TITLE_WORKSPACE_CHARS - 1) + '…'
+  if (label === '') return product
+  return product === '' ? label : product + ' · ' + label
+}
+
 /** Read the session's preset through the host registry. */
 export function currentPreset(presets: AgentPresetService | undefined, ctx: Context): string | undefined {
   return presets?.composedPreset(ctx)

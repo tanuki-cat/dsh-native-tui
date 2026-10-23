@@ -23,7 +23,7 @@ import { createSessionMetricsMemo, type SessionStats } from '../runtime/metrics.
 import { showApproval, showQuestionBatch } from './dialogs.js'
 import type { PendingAttachment } from '../runtime/attachments.js'
 import { TuiAutocompleteProvider, type SessionReferenceService, type SkillSuggestion } from './autocomplete.js'
-import { currentPreset, renderStatusRows } from './status-line.js'
+import { currentPreset, renderStatusRows, terminalWindowTitle } from './status-line.js'
 import { createPalette, editorTheme, markdownTheme, type Palette } from './theme.js'
 import { debug } from '../debug.js'
 import { globalShortcut } from './keymap.js'
@@ -228,6 +228,8 @@ export async function startTerminalApp(
   let exiting = false
   let switching = false
   let title = config.title
+  /** Last title written to the terminal, so a repaint does not repeat the sequence. */
+  let windowTitle: string | undefined
   let selectedPreset: string | undefined = sessionAgentPreset(active.agent.session)
     ?? config.agentPreset
     ?? (host.get('agentPresets') as AgentPresetService | undefined)?.defaultId
@@ -271,6 +273,19 @@ export async function startTerminalApp(
   disposeModelSelection = installModelSelection(active.agent.ctx, modelSelection)
 
   const summaryCwd = (): string | undefined => active.agent.session.header.cwd ?? config.cwd
+
+  /**
+   * Name the workspace in the terminal tab.
+   *
+   * Written only when the label changes: OSC 0 is a terminal-wide side effect,
+   * and the status block repaints on every Session event.
+   */
+  const syncWindowTitle = (): void => {
+    const next = terminalWindowTitle(title, summaryCwd() ?? config.cwd)
+    if (next === windowTitle) return
+    windowTitle = next
+    terminal.setTitle(next)
+  }
 
   const lastDurableSeq = (): number | undefined => {
     for (let index = entries.length - 1; index >= 0; index -= 1) {
@@ -466,6 +481,7 @@ export async function startTerminalApp(
       stats: projections?.stateOf(active.agent.session, 'sessionStats') as SessionStats | undefined,
       events: active.agent.session.snapshotEvents(),
     }, metricsFold)
+    syncWindowTitle()
     tui.requestRender()
   }
 
@@ -846,6 +862,8 @@ export async function startTerminalApp(
     setTitle: next => {
       if (disposed || next === title) return
       title = next
+      // Both the header and the terminal tab carry the product title.
+      syncWindowTitle()
       renderStatus()
     },
     dispose: async () => {
