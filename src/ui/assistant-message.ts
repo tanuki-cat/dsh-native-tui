@@ -5,7 +5,7 @@ import type { AssistantPart } from './transcript-stream.js'
 
 type AssistantBlock = Extract<TranscriptBlock, { kind: 'assistant' }>
 interface PartComponent {
-  readonly type: AssistantPart['type'] | 'starting'
+  readonly type: AssistantPart['type']
   readonly text: string
   readonly raw: string
   readonly component: Component
@@ -32,7 +32,6 @@ export class AssistantMessage extends Container {
       { type: 'text' as const, text: block.text },
     ]
     const visible: Array<Pick<PartComponent, 'type' | 'text' | 'raw'>> = []
-    if (block.starting && mode !== 'hidden') visible.push({ type: 'starting', raw: '', text: mode === 'compact' ? 'thinking · …' : 'thinking …' })
     for (const part of content) {
       if (part.text.trim() === '' || part.type === 'reasoning' && mode === 'hidden') continue
       const before = this.parts[visible.length]
@@ -55,7 +54,7 @@ export class AssistantMessage extends Container {
       const body = new Text(palette.dim(part.text), 0, 0)
       if (mode === 'compact') return { ...part, component: body, body }
       const box = new Box(1, 0, palette.thinkingBand)
-      if (part.type !== 'starting') box.addChild(new Text(palette.dim('thinking'), 0, 0))
+      box.addChild(new Text(palette.dim('thinking'), 0, 0))
       box.addChild(body)
       return { ...part, component: box, body }
     })

@@ -416,7 +416,7 @@ describe('reduceTranscript', () => {
     expect(second.blocks[0]).toMatchObject({ pending: false, result: 'updated a.ts', seq: 3 })
   })
 
-  it('hides nested edit cards when the parent run_code output is pruned', () => {
+  it('preserves nested edit cards when the parent run_code output is pruned', () => {
     const entries: TranscriptEntry[] = [
       durable('tool/call', { turn: 1, step: 1, callId: 'call-outer', name: 'run_code', arguments: '{}' }, 1),
       ptcStart('call-outer:ptc:1', 'edit', { file_path: 'a.ts' }, 2),
@@ -427,8 +427,20 @@ describe('reduceTranscript', () => {
       durable('compaction/prune', { shadowedSeqs: [4], shadowedTokenCount: 10 }, 5),
     ]
     const blocks = reduceTranscript(entries, options)
-    expect(blocks.some(block => block.kind === 'tool')).toBe(false)
-    expect(blocks.some(block => block.kind === 'notice' && block.text.includes('pruned'))).toBe(true)
+    expect(blocks.filter(block => block.kind === 'tool')).toMatchObject([
+      { callId: 'call-outer', result: 'nested output' },
+      { callId: 'call-outer:ptc:1', diffs: [{ path: 'a.ts', oldText: 'old', newText: 'new' }] },
+    ])
+    expect(blocks.at(-1)).toMatchObject({ kind: 'notice', text: 'Model context: 1 tool result(s) shortened · history preserved' })
+    const renderer = new TranscriptRenderer(options)
+    renderer.set(entries, [])
+    for (const mode of ['compact', 'hidden', 'detailed'] as const) {
+      renderer.setDisplayModes('detailed', mode)
+      const output = renderer.container.render(120).join('\n')
+      expect(output).toContain('a.ts')
+      expect(output).toContain('old')
+      expect(output).toContain('new')
+    }
   })
 
   it('keeps prune memory after the original entries leave the window', () => {
@@ -450,7 +462,7 @@ describe('reduceTranscript', () => {
     expect(late.blocks).toHaveLength(0)
   })
 
-  it('prunes tool output and ignores a late duplicate result', () => {
+  it('preserves tool output and ignores a late duplicate result after pruning', () => {
     const entries: TranscriptEntry[] = [
       durable('tool/call', { turn: 1, step: 1, callId: 'call-1', name: 'run_code', arguments: '{}' }, 1),
       toolResult('call-1', 'original output', 2),
@@ -458,13 +470,14 @@ describe('reduceTranscript', () => {
       toolResult('call-1', 'late duplicate', 4),
     ]
     const blocks = reduceTranscript(entries, options)
-    expect(blocks).toHaveLength(1)
-    expect(blocks[0]).toMatchObject({ kind: 'notice', text: 'Tool output pruned · 1 item(s) · ~900 tokens' })
+    expect(blocks).toHaveLength(2)
+    expect(blocks[0]).toMatchObject({ kind: 'tool', result: 'original output', pending: false })
+    expect(blocks[1]).toMatchObject({ kind: 'notice', text: 'Model context: 1 tool result(s) shortened · history preserved' })
 
     const renderer = new TranscriptRenderer(options)
     renderer.set(entries, [])
     const output = renderer.container.render(80).join('\n')
-    expect(output).not.toContain('original output')
+    expect(output).toContain('original output')
     expect(output).not.toContain('late duplicate')
   })
 
@@ -513,7 +526,7 @@ describe('reduceTranscript', () => {
       shadowedTokens: 1200,
       summary: 'condensed checkpoint',
     })
-    expect(blocks[1]).toMatchObject({ kind: 'notice', tone: 'info', text: 'Tool output pruned · 2 item(s) · ~640 tokens' })
+    expect(blocks[1]).toMatchObject({ kind: 'notice', tone: 'info', text: 'Model context: 2 tool result(s) shortened · history preserved' })
     const renderer = new TranscriptRenderer(options)
     renderer.set(entries, [])
     const output = renderer.container.render(80).join('\n')
@@ -521,7 +534,7 @@ describe('reduceTranscript', () => {
     expect(output).toContain('✓ done')
     expect(output).toContain('3 item(s)')
     expect(output).toContain('condensed checkpoint')
-    expect(output).toContain('Tool output pruned')
+    expect(output).toContain('Model context: 2 tool result(s) shortened')
   })
 
   it('marks a compaction start left open by a crashed process as interrupted', () => {

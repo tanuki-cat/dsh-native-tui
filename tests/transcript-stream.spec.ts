@@ -73,7 +73,7 @@ describe('provider-driven stream projection', () => {
     const start = chunk('block-start', '')
     Object.assign(start.event.data, { chunk: { type: 'block-start', blockType: 'reasoning', index: 0 } })
     renderer.set([start], [])
-    expect(output(renderer)).toContain('thinking …')
+    expect(output(renderer)).toBe('')
     renderer.set([start, chunk('text-delta', 'ANSWER', 1, 2)], [])
     expect(output(renderer)).toContain('ANSWER')
   })

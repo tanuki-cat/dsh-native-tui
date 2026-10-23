@@ -15,7 +15,6 @@ export class AssistantStream {
   private parts: StreamPart[] = []
   private live = true
   private seq: number | undefined
-  private starting = false
   private dirty = true
   private projected: TranscriptBlock | undefined
 
@@ -28,31 +27,11 @@ export class AssistantStream {
 
   append(chunk: StreamChunk): void {
     if (chunk.type === 'block-start') {
-      if (chunk.blockType !== 'reasoning' && chunk.blockType !== 'text') {
-        // A tool call proves the model stopped thinking and is dispatching, so
-        // the reasoning placeholder must go: `starting` marks a reasoning block
-        // that opened with nothing after it yet, and a tool-call block is what
-        // comes next. Leaving it set paints `thinking …` over a running tool.
-        if (this.starting) {
-          this.starting = false
-          this.dirty = true
-        }
-        return
-      }
+      if (chunk.blockType !== 'reasoning' && chunk.blockType !== 'text') return
       this.dirty = true
-      if (chunk.blockType === 'reasoning') this.starting = true
       if (!this.parts.some(part => part.index === chunk.index)) {
         this.parts.push({ type: chunk.blockType, index: chunk.index, text: '' })
         this.parts.sort((left, right) => left.index - right.index)
-      }
-      return
-    }
-    if (chunk.type === 'tool-call-delta') {
-      // Same reason as a tool-call block-start: some providers skip the block
-      // marker and stream the call straight away.
-      if (this.starting) {
-        this.starting = false
-        this.dirty = true
       }
       return
     }
@@ -76,14 +55,12 @@ export class AssistantStream {
       this.parts.sort((left, right) => left.index - right.index)
     }
     else this.parts[position] = part
-    this.starting = false
   }
 
   settle(content: readonly ContentBlock[], seq: number): void {
     this.live = false
     this.dirty = true
     this.seq = seq
-    this.starting = false
     this.parts = content.flatMap((block, index): StreamPart[] => {
       if (block.type === 'tool-call' || block.type === 'tool-addition' || block.type === 'tool-removal') return []
       const type = block.type === 'reasoning' ? 'reasoning' : 'text'
@@ -111,7 +88,6 @@ export class AssistantStream {
       // row instead of jumping above it once the durable message assigns a seq.
       streamKey: this.rowKey,
       ...(this.seq === undefined ? {} : { seq: this.seq }),
-      ...(content.length === 0 && this.starting && mode !== 'hidden' ? { starting: true } : {}),
     }
     this.projected = block
     return block

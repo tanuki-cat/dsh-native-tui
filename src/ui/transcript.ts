@@ -54,8 +54,6 @@ export type TranscriptBlock = ({
   /** Text and reasoning in provider order. Absent on local, manually constructed rows. */
   readonly content?: readonly AssistantPart[]
   readonly streamKey?: string
-  /** True while the reasoning block is open but has no content yet. */
-  readonly starting?: boolean
 } | {
   readonly kind: 'context'; readonly label: string; readonly text: string
 } | {
@@ -66,8 +64,6 @@ export type TranscriptBlock = ({
   readonly result?: string
   readonly isError?: boolean
   readonly pending: boolean
-  /** Tool output was pruned from the model-visible surface. */
-  readonly pruned?: boolean
   readonly diffs?: readonly FileDiff[]
   /**
    * Distinct sub-calls a `run_code` program dispatched, as compact rows such as
@@ -114,7 +110,7 @@ export interface ToolCallMemory {
   readonly settled: Set<string>
   /** Calls whose output was pruned from the model-visible surface. */
   readonly pruned: Set<string>
-  /** Event sequences whose result/call was pruned. */
+  /** Original result sequences retained in the transcript after model-context pruning. */
   readonly prunedSeqs: Set<number>
   /** Event sequence to call identity for calls and results. */
   readonly callBySeq: Map<number, string>
@@ -289,14 +285,7 @@ export function createTranscriptReducer(options: TranscriptOptions) {
   const prunedCalls = options.toolMemory?.pruned ?? new Set<string>()
   const runCodeDisplay = options.runCodeDisplay ?? 'detailed'
   const compactionByCall = new Map<string, number>()
-  /** PTC child call ids per parent `run_code`, so a pruned parent hides its cards. */
-  const ptcByParent = new Map<string, Set<string>>()
-  const rememberPtcChild = (parentCallId: string | undefined, subCallId: string): void => {
-    if (parentCallId === undefined) return
-    const children = ptcByParent.get(parentCallId) ?? new Set<string>()
-    children.add(subCallId)
-    ptcByParent.set(parentCallId, children)
-  }
+  let pruneBatch: { readonly index: number; readonly seq: number; readonly shadowed: Set<number> } | undefined
   /** Distinct compact call rows already recorded per `run_code`, including omitted ones. */
   const seenPtcLines = new Map<string, Set<string>>()
   /**
@@ -380,12 +369,24 @@ export function createTranscriptReducer(options: TranscriptOptions) {
       while (sources.length < blocks.length) sources.push(position - 1)
       const entry = entries[position]!
       if (entry.type === 'live') {
+        pruneBatch = undefined
         pushLive(entry.event)
         continue
       }
       const event: SessionEvent = entry.event
       const seq = Number(event.seq)
       const extensionType = (event as unknown as { type: string }).type
+      // Context replacements are not new tool executions or user-visible history.
+      if (event.type === 'tool/result' && (
+        prunedCalls.has(event.data.message.source.callId) && !prunedSeqs.has(seq)
+        || typeof event.surfaceOp === 'object' && event.surfaceOp.op === 'replace'
+          && event.sourceEventSeqs?.some(source => prunedSeqs.has(Number(source)))
+      )) {
+        prunedCalls.add(event.data.message.source.callId)
+        continue
+      }
+      // One pruning pass interleaves prune events with their replacement results.
+      if (extensionType !== 'compaction/prune') pruneBatch = undefined
       if (extensionType.startsWith('compaction/')) {
         const data = (event as unknown as { data: Record<string, unknown> }).data
         if (extensionType === 'compaction/start') {
@@ -436,44 +437,21 @@ export function createTranscriptReducer(options: TranscriptOptions) {
         }
         else if (extensionType === 'compaction/prune') {
           const shadowedSeqs = Array.isArray(data.shadowedSeqs) ? data.shadowedSeqs : []
+          const batch = pruneBatch ?? { index: blocks.length, seq, shadowed: new Set<number>() }
           for (const value of shadowedSeqs) {
-            if (typeof value !== 'number' || !Number.isSafeInteger(value)) continue
+            if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) continue
+            batch.shadowed.add(value)
             prunedSeqs.add(value)
             const callId = callIdBySeq.get(value)
-            if (callId === undefined) continue
-            prunedCalls.add(callId)
-            const index = toolByCall.get(callId)
-            if (index !== undefined) {
-              const prior = blocks[index]
-              if (prior?.kind === 'tool') {
-                blocks[index] = {
-                  ...prior,
-                  result: undefined,
-                  diffs: undefined,
-                  pending: false,
-                  pruned: true,
-                }
-              }
-            }
-            // A pruned run_code hides the write/edit cards it produced.
-            for (const subCallId of ptcByParent.get(callId) ?? []) {
-              prunedCalls.add(subCallId)
-              const childIndex = toolByCall.get(subCallId)
-              const child = childIndex === undefined ? undefined : blocks[childIndex]
-              if (childIndex !== undefined && child?.kind === 'tool') {
-                blocks[childIndex] = {
-                  ...child,
-                  result: undefined,
-                  diffs: undefined,
-                  pending: false,
-                  pruned: true,
-                }
-              }
+            if (callId !== undefined) prunedCalls.add(callId)
+          }
+          if (batch.shadowed.size > 0) {
+            pruneBatch = batch
+            blocks[batch.index] = {
+              kind: 'notice', tone: 'info', seq: batch.seq,
+              text: 'Model context: ' + String(batch.shadowed.size) + ' tool result(s) shortened · history preserved',
             }
           }
-          const count = shadowedSeqs.length
-          const tokens = typeof data.shadowedTokenCount === 'number' ? data.shadowedTokenCount : 0
-          blocks.push({ kind: 'notice', tone: 'info', text: 'Tool output pruned · ' + String(count) + ' item(s) · ~' + String(tokens) + ' tokens', seq })
         }
         continue
       }
@@ -485,17 +463,15 @@ export function createTranscriptReducer(options: TranscriptOptions) {
         const settle = extensionType === 'tool/ptc-dispatch'
         const args = ptcArguments(data?.arguments)
         const diffs = settle ? resultFileDiffs(data?.meta, args) : undefined
-        const pruned = subCallId === undefined || prunedSeqs.has(seq) || prunedCalls.has(subCallId)
-          || (parentCallId !== undefined && prunedCalls.has(parentCallId))
         // A compact parent card lists what its program dispatched; a detailed
         // card shows the program source and ignores these rows.
-        if (runCodeDisplay === 'compact' && !pruned) {
+        if (runCodeDisplay === 'compact' && subCallId !== undefined) {
           const rootCallId = typeof data?.rootCallId === 'string' ? data.rootCallId : parentCallId
           rememberPtcCall(rootCallId, name, args)
         }
         // Only file-editing sub-calls need their own card; the rest are already
         // summarized by the parent run_code result.
-        if (subCallId !== undefined && !pruned && (PTC_CARD_TOOLS.has(name) || diffs !== undefined)) {
+        if (subCallId !== undefined && (PTC_CARD_TOOLS.has(name) || diffs !== undefined)) {
           const index = toolByCall.get(subCallId)
           const prior = index === undefined ? undefined : blocks[index]
           if (!settle) {
@@ -503,7 +479,6 @@ export function createTranscriptReducer(options: TranscriptOptions) {
               toolByCall.set(subCallId, blocks.length)
               callIdBySeq.set(seq, subCallId)
               blocks.push({ kind: 'tool', callId: subCallId, name, args, pending: true, seq })
-              rememberPtcChild(parentCallId, subCallId)
             }
           }
           else if (!(prior?.kind === 'tool' && prior.pending === false)) {
@@ -522,7 +497,6 @@ export function createTranscriptReducer(options: TranscriptOptions) {
               toolByCall.set(subCallId, blocks.length)
               callIdBySeq.set(seq, subCallId)
               blocks.push(settled)
-              rememberPtcChild(parentCallId, subCallId)
             }
             else if (prior?.kind === 'tool') {
               blocks[index] = { ...prior, ...settled }
@@ -594,10 +568,6 @@ export function createTranscriptReducer(options: TranscriptOptions) {
           const seenSeq = callIdBySeq.get(seq) === callId
           const knownCall = seenSeq ? false : [...callIdBySeq.values()].some(value => value === callId)
           callIdBySeq.set(seq, callId)
-          if (prunedSeqs.has(seq) || prunedCalls.has(callId)) {
-            prunedCalls.add(callId)
-            break
-          }
           // A resumed/replayed call must not add a second card or overwrite the
           // result mapping of the card that already exists. A normal rebuild sees
           // its original seq, so persistent settlement must not suppress it.
@@ -627,10 +597,6 @@ export function createTranscriptReducer(options: TranscriptOptions) {
           // call that was already settled or whose output was pruned.
           if (hiddenCodeExecutionCalls.has(callId)) {
             settledCalls.add(callId)
-            break
-          }
-          if (prunedSeqs.has(seq) || prunedCalls.has(callId)) {
-            prunedCalls.add(callId)
             break
           }
           // Rebuilds replay the same seq and must render the original result;
@@ -715,10 +681,7 @@ export function createTranscriptReducer(options: TranscriptOptions) {
     const visibleSources: number[] = []
     for (let index = 0; index < blocks.length; index += 1) {
       const block = assistants.get(index)?.project() ?? blocks[index]!
-      // A pruned tool row only repeats the prune notice.
-      if (block.kind === 'tool' && block.pruned === true) continue
-      if (block.kind === 'assistant' && block.text === '' && (block.reasoning ?? '') === ''
-        && block.starting !== true) continue
+      if (block.kind === 'assistant' && block.text === '' && (block.reasoning ?? '') === '') continue
       visible.push(block)
       visibleSources.push(sources[index] ?? 0)
     }
