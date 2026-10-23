@@ -28,12 +28,31 @@ export class AssistantStream {
 
   append(chunk: StreamChunk): void {
     if (chunk.type === 'block-start') {
-      if (chunk.blockType !== 'reasoning' && chunk.blockType !== 'text') return
+      if (chunk.blockType !== 'reasoning' && chunk.blockType !== 'text') {
+        // A tool call proves the model stopped thinking and is dispatching, so
+        // the reasoning placeholder must go: `starting` marks a reasoning block
+        // that opened with nothing after it yet, and a tool-call block is what
+        // comes next. Leaving it set paints `thinking …` over a running tool.
+        if (this.starting) {
+          this.starting = false
+          this.dirty = true
+        }
+        return
+      }
       this.dirty = true
       if (chunk.blockType === 'reasoning') this.starting = true
       if (!this.parts.some(part => part.index === chunk.index)) {
         this.parts.push({ type: chunk.blockType, index: chunk.index, text: '' })
         this.parts.sort((left, right) => left.index - right.index)
+      }
+      return
+    }
+    if (chunk.type === 'tool-call-delta') {
+      // Same reason as a tool-call block-start: some providers skip the block
+      // marker and stream the call straight away.
+      if (this.starting) {
+        this.starting = false
+        this.dirty = true
       }
       return
     }

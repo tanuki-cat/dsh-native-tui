@@ -510,6 +510,15 @@ export async function startTerminalApp(
         if (chunk?.type === 'text-delta' || chunk?.type === 'reasoning-delta') {
           debug(`stream chunk: ${chunk.type} ${String(chunk.text.length)} chars`)
         }
+        else if (chunk?.type === 'block-start') {
+          // Block boundaries explain the row's placeholder state; without them
+          // a stuck `thinking …` cannot be traced back to the chunk that opened
+          // the reasoning block and the one that should have closed it.
+          debug(`stream chunk: block-start ${chunk.blockType} #${String(chunk.index)}`)
+        }
+        else if (chunk?.type === 'tool-call-delta') {
+          debug(`stream chunk: tool-call-delta ${String(chunk.argumentsDelta.length)} chars`)
+        }
         else if (chunk?.type === 'block-end') {
           const block = chunk.block
           const size = block.type === 'text' || block.type === 'reasoning' ? block.text.length : 0
