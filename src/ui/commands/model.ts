@@ -10,12 +10,7 @@ import type { CommandContext } from './context.js'
 import { openReasoningMapEditor } from './reasoning-map.js'
 import type { LLM } from './services.js'
 import { errorMessage } from './shared.js'
-
-/** One route's catalogue as the picker collects it. */
-interface ProviderListing {
-  readonly provider: { readonly id: string }
-  readonly models: readonly { readonly id: string; readonly name: string; readonly description?: string }[]
-}
+import { loadModelCatalog } from '../model-catalog.js'
 
 /**
  * Apply one `provider/model` selection, or a bare model on the current provider.
@@ -66,20 +61,18 @@ export async function modelCommand(ctx: CommandContext, args: string): Promise<v
     await selectModel(ctx, llm, args)
     return
   }
-  // Ask every route at once. A listing can be a network round trip (CodeBuddy
-  // reads /v3/config), so awaiting the routes in turn made the picker wait for
-  // the sum of those round trips instead of the slowest one. Resolving in
-  // provider order keeps the rows the picker has always shown.
-  const listings = await Promise.all(llm.listProviders().map(async (provider): Promise<ProviderListing> => {
-    try {
-      return { provider, models: await llm.listModels(provider.id) }
-    }
-    catch {
-      // A route without credentials, or one whose catalogue is unreachable,
-      // advertises nothing; the picker still lists the other providers.
-      return { provider, models: [] }
-    }
-  }))
+  let listings
+  try {
+    listings = await loadModelCatalog(llm, ctx.tui, ctx.palette, ctx.signal)
+  } catch {
+    ctx.notice('error', 'Could not load model catalogs. Check provider configuration and retry /model.')
+    return
+  }
+  if (listings === undefined || ctx.signal.aborted) return
+  const failures = listings.filter(row => row.error !== undefined)
+  if (failures.length > 0) {
+    ctx.notice('warning', 'Model catalogs unavailable: ' + failures.map(row => row.provider.id + ' (' + row.error + ')').join(', '))
+  }
   const items: Array<{ value: string; label: string; description?: string }> = []
   for (const { provider, models } of listings) {
     for (const model of models) {
@@ -93,7 +86,9 @@ export async function modelCommand(ctx: CommandContext, args: string): Promise<v
     }
   }
   if (items.length === 0) {
-    ctx.notice('warning', 'The LLM catalog advertises no models.')
+    ctx.notice('warning', failures.length === 0
+      ? 'The LLM catalog advertises no models.'
+      : 'No models loaded. Some catalogs failed; check credentials or connectivity.')
     return
   }
   const selectedModel = await showSearchChoice(ctx.tui, ctx.palette, 'Select model · ' + String(items.length) + ' available', items, 'Type to filter · ↑/↓ moves · Enter selects · Esc cancels', ctx.signal)

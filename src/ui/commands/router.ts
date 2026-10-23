@@ -12,7 +12,7 @@
 
 import type {} from '@deepseek-ai/dsh-commands'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
-import { createHostSession, resumeHostSession, type HostSession } from '../../runtime/agent.js'
+import { resumeHostSession, type HostSession } from '../../runtime/agent.js'
 import { runCodebuddyCommand, type CodeBuddyCommandDeps } from '../../runtime/codebuddy-command.js'
 import { codexCommand } from './codex.js'
 import type { CodeBuddyService } from '../../codebuddy.js'
@@ -43,6 +43,8 @@ export interface CommandRouterDeps {
   readonly context: () => CommandContext
   /** Replace the visible session, disposing the previous one. */
   readonly switchTo: (next: () => Promise<HostSession>) => Promise<void>
+  /** Reuse a matching blank visited in this terminal, or create one. */
+  readonly openNewSession: (cwd: string, preset?: string) => Promise<HostSession>
   /** Send a line as a prompt: `/init`, and the user-invocable-skill fallback. */
   readonly sendPrompt: (text: string) => void
   /** Drop the transcript and its local notices. */
@@ -108,11 +110,10 @@ export async function runCommandLine(line: string, deps: CommandRouterDeps): Pro
       ctx().notice('info', 'Cancellation requested')
       return
     case 'new':
-      await deps.switchTo(() => createHostSession(ctx().host, {
-        ...ctx().config,
-        sessionId: undefined,
-        agentPreset: deps.preset.current() ?? ctx().config.agentPreset,
-      }))
+      await deps.switchTo(() => deps.openNewSession(
+        ctx().active.agent.session.header.cwd ?? ctx().config.cwd,
+        deps.preset.current() ?? ctx().config.agentPreset,
+      ))
       return
     case 'init':
       deps.sendPrompt(INIT_AGENTS_PROMPT)
@@ -122,7 +123,7 @@ export async function runCommandLine(line: string, deps: CommandRouterDeps): Pro
       return
     case 'resume':
       if (args === '') await sessionsCommand(ctx())
-      else await deps.switchTo(() => resumeHostSession(ctx().host, args as SessionId))
+      else if (args !== ctx().active.id) await deps.switchTo(() => resumeHostSession(ctx().host, args as SessionId))
       return
     case 'model':
       await modelCommand(ctx(), args)
@@ -140,7 +141,7 @@ export async function runCommandLine(line: string, deps: CommandRouterDeps): Pro
       await agentsCommand(ctx())
       return
     case 'workspaces':
-      await workspacesCommand(ctx(), args, deps.switchTo, deps.preset.current)
+      await workspacesCommand(ctx(), args, deps.switchTo, deps.preset.current, deps.openNewSession)
       return
     case 'schedule':
       await scheduleCommand(ctx(), args)

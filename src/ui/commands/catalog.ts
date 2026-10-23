@@ -12,6 +12,7 @@ import type { CommandSuggestion } from '../autocomplete.js'
 /** `/help` rows, one line per command family. */
 export const HELP_LINES: readonly string[] = [
   '/help · /new · /init · /sessions · /resume [id] · /status · /clear',
+  'Ctrl+N: new/blank session · Alt+S: switch session (keep draft and attachments)',
   '/exit · /quit (or bare exit/quit) · /reload',
   '/cancel · /model [provider/model] · /reasoning [effort|default|map] · /provider [add|list|edit|models|remove <route>]',
   '/mcp [add|list|remove <name>]',
@@ -32,7 +33,7 @@ export const HELP_LINES: readonly string[] = [
 /** Local commands offered by the `/` menu, ahead of the host commands. */
 export const LOCAL_COMMANDS: readonly CommandSuggestion[] = [
   { name: 'help', description: 'show local and host commands' },
-  { name: 'new', description: 'create a new session' },
+  { name: 'new', description: 'open a matching blank session or create one' },
   { name: 'init', description: 'create a project-level AGENTS.md contributor guide' },
   { name: 'sessions', description: 'list persisted sessions' },
   { name: 'resume', description: 'resume a session', input: { hint: 'session-id' } },

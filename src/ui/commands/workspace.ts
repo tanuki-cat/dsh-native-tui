@@ -28,6 +28,7 @@ export async function workspacesCommand(
   args: string,
   switchTo: SwitchToSession,
   selectedPreset: PresetForNewSession,
+  openNewSession?: (cwd: string, preset?: string) => Promise<HostSession>,
 ): Promise<void> {
   const workspaceService = ctx.host.get('workspaceRegistry') as unknown as WorkspaceService | undefined
   if (workspaceService === undefined) {
@@ -77,11 +78,12 @@ export async function workspacesCommand(
         ctx.notice('warning', 'No workspace matches ' + rest)
         return
       }
-      await switchTo(() => createHostSession(ctx.host, {
+      const preset = selectedPreset() ?? ctx.config.agentPreset
+      await switchTo(() => openNewSession !== undefined ? openNewSession(workspace.path, preset) : createHostSession(ctx.host, {
         ...ctx.config,
         sessionId: undefined,
         cwd: workspace.path,
-        agentPreset: selectedPreset() ?? ctx.config.agentPreset,
+        agentPreset: preset,
       }))
     } catch (error) {
       ctx.notice('error', 'Could not switch workspace: ' + errorMessage(error))

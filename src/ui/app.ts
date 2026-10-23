@@ -43,6 +43,8 @@ import { consoleTone, holdConsoleOutput, type ConsoleGuard } from './console-gua
 import { Rule } from './rule.js'
 import { scrollToEndLabel } from './scroll-indicator.js'
 import { PromptEditor } from './prompt-editor.js'
+import { SessionDrafts } from './session-drafts.js'
+import { pickStoredSession } from './commands/sessions.js'
 
 
 /** Terminal application lifecycle. */
@@ -237,6 +239,7 @@ export async function startTerminalApp(
   let entries: TranscriptEntry[] = active.agent.session.snapshotEvents().map(event => ({ type: 'event', event }))
   let localNotices: TranscriptBlock[] = []
   let pendingAttachments: PendingAttachment[] = []
+  const drafts = new SessionDrafts()
   let transcriptTimer: ReturnType<typeof setTimeout> | undefined
   /** When the pending frame is due, so a late one can measure what held the loop. */
   let frameDueAt: number | undefined
@@ -575,14 +578,22 @@ export async function startTerminalApp(
   const switchTo = async (next: () => Promise<HostSession>): Promise<void> => {
     if (switching || disposed) return
     switching = true
+    editor.disableSubmit = true
+    let opened: HostSession | undefined
     try {
-      const opened = await next()
+      opened = await next()
+      if (opened === active || disposed) return
+      drafts.save(active.agent.session, { text: editor.getExpandedText(), attachments: pendingAttachments }, config.cwd, selectedPreset)
       disposeInteractions()
       disposeModelSelection?.()
       disposeModelSelection = undefined
       clearSubscriptions()
       await active.dispose()
+      if (disposed) return
       active = opened
+      const draft = drafts.restore(active.id)
+      editor.setText(draft.text)
+      pendingAttachments = draft.attachments
       selectedPreset = sessionAgentPreset(active.agent.session) ?? selectedPreset
       entries = active.agent.session.snapshotEvents().map(event => ({ type: 'event', event }))
       liveSeq = 0
@@ -607,8 +618,25 @@ export async function startTerminalApp(
     } catch (error) {
       pushNotice('error', 'Could not open the session: ' + errorMessage(error))
     } finally {
+      if (opened !== undefined && opened !== active) {
+        try { await opened.dispose() }
+        catch (error) { pushNotice('error', 'Could not close the unopened session: ' + errorMessage(error)) }
+      }
       switching = false
+      editor.disableSubmit = false
     }
+  }
+
+  const openNewSession = async (cwd: string, preset?: string): Promise<HostSession> => {
+    const presets = host.get('agentPresets') as AgentPresetService | undefined
+    const targetPreset = presets === undefined ? preset : (await presets.resolve(preset)).id
+    drafts.save(active.agent.session, { text: editor.getExpandedText(), attachments: pendingAttachments }, config.cwd, selectedPreset)
+    const registry = host.get('workspaceRegistry') as { readonly archivedSessionIds: readonly string[] } | undefined
+    const id = drafts.findBlank(cwd, targetPreset, registry?.archivedSessionIds)
+    if (id === active.id) return active
+    return id === undefined
+      ? createHostSession(host, { ...config, cwd, agentPreset: targetPreset, sessionId: undefined })
+      : resumeHostSession(host, id)
   }
 
   const sendPrompt = (text: string): void => {
@@ -623,7 +651,7 @@ export async function startTerminalApp(
       })
       if (active.agent.status === 'running') active.agent.steer(message)
       else active.agent.followup(message)
-      pendingAttachments = []
+      pendingAttachments.splice(0)
       editor.addToHistory(text)
       renderStatus()
     } catch (error) {
@@ -647,29 +675,32 @@ export async function startTerminalApp(
    * a handler always sees the session that is on screen now, not the one that
    * was active when this closure was created.
    */
-  const commandContext = (): CommandContext => ({
-    host,
-    config,
-    palette,
-    tui,
-    active,
-    signal: interactionAbort.signal,
-    notice: pushNotice,
-    renderStatus,
-    attachments: {
-      pending: pendingAttachments,
-      clear: () => { pendingAttachments = [] },
-    },
-    runCommand: line => runCommand(line),
-    openTuiSettings: () => openTuiSettings(commandContext()),
-    showHostSettings: () => showHostSettings(commandContext()),
-    modelSelection,
-    setContextWindow: (tokens, reservedTokens) => {
-      contextWindow = tokens
-      contextReserved = reservedTokens
-    },
-    persistSelection,
-  })
+  const commandContext = (): CommandContext => {
+    const attachments = pendingAttachments
+    return {
+      host,
+      config,
+      palette,
+      tui,
+      active,
+      signal: interactionAbort.signal,
+      notice: pushNotice,
+      renderStatus,
+      attachments: {
+        pending: attachments,
+        clear: () => { attachments.splice(0) },
+      },
+      runCommand: line => runCommand(line),
+      openTuiSettings: () => openTuiSettings(commandContext()),
+      showHostSettings: () => showHostSettings(commandContext()),
+      modelSelection,
+      setContextWindow: (tokens, reservedTokens) => {
+        contextWindow = tokens
+        contextReserved = reservedTokens
+      },
+      persistSelection,
+    }
+  }
 
   /**
    * Route one `/` line through the command dispatcher. Only what a handler
@@ -679,6 +710,7 @@ export async function startTerminalApp(
   const runCommand = (line: string): Promise<void> => runCommandLine(line, {
     context: commandContext,
     switchTo,
+    openNewSession,
     sendPrompt,
     clearTranscript: () => {
       entries = []
@@ -804,7 +836,16 @@ export async function startTerminalApp(
       editorFocused: tui.getFocusedComponent() === editor,
       editorHasText: editor.getText() !== '',
     })
+    if (switching && shortcut !== 'exit' && shortcut !== 'cancel-turn') return { consume: true }
     if (shortcut === undefined) return undefined
+    if (shortcut === 'new-session' || shortcut === 'pick-session') {
+      if (tui.hasOverlay() || switching) return undefined
+      if (shortcut === 'new-session') void runCommand('/new')
+      else void pickStoredSession(commandContext()).then(id => {
+        if (id !== undefined && id !== active.id) return runCommand('/resume ' + id)
+      })
+      return { consume: true }
+    }
     if (shortcut === 'toggle-write-preview') {
       if (tui.hasOverlay()) return undefined
       renderer.toggleWritePreview()

@@ -28,7 +28,7 @@ function harness(options: { readonly hostResult?: unknown; readonly skills?: rea
     config: { cwd: '/tmp', agentPreset: 'ptc' },
     palette: {},
     tui: {},
-    active: { id: 'session-1', agent: { status: options.running === true ? 'running' : 'idle', cancel: () => { calls.push('cancel') } } },
+    active: { id: 'session-1', agent: { session: { header: { cwd: '/active-workspace' } }, status: options.running === true ? 'running' : 'idle', cancel: () => { calls.push('cancel') } } },
     signal: new AbortController().signal,
     notice: (tone: string, text: string) => { notices.push({ tone, text }) },
     renderStatus: () => undefined,
@@ -43,6 +43,7 @@ function harness(options: { readonly hostResult?: unknown; readonly skills?: rea
   const deps: CommandRouterDeps = {
     context: () => { contextBuilds += 1; return context },
     switchTo: async next => { switched.push(next) },
+    openNewSession: async (cwd, preset) => { calls.push('openNew:' + cwd + ':' + preset); return context.active },
     sendPrompt: text => { prompts.push(text) },
     clearTranscript: () => { calls.push('clearTranscript') },
     exit: code => { calls.push('exit:' + String(code)) },
@@ -100,9 +101,15 @@ describe('command router', () => {
   it('opens a new session through the injected switch', async () => {
     const h = harness()
     await runCommandLine('/new', h.deps)
-    // The factory stays lazy: the switch calls it once the old session is gone.
     expect(h.switched).toHaveLength(1)
-    expect(typeof h.switched[0]).toBe('function')
+    await h.switched[0]!()
+    expect(h.calls).toContain('openNew:/active-workspace:ptc')
+  })
+
+  it('does not resume a second owner for the session already on screen', async () => {
+    const h = harness()
+    await runCommandLine('/resume session-1', h.deps)
+    expect(h.switched).toEqual([])
   })
 
   it('dispatches /codex to the local handler', async () => {

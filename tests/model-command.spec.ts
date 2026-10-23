@@ -1,147 +1,208 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, onTestFinished } from 'vitest'
 import type { CommandContext } from '../src/ui/commands/context.js'
 import { modelCommand } from '../src/ui/commands/model.js'
 import { createPalette } from '../src/ui/theme.js'
 
-interface Notice {
-  readonly tone: string
-  readonly text: string
+interface Overlay { render(width: number): string[]; handleInput(data: string): void }
+interface Notice { readonly tone: string; readonly text: string }
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (error: Error) => void
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no })
+  return { promise, resolve, reject }
 }
 
-interface Overlay {
-  render(width: number): string[]
-  handleInput(data: string): void
-}
-
-function overlayHarness(): { tui: never; overlays: Overlay[] } {
+function harness(llm: unknown) {
   const overlays: Overlay[] = []
+  const shown: Overlay[] = []
+  const notices: Notice[] = []
+  const picker = deferred<Overlay>()
+  const controller = new AbortController()
+  let renders = 0, hidden = 0
   const tui = {
-    showOverlay(component: Overlay) {
+    requestRender: () => { renders += 1 },
+    showOverlay: (component: Overlay) => {
       overlays.push(component)
-      return { hide() {} }
+      shown.push(component)
+      if (component.render(100).join('\n').includes('Select model')) picker.resolve(component)
+      return { hide: () => { hidden += 1; overlays.splice(overlays.indexOf(component), 1) } }
     },
   }
-  return { tui: tui as never, overlays }
-}
-
-function contextOf(options: {
-  readonly tui: never
-  readonly llm: unknown
-  readonly selection?: { readonly provider: string; readonly model: string }
-}): CommandContext & { notices: Notice[] } {
-  const notices: Notice[] = []
-  const host = { get: (name: string) => name === 'llm' ? options.llm : undefined }
+  const ctx = {
+    host: { get: (name: string) => name === 'llm' ? llm : undefined },
+    config: { cwd: '/tmp', title: 't', theme: 'plain', fullscreen: false },
+    palette: createPalette('plain'), tui,
+    active: { id: 'session-1', agent: { options: {}, session: { snapshotEvents: () => [] } } },
+    signal: controller.signal,
+    notice: (tone: string, text: string) => { notices.push({ tone, text }) },
+    renderStatus: () => {}, attachments: { pending: [], clear: () => {} },
+    runCommand: async () => {}, openTuiSettings: async () => {}, showHostSettings: () => {},
+    modelSelection: { current: undefined, assembled: undefined },
+    setContextWindow: () => {}, persistSelection: async () => {},
+  } as unknown as CommandContext
+  const runs: Promise<void>[] = []
+  onTestFinished(async () => { controller.abort(); await Promise.all(runs) })
   return {
-    notices,
-    host: host as unknown as CommandContext['host'],
-    config: { cwd: '/tmp', title: 't', theme: 'auto', fullscreen: false } as unknown as CommandContext['config'],
-    palette: createPalette('plain'),
-    tui: options.tui,
-    active: { id: 'session-1', agent: { options: {}, session: { snapshotEvents: () => [] } } } as unknown as CommandContext['active'],
-    signal: new AbortController().signal,
-    notice: (tone, text) => { notices.push({ tone, text }) },
-    renderStatus: () => undefined,
-    attachments: { pending: [], clear: () => undefined },
-    runCommand: async () => undefined,
-    openTuiSettings: async () => undefined,
-    showHostSettings: () => undefined,
-    modelSelection: { current: options.selection === undefined ? undefined : { ...options.selection }, assembled: undefined },
-    setContextWindow: () => undefined,
-    persistSelection: async () => undefined,
+    ctx, overlays, shown, notices, controller, picker: picker.promise,
+    renders: () => renders, hidden: () => hidden,
+    run: (args = '') => { const run = modelCommand(ctx, args); runs.push(run); return run },
   }
 }
-
-/** The rendered picker rows, one string per terminal line. */
-function pickerText(overlay: Overlay | undefined): string {
-  if (overlay === undefined) throw new Error('expected the model picker')
-  return overlay.render(100).join('\n')
-}
+const textOf = (overlay: Overlay): string => overlay.render(100).join('\n')
+const models = (id: string) => [{ id, name: id }]
 
 describe('/model picker', () => {
-  it('lists every route at once instead of one after another', async () => {
-    const { tui, overlays } = overlayHarness()
-    // A route's catalogue can be a network round trip, so the picker must open
-    // after the slowest route, not after the sum of all of them. Recording how
-    // many listings had already settled when each one started separates the
-    // two: a sequential loop starts the third route only after two finished.
-    const settledAtStart: number[] = []
-    let settled = 0
-    const llm = {
-      listProviders: () => [{ id: 'local-a' }, { id: 'remote-b' }, { id: 'local-c' }],
-      listModels: async (provider: string) => {
-        settledAtStart.push(settled)
-        await new Promise(resolve => { setTimeout(resolve, 5) })
-        settled += 1
-        return [{ id: provider + '-model', name: provider + '-model' }]
-      },
-      resolveModelInfo: async () => ({}),
-    }
-    const ctx = contextOf({ tui, llm })
-    const run = modelCommand(ctx, '')
-    await new Promise(resolve => { setTimeout(resolve, 60) })
-    expect(settledAtStart).toEqual([0, 0, 0])
-    const text = pickerText(overlays[0])
+  it('shows loading immediately and lists every route concurrently in provider order', async () => {
+    const routes = ['local-a', 'remote-b', 'local-c']
+    const gates = routes.map(() => deferred<ReturnType<typeof models>>())
+    const started: string[] = []
+    const h = harness({
+      listProviders: () => routes.map(id => ({ id })),
+      listModels: (provider: string) => { started.push(provider); return gates[routes.indexOf(provider)]!.promise },
+    })
+    const run = h.run()
+    expect(started).toEqual(routes)
+    expect(textOf(h.overlays[0]!)).toContain('Loading model catalogs · 0/3')
+    gates[2]!.resolve(models('c'))
+    gates[0]!.resolve(models('a'))
+    gates[1]!.resolve(models('b'))
+    const picker = await h.picker
+    const text = textOf(picker)
     expect(text).toContain('Select model · 3 available')
-    // Resolving out of order never reorders the rows: providers keep the order
-    // listProviders() reported.
-    const rows = ['local-a/local-a-model', 'remote-b/remote-b-model', 'local-c/local-c-model']
-    const positions = rows.map(row => text.indexOf(row))
+    const positions = ['local-a/a', 'remote-b/b', 'local-c/c'].map(row => text.indexOf(row))
     expect(positions.every(position => position !== -1)).toBe(true)
-    expect(positions).toEqual([...positions].sort((left, right) => left - right))
-    overlays[0]!.handleInput('\x1b')
+    expect(positions).toEqual([...positions].sort((a, b) => a - b))
+    expect(h.hidden()).toBe(1)
+    picker.handleInput('\x1b')
     await run
+    expect(h.overlays).toHaveLength(0)
   })
 
-  it('skips a route whose catalogue fails and keeps the rest', async () => {
-    const { tui, overlays } = overlayHarness()
-    const llm = {
+  it('reports failed catalogues while keeping healthy routes and redacting raw errors', async () => {
+    const h = harness({
       listProviders: () => [{ id: 'broken' }, { id: 'healthy' }],
       listModels: async (provider: string) => {
-        if (provider === 'broken') throw new Error('no credential')
-        return [{ id: 'ok', name: 'ok' }]
+        if (provider === 'broken') throw new Error('https://secret.example?key=DO-NOT-SHOW')
+        return models('ok')
       },
-      resolveModelInfo: async () => ({}),
-    }
-    const ctx = contextOf({ tui, llm })
-    const run = modelCommand(ctx, '')
-    await new Promise(resolve => { setTimeout(resolve, 10) })
-    const text = pickerText(overlays[0])
-    expect(text).toContain('healthy/ok')
-    expect(text).not.toContain('broken/')
-    overlays[0]!.handleInput('\x1b')
+    })
+    const run = h.run()
+    const picker = await h.picker
+    expect(textOf(picker)).toContain('healthy/ok')
+    expect(textOf(picker)).not.toContain('broken/')
+    expect(h.notices).toEqual([{ tone: 'warning', text: 'Model catalogs unavailable: broken (catalog request failed)' }])
+    expect(JSON.stringify(h.notices)).not.toContain('DO-NOT-SHOW')
+    picker.handleInput('\x1b')
     await run
   })
 
-  it('warns when no route advertises a model', async () => {
-    const { tui } = overlayHarness()
-    const llm = {
-      listProviders: () => [{ id: 'empty' }],
-      listModels: async () => [],
-      resolveModelInfo: async () => ({}),
-    }
-    const ctx = contextOf({ tui, llm })
-    await modelCommand(ctx, '')
-    expect(ctx.notices.map(notice => notice.text)).toEqual(['The LLM catalog advertises no models.'])
+  it('distinguishes a genuine empty catalogue from a loading failure', async () => {
+    const h = harness({ listProviders: () => [{ id: 'empty' }], listModels: async () => [] })
+    await h.run()
+    expect(h.notices).toEqual([{ tone: 'warning', text: 'The LLM catalog advertises no models.' }])
+    expect(h.overlays).toHaveLength(0)
+  })
+
+  it('reports missing credentials separately when every catalogue fails', async () => {
+    const h = harness({
+      listProviders: () => [{ id: 'deepseek-official' }],
+      listModels: async () => { throw Object.assign(new Error('private detail'), { code: 'MISSING_CREDENTIAL' }) },
+    })
+    await h.run()
+    expect(h.notices.map(row => row.text)).toEqual([
+      'Model catalogs unavailable: deepseek-official (missing credentials)',
+      'No models loaded. Some catalogs failed; check credentials or connectivity.',
+    ])
+    expect(h.overlays).toHaveLength(0)
   })
 
   it('selects the picked model and reports its reasoning efforts', async () => {
-    const { tui, overlays } = overlayHarness()
     const resolved: string[] = []
-    const llm = {
-      listProviders: () => [{ id: 'gateway' }],
-      listModels: async () => [{ id: 'alpha', name: 'Alpha' }],
+    const h = harness({
+      listProviders: () => [{ id: 'gateway' }], listModels: async () => models('alpha'),
       resolveModelInfo: async (provider: string, model: string) => {
         resolved.push(provider + '/' + model)
         return { context: { contextWindow: 128000 }, defaultMaxTokens: 4096, reasoning: { efforts: [{ id: 'high', name: 'High' }] } }
       },
-    }
-    const ctx = contextOf({ tui, llm })
-    const run = modelCommand(ctx, '')
-    await new Promise(resolve => { setTimeout(resolve, 10) })
-    overlays[0]!.handleInput('\r')
+    })
+    const run = h.run()
+    const picker = await h.picker
+    picker.handleInput('\r')
     await run
     expect(resolved).toEqual(['gateway/alpha'])
-    expect(ctx.modelSelection.current).toEqual({ provider: 'gateway', model: 'alpha' })
-    expect(ctx.notices.map(notice => notice.text)).toContain('Model selected: gateway/alpha (applies to the next step)')
+    expect(h.ctx.modelSelection.current).toEqual({ provider: 'gateway', model: 'alpha' })
+    expect(h.notices.map(row => row.text)).toContain('Model selected: gateway/alpha (applies to the next step)')
+  })
+
+  it.each(['escape', 'parent'])('cancels loading via %s and ignores a late completion', async (mode) => {
+    const gate = deferred<ReturnType<typeof models>>()
+    const h = harness({ listProviders: () => [{ id: 'slow' }], listModels: () => gate.promise })
+    const run = h.run()
+    if (mode === 'escape') h.overlays[0]!.handleInput('\x1b')
+    else h.controller.abort()
+    await run
+    expect(h.overlays).toHaveLength(0)
+    const renders = h.renders()
+    gate.resolve(models('late'))
+    await new Promise<void>(resolve => { setImmediate(resolve) })
+    expect(h.shown).toHaveLength(1)
+    expect(h.renders()).toBe(renders)
+    expect(h.notices).toEqual([])
+  })
+
+  it('contains a late rejection after cancellation', async () => {
+    const gate = deferred<ReturnType<typeof models>>()
+    const h = harness({ listProviders: () => [{ id: 'slow' }], listModels: () => gate.promise })
+    const run = h.run()
+    h.controller.abort()
+    await run
+    gate.reject(new Error('late failure'))
+    await new Promise<void>(resolve => { setImmediate(resolve) })
+    expect(h.notices).toEqual([])
+    expect(h.shown).toHaveLength(1)
+  })
+
+  it('does not query Host catalogues when already canceled', async () => {
+    const h = harness({ listProviders: () => { throw new Error('must not query') } })
+    h.controller.abort()
+    await h.run()
+    expect(h.shown).toHaveLength(0)
+    expect(h.notices).toEqual([])
+  })
+
+  it('uses the current Host directory on each invocation without discovering or saving models', async () => {
+    let catalog = models('added')
+    const h = harness({
+      listProviders: () => [{ id: 'deepseek-official' }], listModels: async () => catalog,
+      discoverModels: () => { throw new Error('must not rewrite Host catalogues') },
+    })
+    const first = h.run()
+    const firstPicker = await h.picker
+    expect(textOf(firstPicker)).toContain('deepseek-official/added')
+    firstPicker.handleInput('\x1b')
+    await first
+    catalog = models('fallback')
+    const second = h.run()
+    // One event-loop turn drains the already-resolved Host reads and opens the picker.
+    await new Promise<void>(resolve => { setImmediate(resolve) })
+    const next = h.overlays[0]!
+    expect(textOf(next)).toContain('deepseek-official/fallback')
+    expect(textOf(next)).not.toContain('added')
+    next.handleInput('\x1b')
+    await second
+  })
+
+  it('does not open a loading surface for direct model selection', async () => {
+    const h = harness({ resolveModelInfo: async () => ({}) })
+    await h.run('custom/my-model')
+    expect(h.shown).toHaveLength(0)
+    expect(h.ctx.modelSelection.current).toEqual({ provider: 'custom', model: 'my-model' })
+  })
+
+  it('reports provider enumeration failure without exposing its raw error', async () => {
+    const h = harness({ listProviders: () => { throw new Error('private detail') } })
+    await h.run()
+    expect(h.notices).toEqual([{ tone: 'error', text: 'Could not load model catalogs. Check provider configuration and retry /model.' }])
+    expect(h.shown).toHaveLength(0)
   })
 })

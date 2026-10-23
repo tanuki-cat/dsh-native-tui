@@ -10,6 +10,7 @@
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { ownStoredSessions, selectListedSessions } from '../../runtime/session-list.js'
 import { formatLocalTimestamp } from '../format-time.js'
+import { showSearchChoice } from '../dialogs.js'
 import type { CommandContext } from './context.js'
 import { NL, errorMessage } from './shared.js'
 
@@ -19,6 +20,28 @@ export const MAX_LISTED_SESSIONS = 12
 /** The persisted-session service, narrowed to what the list needs. */
 interface SessionPersistence {
   list(): Promise<readonly { header: { id: SessionId; cwd?: string; createdAt: number; origin?: string } }[]>
+}
+
+/** Switch without replacing the text currently being composed. */
+export async function pickStoredSession(ctx: CommandContext): Promise<string | undefined> {
+  const persistence = ctx.host.get('sessionPersistence') as SessionPersistence | undefined
+  if (persistence === undefined) {
+    ctx.notice('warning', 'Session persistence is unavailable.')
+    return undefined
+  }
+  try {
+    const registry = ctx.host.get('workspaceRegistry') as { readonly archivedSessionIds: readonly string[] } | undefined
+    const rows = ownStoredSessions((await persistence.list()).map(row => row.header))
+      .filter(row => !registry?.archivedSessionIds.includes(row.id))
+    const { shown } = selectListedSessions(rows, ctx.active.id, 100)
+    return await showSearchChoice(ctx.tui, ctx.palette, 'Switch session · drafts stay with their session', shown.map(row => ({
+      value: row.id, label: (row.id === ctx.active.id ? '* ' : '  ') + row.id,
+      description: (row.cwd ?? '') + ' · ' + formatLocalTimestamp(row.createdAt),
+    })), 'Type to filter · Enter switches · Esc cancels', ctx.signal)
+  } catch (error) {
+    ctx.notice('error', 'Could not list sessions: ' + errorMessage(error))
+    return undefined
+  }
 }
 
 /** The `/sessions` command. */

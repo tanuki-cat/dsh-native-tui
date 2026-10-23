@@ -51,6 +51,16 @@ describe('globalShortcut', () => {
     expect(globalShortcut('\x1b[111;5:3u', state())).toBeUndefined()
   })
 
+  it('keeps draft-preserving session shortcuts scoped to the editor', () => {
+    for (const data of ['\x0e', '\x1b[110;5u']) {
+      expect(globalShortcut(data, state({ editorHasText: true }))).toBe('new-session')
+      expect(globalShortcut(data, state({ editorFocused: false }))).toBeUndefined()
+    }
+    expect(globalShortcut('\x1bs', state({ editorHasText: true }))).toBe('pick-session')
+    expect(globalShortcut('\x1bs', state({ editorFocused: false }))).toBeUndefined()
+    expect(globalShortcut('\x1b[110;5:3u', state())).toBeUndefined()
+  })
+
   it('maps Ctrl+D to exit and ignores other input', () => {
     for (const data of ['\x04', '\x1b[100;5u']) expect(globalShortcut(data, state({ running: true }))).toBe('exit')
     expect(globalShortcut('a', state({ running: true }))).toBeUndefined()
