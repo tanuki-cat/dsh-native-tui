@@ -24,7 +24,7 @@ export type TranscriptEntry =
 import type { Palette } from './theme.js'
 import type { DisplayMode } from '../config.js'
 import { resultFileDiffs, type FileDiff } from './diff.js'
-import { clip } from './tool-preview.js'
+import { clip, ptcCallLine } from './tool-preview.js'
 import { AssistantStream, type AssistantPart } from './transcript-stream.js'
 import { isCodeExecutionTool } from './transcript-render.js'
 import { trimTranscriptWindow } from './transcript-window.js'
@@ -35,6 +35,13 @@ import { trimTranscriptWindow } from './transcript-window.js'
  * card; showing every one would duplicate what that result already summarizes.
  */
 const PTC_CARD_TOOLS: ReadonlySet<string> = new Set(['write', 'edit'])
+
+/**
+ * Dispatch rows one compact `run_code` card keeps. A program can call the same
+ * file tools hundreds of times; the card lists the distinct calls it has room
+ * for and counts the rest instead of growing past the viewport.
+ */
+const COMPACT_CALL_LINES = 10
 
 /** One rendered transcript row. */
 export type TranscriptBlock = ({
@@ -62,6 +69,14 @@ export type TranscriptBlock = ({
   /** Tool output was pruned from the model-visible surface. */
   readonly pruned?: boolean
   readonly diffs?: readonly FileDiff[]
+  /**
+   * Distinct sub-calls a `run_code` program dispatched, as compact rows such as
+   * `read src/a.ts` or `mcp idea`. Only compact code-execution cards collect
+   * them; a detailed card shows the program source instead.
+   */
+  readonly callLines?: readonly string[]
+  /** Distinct sub-calls left out of {@link callLines} past the row budget. */
+  readonly callLinesOmitted?: number
 } | {
   readonly kind: 'notice'; readonly tone: 'info' | 'warning' | 'error'; readonly text: string
 } | {
@@ -282,6 +297,34 @@ export function createTranscriptReducer(options: TranscriptOptions) {
     children.add(subCallId)
     ptcByParent.set(parentCallId, children)
   }
+  /** Distinct compact call rows already recorded per `run_code`, including omitted ones. */
+  const seenPtcLines = new Map<string, Set<string>>()
+  /**
+   * Record one PTC sub-call on the compact card of the `run_code` that ran it.
+   *
+   * File-editing sub-calls already get their own card, so they stay out of the
+   * list. Rows are deduplicated: a program that reads the same file repeatedly
+   * still shows it once, and the row budget keeps a busy program's card bounded.
+   * @param rootCallId - `run_code` call the dispatch belongs to.
+   * @param name - sub-call tool name.
+   * @param args - sub-call arguments as the durable event reports them.
+   */
+  const rememberPtcCall = (rootCallId: string | undefined, name: string, args: string): void => {
+    if (rootCallId === undefined || PTC_CARD_TOOLS.has(name)) return
+    const index = toolByCall.get(rootCallId)
+    if (index === undefined) return
+    const parent = blocks[index]
+    if (parent?.kind !== 'tool' || parent.name !== 'run_code') return
+    const line = ptcCallLine(name, args)
+    const seen = seenPtcLines.get(rootCallId) ?? new Set<string>()
+    seenPtcLines.set(rootCallId, seen)
+    if (seen.has(line)) return
+    seen.add(line)
+    const prior = parent.callLines ?? []
+    blocks[index] = prior.length >= COMPACT_CALL_LINES
+      ? { ...parent, callLinesOmitted: (parent.callLinesOmitted ?? 0) + 1 }
+      : { ...parent, callLines: [...prior, line] }
+  }
   /**
    * Why an open compaction ended at this event, or undefined when it does not
    * close one.
@@ -444,6 +487,12 @@ export function createTranscriptReducer(options: TranscriptOptions) {
         const diffs = settle ? resultFileDiffs(data?.meta, args) : undefined
         const pruned = subCallId === undefined || prunedSeqs.has(seq) || prunedCalls.has(subCallId)
           || (parentCallId !== undefined && prunedCalls.has(parentCallId))
+        // A compact parent card lists what its program dispatched; a detailed
+        // card shows the program source and ignores these rows.
+        if (runCodeDisplay === 'compact' && !pruned) {
+          const rootCallId = typeof data?.rootCallId === 'string' ? data.rootCallId : parentCallId
+          rememberPtcCall(rootCallId, name, args)
+        }
         // Only file-editing sub-calls need their own card; the rest are already
         // summarized by the parent run_code result.
         if (subCallId !== undefined && !pruned && (PTC_CARD_TOOLS.has(name) || diffs !== undefined)) {

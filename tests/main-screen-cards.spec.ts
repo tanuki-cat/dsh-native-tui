@@ -99,6 +99,31 @@ describe('main-screen card lifecycle', () => {
     expect(redrawsForSwap(pending, settled)).toBe(0)
   })
 
+  it('grows a compact run_code call list without a full repaint', () => {
+    // A compact card keeps its head fixed and appends one row per distinct
+    // sub-call, so the rows that change are the card's own tail.
+    const compact = { ...options, runCodeDisplay: 'compact' as const }
+    const base: TranscriptBlock = {
+      kind: 'tool', callId: 'c1', name: 'run_code', args: JSON.stringify({ description: 'Explore' }), pending: true,
+      callLines: ['read src/a.ts'],
+    }
+    const tui = new TuiMainScreen(new FakeTerminal(100, 30) as never, false)
+    const root = new Container()
+    root.addChild(new Text(FILLER, 0, 0))
+    root.addChild(renderTranscriptBlock(base, compact))
+    root.addChild(new Text(TRAILING, 0, 0))
+    tui.addChild(root)
+    tui.start()
+    tui.renderNow()
+    const baseline = tui.fullRedraws
+    const grown: TranscriptBlock = { ...base, callLines: ['read src/a.ts', 'bash ls -la', 'mcp idea'], pending: false }
+    root.removeChild(root.children[1]!)
+    root.children.splice(1, 0, renderTranscriptBlock(grown, compact))
+    tui.renderNow()
+    expect(tui.fullRedraws - baseline).toBe(0)
+    tui.stop()
+  })
+
   it('patches a compaction card whose state moves to the tail row', () => {
     // A long summary makes the card taller than the viewport, so its head row
     // sits above the visible area once the card has settled.

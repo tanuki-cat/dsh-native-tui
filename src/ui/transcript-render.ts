@@ -15,7 +15,7 @@ import { BarText } from './bar-text.js'
 import { highlightCode } from './code-preview.js'
 import { renderWriteCard } from './write-card.js'
 import { diffLines } from './diff.js'
-import { clip, compactCodeExecutionPreview, formatToolArguments } from './tool-preview.js'
+import { clip, compactCodeExecutionPreview, compactErrorPreview, formatToolArguments } from './tool-preview.js'
 import type { TranscriptBlock, TranscriptOptions } from './transcript.js'
 
 /** Tools whose cards follow the code-execution density setting. */
@@ -285,6 +285,23 @@ export function renderTranscriptBlock(block: TranscriptBlock, options: Transcrip
       if (isCodeExecutionTool(block.name) && (options.runCodeDisplay ?? 'detailed') === 'compact') {
         const container = new Container()
         container.addChild(new Text(palette.bold(palette.accent('⚙ ' + block.name)), 0, 0))
+        // A PTC `run_code` card names the tools its program dispatched. The
+        // program source itself is the detailed card's job; here the call rows
+        // are what tells the reader which files the turn touched.
+        const callLines = block.callLines ?? []
+        if (callLines.length > 0) {
+          for (const line of callLines) container.addChild(new Text(palette.dim('├ ' + line), 0, 0))
+          const omitted = block.callLinesOmitted ?? 0
+          if (omitted > 0) container.addChild(new Text(palette.dim('├ … ' + String(omitted) + ' more'), 0, 0))
+          // The call list replaces the result summary, so a failure would read
+          // only `error`; the message is the one line it must keep.
+          if (block.isError === true) {
+            const message = compactErrorPreview(block.result)
+            if (message !== '') container.addChild(new Text(palette.error('├ ✕ ' + message), 0, 0))
+          }
+          container.addChild(new Text(status, 0, 0))
+          return container
+        }
         const preview = compactCodeExecutionPreview(block)
         container.addChild(new Text((preview === '' ? '' : palette.dim('├ ' + preview) + '\n') + status, 0, 0))
         return container

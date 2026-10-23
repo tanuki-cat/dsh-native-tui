@@ -264,6 +264,99 @@ describe('reduceTranscript', () => {
     })
   })
 
+  it('lists the tools a compact run_code dispatched', () => {
+    const entries: TranscriptEntry[] = [
+      durable('tool/call', {
+        turn: 1,
+        step: 1,
+        callId: 'call-outer',
+        name: 'run_code',
+        arguments: JSON.stringify({ description: 'Explore', code: 'const files = 1' }),
+      }, 1),
+      ptcStart('call-outer:ptc:1', 'read', { file_path: 'src/a.ts' }, 2),
+      ptcStart('call-outer:ptc:2', 'read', { file_path: 'src/a.ts' }, 3),
+      ptcStart('call-outer:ptc:3', 'bash', { command: 'ls -la' }, 4),
+      ptcStart('call-outer:ptc:4', 'mcp__idea__get_file_problems', { file_path: 'src/a.ts' }, 5),
+      ptcStart('call-outer:ptc:5', 'edit', { file_path: 'src/b.ts' }, 6),
+      toolResult('call-outer', 'done', 7),
+    ]
+    const compactOptions = { ...options, runCodeDisplay: 'compact' as const }
+    const compact = reduceTranscript(entries, compactOptions)
+    const parent = compact.find(block => block.kind === 'tool' && block.callId === 'call-outer')
+    // Repeated reads collapse, and an editing sub-call keeps its own card
+    // instead of repeating in the list.
+    expect(parent).toMatchObject({
+      kind: 'tool',
+      name: 'run_code',
+      callLines: ['read src/a.ts', 'bash ls -la', 'mcp idea'],
+    })
+    const output = renderTranscriptBlock(parent!, compactOptions).render(100).join('\n')
+    expect(output).toContain('⚙ run_code')
+    expect(output).toContain('├ read src/a.ts')
+    expect(output).toContain('├ bash ls -la')
+    expect(output).toContain('├ mcp idea')
+    expect(output).toContain('└ done')
+    expect(output).not.toContain('const files = 1')
+    expect(output).not.toContain('├ edit')
+
+    const detailedParent = reduceTranscript(entries, options)
+      .find(block => block.kind === 'tool' && block.callId === 'call-outer')
+    expect(detailedParent).not.toHaveProperty('callLines')
+    const detailedOutput = renderTranscriptBlock(detailedParent!, options).render(100).join('\n')
+    expect(detailedOutput).toContain('⚙ run_code · Explore')
+    expect(detailedOutput).toContain('const files = 1')
+  })
+
+  it('bounds the compact call list of a busy run_code', () => {
+    const entries: TranscriptEntry[] = [
+      durable('tool/call', { turn: 1, step: 1, callId: 'call-outer', name: 'run_code', arguments: '{}' }, 1),
+      ...Array.from({ length: 12 }, (_, index) => ptcStart(
+        'call-outer:ptc:' + String(index),
+        'read',
+        { file_path: 'src/' + String(index) + '.ts' },
+        index + 2,
+      )),
+      toolResult('call-outer', 'done', 20),
+    ]
+    const compactOptions = { ...options, runCodeDisplay: 'compact' as const }
+    const parent = reduceTranscript(entries, compactOptions)
+      .find(block => block.kind === 'tool' && block.callId === 'call-outer')
+    expect(parent).toMatchObject({ callLinesOmitted: 2 })
+    expect(parent !== undefined && parent.kind === 'tool' ? parent.callLines : undefined).toHaveLength(10)
+    const output = renderTranscriptBlock(parent!, compactOptions).render(100).join('\n')
+    expect(output).toContain('├ … 2 more')
+  })
+
+  it('keeps the failure message on a compact run_code that lists calls', () => {
+    const entries: TranscriptEntry[] = [
+      durable('tool/call', {
+        turn: 1,
+        step: 1,
+        callId: 'call-outer',
+        name: 'run_code',
+        arguments: JSON.stringify({ description: 'Explore', code: 'await tools.read({})' }),
+      }, 1),
+      ptcStart('call-outer:ptc:1', 'read', { file_path: 'missing.ts' }, 2),
+      durable('tool/result', {
+        turn: 1,
+        step: 1,
+        message: {
+          source: { callId: 'call-outer' },
+          content: [{ type: 'text', text: 'Error: ENOENT: no such file or directory, open missing.ts' }],
+          isError: true,
+        },
+      }, 3),
+    ]
+    const compactOptions = { ...options, runCodeDisplay: 'compact' as const }
+    const parent = reduceTranscript(entries, compactOptions)
+      .find(block => block.kind === 'tool' && block.callId === 'call-outer')
+    const output = renderTranscriptBlock(parent!, compactOptions).render(100).join('\n')
+    expect(output).toContain('├ read missing.ts')
+    expect(output).toContain('├ ✕ Error: ENOENT: no such file or directory, open missing.ts')
+    expect(output).toContain('└ error')
+    expect(output).not.toContain('await tools.read')
+  })
+
   it('rebuilds a created file diff from the native write call arguments', () => {
     const entries: TranscriptEntry[] = [
       durable('tool/call', {
