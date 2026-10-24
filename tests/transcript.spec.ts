@@ -222,11 +222,11 @@ describe('reduceTranscript', () => {
       diffs: [{ path: 'a.ts', oldText: 'old', newText: 'new' }],
     })
     const output = renderTranscriptBlock(blocks[1]!, options).render(100).join('\n')
-    expect(output).toContain('⚙ edit · a.ts')
+    expect(output).toContain('edit a.ts')
     expect(output).not.toContain('├ args')
     expect(output).not.toContain('updated a.ts')
-    expect(output).toContain('│ - old')
-    expect(output).toContain('│ + new')
+    expect(output).toContain('- 1 old')
+    expect(output).toContain('+ 1 new')
   })
 
   it('settles a PTC edit card whose start left the window', () => {
@@ -634,7 +634,7 @@ describe('reduceTranscript', () => {
     expect(hidden.some(block => block.kind === 'tool')).toBe(false)
   })
 
-  it('applies code-execution density to shell tool cards', () => {
+  it('keeps pi-style shell previews and honors hidden code execution', () => {
     const shellEntries = (callId: string, name: string, args: unknown): TranscriptEntry[] => [
       durable('tool/call', { turn: 1, step: 1, callId, name, arguments: JSON.stringify(args) }, 1),
       durable('tool/result', {
@@ -648,16 +648,16 @@ describe('reduceTranscript', () => {
       const renderer = new TranscriptRenderer({ ...options, runCodeDisplay: 'compact' })
       renderer.set(entries, [])
       const output = renderer.container.render(100).join('\n')
-      expect(output).toContain('⚙ ' + name)
+      expect(output).toContain(name === 'pwsh' ? 'PS> ls -la' : '$ ls -la')
       expect(output).toContain('List files')
       expect(output).toContain('file.txt')
       expect(output).not.toContain('├ args')
-      expect(output).not.toContain('second line')
+      expect(output).toContain('second line')
 
       const hiddenRenderer = new TranscriptRenderer({ ...options, runCodeDisplay: 'hidden' })
       hiddenRenderer.set(entries, [])
       const hiddenOutput = hiddenRenderer.container.render(100).join('\n')
-      expect(hiddenOutput).not.toContain('⚙ ' + name)
+      expect(hiddenOutput).not.toContain(name === 'pwsh' ? 'PS> ls -la' : '$ ls -la')
       expect(hiddenOutput).not.toContain('file.txt')
     }
 

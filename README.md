@@ -13,7 +13,7 @@ Session、模型、工具、审批、压缩、MCP、插件都由 Host 提供，�
 
 - Node `^22.19.0 || >=24.0.0`
 - pnpm（仓库使用 `pnpm-lock.yaml`，不要用 npm / yarn）
-- 全局安装的 `dsh` 0.2.1-rc.2
+- 全局安装的 `dsh` 0.2.1-rc.3
 
 ### 安装
 
@@ -105,7 +105,10 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 - token 用量与 cache 命中率按 Web 口径：总量取四桶之和、部分命中不会显示成 100%，数字格式与 Web 统计 pill 一致。`tok/s` 是整段 Session 的累计 decode 速率（`decodeTokens / (decodeMs / 1000)`），不是瞬时速率，低于 10 时保留一位小数。
 - 可选 `fullscreen`：TuiAltScreen + ScrollView，header/status/editor 固定，鼠标滚轮滚动、文本选择复制。向上滚动离开末尾后，视口末行显示可点击的 `↓ jump to latest`，点击回到最新消息并恢复自动跟随（也可 `Ctrl+End`）。
 - 长会话渲染优化：每个行组件按宽度缓存结果（`MemoBlock`），`maxTranscriptEntries` 默认 600 限制每帧保留的行组件数；帧间隔按上次绘制时刻对齐并按实测帧成本自适应，内容签名未变的帧跳过重绘。
-- 卡片首行（`⚙ name`、`◆ assistant`、`◆ compaction`）在卡片创建后不再变化。main-screen 只能 patch 可见行，改写已滚入 scrollback 的首行会让 pi-tui 清屏并重写整份 transcript，因此运行状态一律放在卡片尾行或底部状态行。
+- 工具卡片按类型展示：shell 为 `$ command` / `PS> command`，文件工具为 `read path` / `write path` / `edit path`，MCP 为 `mcp service/tool`，PTC 保留 `⚙ run_code`。shell 首行最多 120 字符，多行命令标记省略行数；路径与查询等标签最多 160 字符，路径保留末尾。展开后查看原命令，正文仍有安全预览上限。
+- 成功的 read 默认收起，write 显示源码预览，shell 保留末尾 5 个视觉行，通用结果保留前 10 个视觉行；折叠状态仍预览错误正文。edit 使用 Host 实际变更元数据，展示行号与改动附近上下文，整文件替换的折叠预览同时保留删除和新增样本。
+- 卡片首行在 pending 到结算期间保持稳定，运行状态放在尾行或底部状态行。默认 main-screen 不支持点击卡片；fullscreen 下点击卡片首行可单独展开/收起。`Ctrl+O` 在两种模式下均切换所有保留工具卡片。
+- **main-screen 手动全局展开的代价**：视口上方的历史卡片高度变化时，pi-tui 会整屏重绘并清除终端 scrollback；Session 日志不受影响。这不属于自动结算零重绘的保证范围。只查看单次完整输出时，可使用 `/tools`、`/tool <index>` 的独立预览，避免全局重排。
 
 ### 输入与补全
 
@@ -142,12 +145,19 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 
 `Enter` 发送；运行中 `Enter` 作为 steer；`Ctrl+C` 取消/退出；`Ctrl+D` 退出。
 
+| 快捷键 | 作用 |
+|---|---|
+| `Ctrl+O` | 展开/收起所有保留的工具卡片；main-screen 可能重绘历史并清除终端 scrollback |
+| 点击工具卡片首行 | 仅 fullscreen：切换单张卡片的展开状态 |
+| `Ctrl+N` | 打开同 workspace、preset 的空白 Session，没有匹配项时新建 |
+| `Alt+S` | 打开 Session 选择器，切换时保留各自的草稿与附件 |
+
 ### 会话与界面
 
 | 命令 | 作用 |
 |---|---|
 | `/help` | 本地命令、宿主命令、按键提示 |
-| `/new` | 创建新 Session 并切换 |
+| `/new` | 复用当前进程访问过的同 workspace、preset 空白 Session，或新建后切换 |
 | `/init` | 在当前项目生成 `AGENTS.md` 贡献指南（已存在则不覆盖） |
 | `/sessions` | 列出本终端创建的 Session |
 | `/resume <id>` | 恢复指定 Session |
@@ -206,7 +216,7 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
     cwd: /path/to/workspace
     showReasoning: true           # legacy boolean；false 等价于 thinkingDisplay: hidden
     thinkingDisplay: detailed     # hidden | compact | detailed
-    runCodeDisplay: detailed      # run_code/bash/pwsh 卡片：hidden | compact | detailed
+    runCodeDisplay: detailed      # hidden 隐藏代码执行；compact/detailed 选择 PTC 预览，shell 输出默认保留末尾 5 行
     maxTranscriptEntries: 600     # 每帧重绘的行预算；越大流式帧越慢
     fullscreen: false             # true 使用 alt-screen + 鼠标/应用滚动
     theme: auto                   # auto | dark | light | plain
@@ -460,7 +470,7 @@ pnpm test:watch
 pnpm build      # tsc -p tsconfig.build.json → dist/（gitignored）
 ~~~
 
-当前状态：64 个测试文件 / 729 个用例。代码风格见仓库根目录 `AGENTS.md`：TypeScript ESM（NodeNext），两空格缩进、单引号、无分号，单个源文件不超过 1000 行。
+当前状态：70 个测试文件 / 802 个用例。代码风格见仓库根目录 `AGENTS.md`：TypeScript ESM（NodeNext），两空格缩进、单引号、无分号，单个源文件不超过 1000 行。
 
 ### 真实 Host 探针
 
@@ -471,7 +481,7 @@ pnpm build      # tsc -p tsconfig.build.json → dist/（gitignored）
 ~~~sh
 pnpm build
 pnpm pack --pack-destination .tmp
-DSH_HOME=/tmp/dsh-native-tui-approval-home dsh plugin --profile tui add .tmp/dsh-native-tui-0.2.1-rc.2.tgz
+DSH_HOME=/tmp/dsh-native-tui-approval-home dsh plugin --profile tui add .tmp/dsh-native-tui-0.2.1-rc.3.tgz
 DSH_HOME=/tmp/dsh-native-tui-approval-home node scripts/fake-tty-approval.mjs
 ~~~
 
@@ -526,7 +536,7 @@ python3 scripts/pty-smoke.py
 
 ## 兼容性
 
-- 已在全局 dsh 0.2.1-rc.2 上安装并启动；生产与开发依赖统一为 0.2.1-rc.2。
+- 已在全局 dsh 0.2.1-rc.3 上通过真实 Host 探针；生产与开发的 DSH 依赖统一为 0.2.1-rc.3。
 - Preset patch 从 `@deepseek-ai/dsh-web-app` 的 standard/ptc/minimal/cordis 复制而来：standard/ptc/minimal 需要 `subagent-model-selection-settings` Host 行，cordis 需要 cordis host-runner 与 `tool-cordis/host`。
 - `@file` 补全依赖 `@deepseek-ai/dsh-file-reference-local`。
 - pi-tui 1.4.0；Node `^22.19.0 || >=24.0.0`。

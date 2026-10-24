@@ -846,9 +846,9 @@ export async function startTerminalApp(
       })
       return { consume: true }
     }
-    if (shortcut === 'toggle-write-preview') {
+    if (shortcut === 'toggle-tool-previews') {
       if (tui.hasOverlay()) return undefined
-      renderer.toggleWritePreview()
+      renderer.toggleToolPreviews()
       tui.requestRender()
       return { consume: true }
     }

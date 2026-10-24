@@ -1,9 +1,12 @@
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:http'
-import { mkdirSync, symlinkSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 mkdirSync('.tmp', { recursive: true })
-rmSync('.tmp/native-diff-demo.txt', { force: true })
-const home = '/tmp/dsh-native-tui-native-diff-home'
+const workspace = mkdtempSync('.tmp/native-diff-')
+const file = workspace + '/demo.txt'
+const home = mkdtempSync(join(tmpdir(), 'dsh-native-tui-native-diff-'))
 mkdirSync(home + '/profiles/tui', { recursive: true })
 const previewTail = 'WRITE-CONTENT-LAST-LINE'
 const content = ['before', ...Array.from({ length: 81 }, (_, index) => 'write-line-' + String(index + 2)), previewTail].join('\n')
@@ -35,7 +38,7 @@ const server = createServer((req, res) => {
           index: 0,
           id: 'call-native-write',
           type: 'function',
-          function: { name: 'write', arguments: JSON.stringify({ file_path: '.tmp/native-diff-demo.txt', content }) },
+          function: { name: 'write', arguments: JSON.stringify({ file_path: file, content }) },
         }] }, finish_reason: null }] })
         send({ ...base(), choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })
       }
@@ -44,7 +47,7 @@ const server = createServer((req, res) => {
           index: 0,
           id: 'call-native-edit',
           type: 'function',
-          function: { name: 'edit', arguments: JSON.stringify({ file_path: '.tmp/native-diff-demo.txt', old_string: 'before', new_string: 'after' }) },
+          function: { name: 'edit', arguments: JSON.stringify({ file_path: file, old_string: 'before', new_string: 'after' }) },
         }] }, finish_reason: null }] })
         send({ ...base(), choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })
       }
@@ -105,7 +108,7 @@ const child = spawn(process.execPath, ['scripts/fake-tty-entry.mjs', '--profile'
 let out = '', err = ''
 child.stdout.on('data', d => { out += String(d) })
 child.stderr.on('data', d => { err += String(d) })
-const strip = text => text.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
+const strip = text => text.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/[ \t]+/g, ' ')
 let phase = 0
 let seenAt = 0
 let collapseOffset = 0
@@ -126,7 +129,7 @@ const tick = setInterval(() => {
     phase = 3
     try { child.stdin.write('\x0f') } catch {}
   }
-  else if (phase === 3 && strip(out.slice(collapseOffset)).includes('ctrl+o to expand') && text.includes('│ + after')) {
+  else if (phase === 3 && strip(out.slice(collapseOffset)).includes('ctrl+o to expand') && text.includes('+ 1 after')) {
     collapsedAgain = true
     phase = 4
     seenAt = Date.now()
@@ -134,22 +137,26 @@ const tick = setInterval(() => {
   else if (phase === 4 && Date.now() - seenAt > 800) { phase = 5; try { child.stdin.write('\x04') } catch {} }
 }, 200)
 const hard = setTimeout(() => { try { child.kill('SIGTERM') } catch {} }, 30000)
-child.on('exit', (code, signal) => {
-  clearInterval(tick); clearTimeout(hard); server.close()
+child.on('close', async (code, signal) => {
+  clearInterval(tick); clearTimeout(hard)
+  server.closeAllConnections()
+  await new Promise(resolve => server.close(resolve))
   const clean = strip(out)
   const pass = code === 0 && signal === null && phase === 5
     && collapsedInitially && expanded && collapsedAgain
-    && clean.includes('write .tmp/native-diff-demo.txt')
-    && clean.includes('⚙ edit · .tmp/native-diff-demo.txt')
+    && clean.includes('write ' + file)
+    && clean.includes('edit ' + file)
     && !clean.includes('⚙ write')
     && !clean.includes('├ args') && !clean.includes('├ result')
-    && !clean.includes('│ + before')
-    && clean.includes('│ - before')
-    && clean.includes('│ + after')
+    && !clean.includes('+ 1 before')
+    && clean.includes('- 1 before')
+    && clean.includes('+ 1 after')
     && !clean.includes('⚙ run_code')
   console.log('EXIT', code, signal, 'phase', phase, 'collapsedInitially', collapsedInitially, 'expanded', expanded, 'collapsedAgain', collapsedAgain, 'pass', pass)
   console.log(clean.slice(-14000))
   console.log('--- STDERR ---')
   console.log(err.slice(-4000))
+  rmSync(workspace, { recursive: true, force: true })
+  rmSync(home, { recursive: true, force: true })
   process.exit(pass ? 0 : 1)
 })

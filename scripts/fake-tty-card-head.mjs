@@ -135,7 +135,7 @@ child.stdout.on('data', data => {
     setTimeout(() => { try { child.stdin.write('tool' + String.fromCharCode(13)) } catch {} }, 1200)
     return
   }
-  if (phase === 2 && text.includes('⚙ bash')) {
+  if (phase === 2 && text.includes('$ ')) {
     phase = 3
     setTimeout(() => { try { child.stdin.write('answer' + String.fromCharCode(13)) } catch {} }, 1500)
     return
@@ -151,7 +151,7 @@ child.on('exit', code => {
   server.close()
   const clean = strip(out)
   const clears = (out.match(/\x1b\[2J/g) ?? []).length
-  const cardSeen = clean.includes('TOOL_LATE_OK') || clean.includes('⚙ bash')
+  const cardSeen = clean.includes('TOOL_LATE_OK') || clean.includes('$ ')
   const answerSeen = clean.includes('TOOL LATE DONE')
   const pass = code === 0 && clears === 0 && cardSeen && answerSeen
   console.log('EXIT', code, 'phase', phase, 'clears', clears, 'cardSeen', cardSeen, 'answerSeen', answerSeen, 'pass', pass)

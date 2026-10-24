@@ -9,11 +9,12 @@
  * @module dsh-native-tui/ui/transcript-renderer
  */
 
-import { Container, Spacer, type Component } from '@earendil-works/pi-tui'
+import { Container, Spacer, type Component, type TuiMouseEvent, type TuiMouseEventResult } from '@earendil-works/pi-tui'
 import { Rule } from './rule.js'
 import type { DisplayMode } from '../config.js'
 import { createTranscriptReducer, type TranscriptBlock, type TranscriptEntry, type TranscriptOptions } from './transcript.js'
 import { AssistantMessage } from './assistant-message.js'
+import { ToolCard } from './tool-card.js'
 import { isCodeExecutionTool, renderTranscriptBlock } from './transcript-render.js'
 
 /**
@@ -50,10 +51,23 @@ class MemoBlock implements Component {
   }
 
   update(block: TranscriptBlock): boolean {
-    if (!(this.inner instanceof AssistantMessage) || block.kind !== 'assistant') return false
-    this.inner.update(block)
+    if (this.inner instanceof AssistantMessage && block.kind === 'assistant') this.inner.update(block)
+    else if (this.inner instanceof ToolCard && block.kind === 'tool') this.inner.update(block)
+    else return false
     this.lines = undefined
     return true
+  }
+
+  setExpanded(expanded: boolean): void {
+    if (!(this.inner instanceof ToolCard)) return
+    this.inner.setExpanded(expanded)
+    this.lines = undefined
+  }
+
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    const result = this.inner.handleMouse?.(event)
+    if (result?.handled) this.lines = undefined
+    return result
   }
 
   invalidate(): void {
@@ -226,11 +240,11 @@ export class TranscriptRenderer {
     this.rebuild()
   }
 
-  /** Toggle file-content previews without reparsing unchanged history components. */
-  toggleWritePreview(): void {
-    this.options = { ...this.options, writeExpanded: !this.options.writeExpanded }
-    for (const [key, cached] of this.cached) {
-      if (cached.block.kind === 'tool' && cached.block.name === 'write') this.cached.delete(key)
+  /** Toggle tool previews while preserving component identity and non-tool caches. */
+  toggleToolPreviews(): void {
+    this.options = { ...this.options, toolsExpanded: !this.options.toolsExpanded }
+    for (const cached of this.cached.values()) {
+      if (cached.block.kind === 'tool' && cached.component instanceof MemoBlock) cached.component.setExpanded(this.options.toolsExpanded ?? false)
     }
     this.paintedBlocks = undefined
     this.rebuild()

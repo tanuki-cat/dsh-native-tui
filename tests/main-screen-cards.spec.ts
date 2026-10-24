@@ -78,6 +78,37 @@ function redrawsForSwap(before: TranscriptBlock, after: TranscriptBlock): number
 }
 
 describe('main-screen card lifecycle', () => {
+  it.each(['above', 'visible'] as const)('measures explicit global expansion with cards %s the viewport', placement => {
+    const terminal = new FakeTerminal(100, 30)
+    const written: string[] = []
+    terminal.write = (text?: string) => { if (text !== undefined) written.push(text) }
+    const tui = new TuiMainScreen(terminal as never, false)
+    const renderer = new TranscriptRenderer(options)
+    renderer.set([], [{ kind: 'tool', callId: 'manual', name: 'read', args: '{"file_path":"a.ts"}', pending: false, result: 'READ_1\nREAD_2\nREAD_3' }])
+    const root = new Container()
+    if (placement === 'visible') root.addChild(new Text(FILLER, 0, 0))
+    root.addChild(renderer.container)
+    if (placement === 'above') root.addChild(new Text(FILLER, 0, 0))
+    root.addChild(new Text(TRAILING, 0, 0))
+    tui.addChild(root)
+    try {
+      tui.start()
+      tui.renderNow()
+      let count = tui.fullRedraws
+      written.splice(0)
+      renderer.toggleToolPreviews()
+      tui.renderNow()
+      expect(tui.fullRedraws - count).toBe(placement === 'above' ? 1 : 0)
+      expect(written.join('').includes('\x1b[3J')).toBe(placement === 'above')
+      expect(renderer.container.render(100).join('\n')).toContain('READ_3')
+      count = tui.fullRedraws
+      renderer.toggleToolPreviews()
+      tui.renderNow()
+      expect(tui.fullRedraws - count).toBe(placement === 'above' ? 1 : 0)
+      expect(renderer.container.render(100).join('\n')).not.toContain('READ_3')
+    } finally { tui.stop() }
+  })
+
   it('patches a tool card whose status moves to the tail row', () => {
     const args = JSON.stringify({ command: 'ls', note: Array.from({ length: 30 }, (_, i) => 'n' + String(i)).join('\n') })
     const pending: TranscriptBlock = { kind: 'tool', callId: 'c1', name: 'bash', args, pending: true }

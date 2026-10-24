@@ -109,7 +109,7 @@ const tick = setInterval(() => {
     phase = 1
     try { child.stdin.write('run the PTC diff probe\r') } catch {}
   }
-  else if (phase === 1 && text.includes('│ + after')) {
+  else if (phase === 1 && text.includes('+ 1 after')) {
     phase = 2
     seenAt = Date.now()
   }
@@ -124,11 +124,11 @@ child.on('exit', (code, signal) => {
   const clean = strip(out)
   const pass = code === 0 && signal === null && phase === 3
     && clean.includes('write ' + file)
-    && clean.includes('⚙ edit · ' + file)
+    && clean.includes('edit ' + file)
     && !clean.includes('⚙ write')
-    && !clean.includes('│ + before')
-    && clean.includes('│ - before')
-    && clean.includes('│ + after')
+    && !clean.includes('+ 1 before')
+    && clean.includes('- 1 before')
+    && clean.includes('+ 1 after')
   console.log('EXIT', code, signal, 'phase', phase, 'pass', pass)
   console.log(clean.slice(-14000))
   console.log('--- STDERR ---')

@@ -85,7 +85,7 @@ export const TUI_SETTINGS: readonly TuiSetting[] = [
     key: 'runCodeDisplay',
     label: 'Code execution',
     section: 'Display',
-    description: 'run_code, bash, and pwsh calls render as hidden, a summary, or full arguments and output.',
+    description: 'Hide code-execution calls or choose compact/detailed PTC previews. Shell output keeps five tail rows; Ctrl+O expands tools.',
     apply: 'live',
     kind: 'choice',
     options: DISPLAY_MODES,

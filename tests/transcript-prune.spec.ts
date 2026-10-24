@@ -54,7 +54,7 @@ describe('model-context pruning in the transcript', () => {
   })
 
   it('coalesces a batch across incremental appends and paints', () => {
-    const renderer = new TranscriptRenderer(options)
+    const renderer = new TranscriptRenderer({ ...options, toolsExpanded: true })
     const entries = [...original]
     renderer.set(entries, [])
     for (const entry of batch) {

@@ -164,7 +164,7 @@ child.on('exit', (code, signal) => {
   // so the check is positional — no `thinking …` may be painted after the tool
   // card that replaced it.
   const final = strip(out)
-  const lastTool = final.lastIndexOf('⚙ bash')
+  const lastTool = final.lastIndexOf('$ ')
   const afterTool = lastTool === -1 ? '' : final.slice(lastTool)
   const placeholderWithTool = afterTool.includes('thinking …') ? [final] : []
   // The chunk order is the premise the fix rests on: a reasoning block opens

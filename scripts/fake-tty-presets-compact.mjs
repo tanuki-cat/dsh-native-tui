@@ -154,16 +154,14 @@ let failed = false
 for (const testCase of CASES) {
   const { code, signal, phase, clean, file } = await runCase(testCase)
   const checks = {
-    'bash compact card': clean.includes('⚙ bash'),
+    'pi-style shell card': clean.includes('$ ls'),
     'bash description in card': clean.includes('List files'),
     'no PTC call rows': !/├ read |├ mcp |├ bash ls/u.test(clean),
     'no program source': !clean.includes('await tools.'),
     'assistant reply': clean.includes(testCase.preset.toUpperCase() + ' COMPACT DONE'),
   }
   if (testCase.steps.includes('read')) {
-    // `read` is not a code-execution tool, so compact leaves its generic card
-    // (head + args + status) alone.
-    checks['read keeps generic card'] = clean.includes('⚙ read') && clean.includes('├ args')
+    checks['read stays collapsed'] = clean.includes('read ' + file) && clean.includes('ctrl+o to expand') && !clean.includes('├ args')
     checks['read path shown'] = clean.includes(file)
   }
   const pass = code === 0 && signal === null && phase === 3 && Object.values(checks).every(Boolean)

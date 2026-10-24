@@ -122,7 +122,7 @@ export interface TranscriptOptions {
   readonly thinkingDisplay?: DisplayMode
   readonly runCodeDisplay?: DisplayMode
   /** Application-local keyboard toggle, not a persisted setting. */
-  readonly writeExpanded?: boolean
+  readonly toolsExpanded?: boolean
   readonly maxEntries: number
   readonly palette: Palette
   readonly markdown: MarkdownTheme

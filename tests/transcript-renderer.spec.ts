@@ -134,7 +134,7 @@ describe('TranscriptRenderer', () => {
     expect(pendingHead).toBe(settled.render(80)[0])
     expect(pendingHead).toBe(failed.render(80)[0])
     expect(pendingHead).not.toContain('running')
-    expect(settled.render(80).at(-1)).toContain('done')
+    expect(settled.render(80).at(-1)).toContain('ctrl+o')
     expect(failed.render(80).at(-1)).toContain('error')
 
     const running = renderTranscriptBlock({ kind: 'compaction', compactionId: 'k', state: 'running', seq: 1 }, options)
@@ -186,9 +186,9 @@ describe('TranscriptRenderer', () => {
       args: JSON.stringify({ command: 'pnpm check', description: 'run repository gate' }),
       result: 'ok',
     }, options).render(100).join('\n')
-    expect(output).toContain('⚙ bash · run repository gate')
-    expect(output).toContain('│ pnpm check')
-    expect(output).toContain('└ done')
+    expect(output).toContain('$ pnpm check')
+    expect(output).toContain('run repository gate')
+    expect(output).not.toContain('└ done')
   })
 
   it('shows call options that change what a shell command means', () => {
@@ -220,8 +220,8 @@ describe('TranscriptRenderer', () => {
       pending: false,
       args: JSON.stringify({ command: 'ls -la' }),
     }, options).render(100).join('\n')
-    expect(output).toContain('⚙ bash · ls -la')
-    expect(output).toContain('│ ls -la')
+    expect(output).toContain('$ ls -la')
+    expect(output).not.toContain('├ args')
   })
 
   it('shows the run_code timeout in the meta line', () => {
@@ -257,9 +257,10 @@ describe('TranscriptRenderer', () => {
       args: JSON.stringify({ command: 'run', description: 'many lines' }),
       result,
     }, options).render(120).join('\n')
-    expect(output).toContain('result line 11')
-    expect(output).not.toContain('result line 12')
-    expect(output).toContain('… (3 more lines)')
+    expect(output).toContain('result line 10')
+    expect(output).toContain('result line 14')
+    expect(output).not.toContain('result line 9')
+    expect(output).toContain('10 earlier lines')
   })
 
   it('truncates long code without dropping the tail count', () => {
@@ -285,7 +286,7 @@ describe('TranscriptRenderer', () => {
       pending: false,
       args: 'not json',
     }, options).render(100).join('\n')
-    expect(output).toContain('├ args')
+    expect(output).toContain('[invalid command arg]')
     expect(output).toContain('not json')
   })
 
@@ -303,8 +304,8 @@ describe('TranscriptRenderer', () => {
     expect(output).toContain('thinking')
     expect(output).toContain('inspect the request')
     expect(output).toContain('final answer')
-    expect(output).toContain('├ args')
-    expect(output).toContain('├ result')
+    expect(output).toContain('read a.ts')
+    expect(output).toContain('ctrl+o to expand')
   })
 })
 

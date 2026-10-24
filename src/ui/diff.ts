@@ -5,6 +5,10 @@ export interface FileDiff {
   readonly newText: string
 }
 
+/** Upper bounds for the line-diff calculation, independent of presentation density. */
+export const MAX_DIFF_INPUT_LINES = 400
+export const MAX_DIFF_MATRIX_CELLS = 40000
+
 /** One display row of a terminal diff. */
 export interface DiffLine {
   readonly kind: 'add' | 'remove' | 'context'
@@ -96,7 +100,7 @@ export function diffLines(oldText: string | null, newText: string, maxLines = 12
     for (const line of after) rows.push({ kind: 'add', text: line })
     return cap(rows, maxLines)
   }
-  if (before.length * after.length > 40_000 || before.length > 400 || after.length > 400) {
+  if (before.length * after.length > MAX_DIFF_MATRIX_CELLS || before.length > MAX_DIFF_INPUT_LINES || after.length > MAX_DIFF_INPUT_LINES) {
     for (const line of before) rows.push({ kind: 'remove', text: line })
     for (const line of after) rows.push({ kind: 'add', text: line })
     return cap(rows, maxLines)

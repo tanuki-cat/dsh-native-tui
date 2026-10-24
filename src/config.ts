@@ -98,7 +98,7 @@ export const Config = z.object({
     .description('How reasoning blocks render: hidden, a one-line preview, or the full block.')
     .volatile(),
   runCodeDisplay: z.union(['hidden', 'compact', 'detailed'] as const)
-    .description('How run_code/bash/pwsh calls render: hidden, a summary, or full arguments and output.')
+    .description('Hide code-execution calls, or choose compact/detailed PTC previews. Shells keep a five-line output tail; Ctrl+O expands tool cards.')
     .volatile(),
   maxTranscriptEntries: z.number().step(1).min(50).default(600)
     .description('Maximum transcript entries kept in the terminal view. Applies immediately.')

@@ -13,7 +13,7 @@ const write = (content: string, overrides: Partial<ToolBlock> = {}): ToolBlock =
   diffs: [{ path: 'example.ts', oldText: 'previous content', newText: content }],
   result: 'Created file', ...overrides,
 })
-const render = (block: ToolBlock, expanded = false): string => renderTranscriptBlock(block, { ...options, writeExpanded: expanded }).render(120).join('\n')
+const render = (block: ToolBlock, expanded = false): string => renderTranscriptBlock(block, { ...options, toolsExpanded: expanded }).render(120).join('\n')
 
 describe('write content cards', () => {
   it('shows a file header and source preview, not a diff or duplicate success output', () => {
@@ -102,12 +102,12 @@ describe('write content cards', () => {
     const output = () => renderer.container.render(120).join('\n')
     expect(output()).not.toContain('CODE_LINE_29')
     const editComponent = renderer.container.children.at(-1)
-    renderer.toggleWritePreview()
+    renderer.toggleToolPreviews()
     expect(renderer.container.children.at(-1)).toBe(editComponent)
     expect(output()).toContain('CODE_LINE_29')
-    expect(output()).toContain('⚙ edit · edit.ts')
-    expect(output()).toContain('│ + new')
-    renderer.toggleWritePreview()
+    expect(output()).toContain('edit edit.ts')
+    expect(output()).toContain('+ 1 new')
+    renderer.toggleToolPreviews()
     expect(output()).not.toContain('CODE_LINE_29')
     expect(output()).toContain('ctrl+o to expand')
   })

@@ -271,6 +271,31 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - [x] 上下文 fallback 修复（2026-10-19）：`collectSessionMetrics` 在 token meter 缺失时，除 `compaction/summary` 外也扣减 `compaction/prune` 的 `shadowedTokenCount`，避免恢复会话后日志回退把已裁剪工具输出重新计入；新增 metrics 用例覆盖多次 prune。metrics 测试 31→32；`pnpm check` 35 files / 322 tests 通过，README 同步。
 - [x] 流式渲染平滑优化（2026-10-19）：① `reasoning block-start` 显示 `thinking …` 占位，避免长等待后空白直接跳到大块；② renderer 按 step 维护 reveal progress，首帧从 1 个 grapheme 开始、每帧最多 160 个，不按 block-end 时间跳过；③ `block-start` / `block-end` 立即 render；④ reveal 期间不再强制 33ms，沿用 frame cost 自适应间隔；⑤ 长 reasoning 仍以 3000 字素预览为展开预算；⑥ 新增 reveal reducer benchmark（600 turns + 3000 grapheme，median 1.7ms）确认帧成本在预算内，并把 reveal/wait helpers 拆到 `reasoning-reveal.ts` / `waiting.ts`，`transcript.ts` 961 行；⑦ 新增 `scripts/fake-tty-reasoning-slow-start.mjs`，真实 Host 下 placeholder→wait→逐帧 reveal→answer 顺序 PASS。transcript 测试 53→55；`pnpm check` 35 files / 324 tests 通过；stream/waiting/short-settle/tool-order/autocomplete/slow-start probes PASS。
 - [x] 自动压缩统计核对与 tool output 修复（2026-10-19）：核对本次 `compaction/summary` 的 `shadowedSeqs.length = 859`、`shadowedTokenCount = 527432`、usage `384543/2443/387370`；TUI 卡片显示完全一致，压缩后 `contextPressure` 约 298K / 1M ≈ 29.8%，与「压缩前约 801K ≈ 80%」相符。修复 ① `tool/result` 按 callId 去重，已 settled 的重复结果不再更新卡片；② 记录 `compaction/prune` 的 shadowed seq/callId，命中后折叠为 `pruned`（不显示 args/result），并忽略晚到重复 result；③ `compact-checkpoint` 在匹配 compaction 卡片存在时不再单独渲染，窗口外才显示 240 字前缀。transcript 测试 55→58；真实 session 重放 late result 0、checkpoint context 0、pruned tools 42、compaction 卡片 859/527432 保持；`pnpm check` 35 files / 327 tests 通过。Host 侧仍会持久化重复 tool result，当前由 TUI 兜底。
+
+## 2026-10-24：工具卡片对齐 pi 风格与审查收尾
+
+### 展示与交互
+
+- 拆分统一工具卡片、输出预览、应用 diff 和 PTC 渲染。shell 显示实际命令，默认保留末尾 5 个视觉行；read 成功时折叠，write 保留源码预览，MCP 显示服务与工具名。PTC 保留子调用列表及失败正文。
+- Ctrl+O 切换所有保留工具卡片；卡片实例、局部展开状态与其他行缓存在流式更新时保持稳定。点击卡片首行仅在 fullscreen 可用，默认 main-screen 提示只承诺键盘展开。
+- shell 标题只取首行，最多 120 字符，多行命令显示省略行数；路径、查询与元信息统一限长，路径保留尾部。展开后展示原命令，仍遵守安全预览预算。
+- description、workdir、sandbox 共用 literalToolText/toolLabel，C0/C1 控制字符不会直接进入头部和元信息。
+- edit 以 Host 应用结果为准，不重新读取文件。计算预算与展示预算分离；超出 LCS 安全预算时直接取有限的增删样本，折叠整文件替换不会只剩删除。
+
+### main-screen 的已知代价
+
+- 保留 Ctrl+O 的全局语义，不将其改为仅切换可见卡片。视口上方的卡片改变高度时，pi-tui 会重排历史并清除终端 scrollback；Session 日志不受影响。README 和帮助已明确说明。
+- 新回归实测：视口上方的卡片手动展开、收起各触发 1 次 fullRedraw，并输出清 scrollback 序列；卡片位于视口内时两次操作均为 0。自动结算与手动重排分别验收。
+
+### 验证记录
+
+- pnpm check：typecheck、70 个测试文件 / 802 个用例、build 通过。
+- tests/tool-card-mouse.spec.ts 向 TuiAltScreen 输入真实 SGR 按下/释放序列，经过 VStack、已滚动的 ScrollView、Box 和 MemoBlock，验证展开与收起；以完整同步输出帧作为就绪信号，没有固定 sleep。
+- mouse 与卡片测试在两个独立 Vitest 进程中同时运行通过。
+- 修复前只读复现：1000 行 command 的折叠态仍有 1000 行，2 万字符单行有 206 行，PTC 渲染保留原始 U+009B，500 行替换的折叠预览没有新增内容；对应边界均已加入回归。
+- 真实 Host：fake-tty-native-diff、fake-tty-ptc-diff、fake-tty-ptc-compact（成功与 PTC_COMPACT_FAIL=1 失败）、fake-tty-presets-compact（standard/minimal）、fake-tty-thinking-tool 均通过；fake-tty-card-head 自动结算 clears 0。
+- pnpm pack --pack-destination .tmp 生成 0.2.1-rc.3 安装包；未发布 Release、未 push、未改写本机 profile。
+
 - [x] 工作区审查修复（2026-10-19）：① `ToolCallMemory` 跨 retained-window 持久化 settled/pruned/callBySeq，晚到重复 result 不再因原始事件被 slice 而变成孤儿 tool 卡片；② `tool/call` 也按 callId 去重（含未结算跨窗口 replay），避免生成第二张卡或覆盖结果映射；③ fallback 只在 shadowed 事件已属于最近 provider 采样时扣除 prune/summary token，采样后新增再裁剪不会低估上下文；④ 子命令补全按当前过滤结果决定提交，`/provider a`、`/settings t` 等唯一 leaf 可一次 Enter，混合列表仍保持插入；⑤ pruned tool 卡片整卡隐藏，只保留 prune notice；⑥ 更新 app 注释与 slow-start probe 的断言。transcript 测试 58→62、metrics 32→33、autocomplete 11→13；`pnpm check` 35 files / 334 tests 通过。
 - [x] 串行渲染改为时间盒与逐块 hold（2026-10-19）：定位到「thinking 尚未渲染完，正文/run_code 已在展开结束瞬间一起出现」的三个成因：① reveal 按帧 +160 字素推进，帧间隔退化到 100ms 时 3000 字素要 1.9s，`REASONING_REVEAL_MAX_MS=600` 实际不成立；② `holdAfterReveal` 在展开结束的那一帧原子放开所有后续块（实测单帧 +14 行）；③ 同一 assistant 块的 answer 文本在 `revealing` 期间整段不渲染，展开结束时整段 Markdown 一次性出现。修复：① reveal 改为按 wall clock 推进（`elapsed × rate`，rate 自适应保证 3000 字素预算内完成），100ms 帧下仍 600ms 完成，且不支持回退；② hold 改为逐块判断：只有 tool/compaction/info notice 被暂缓，user 消息、warning/error notice、后续 assistant 行与同块 answer 立即显示，边界之后的行全部按事件顺序放出；③ answer 文本在展开期间照常渲染；④ `clipGraphemes` / reveal 增加按文本缓存的 grapheme 分段（8 条 LRU），50k 字符 reasoning 的 reduce 中位数从 13.3ms 降到 0.10ms（冷启动 1 次 13ms）；⑤ `compact` 模式不再参与 reveal 与 hold；⑥ reveal 进度按 step 记录并在 `assistant/attempt` 或同 step 新 live 块时清除，重试从 1 个 grapheme 重新展开，进度 map 容量上限 64；⑦ delta 路径新增 `ASSISTANT_SETTLE_MS = 150ms` 的 settle grace，assistant 行最后内容与紧随其后的 tool 卡片不再落在同一帧。文件按职责拆分：`transcript.ts` 961 → 744 行（reducer），新增 `transcript-render.ts`（块渲染）与 `transcript-renderer.ts`（组件复用与 notice 排序）。测试：`tests/transcript.spec.ts` 62 → 68 例（延帧追赶、600ms 预算、重试不继承进度、settle grace、compact 不展开、边界只放行 warning）；`pnpm check` 35 files / 340 tests 通过。真实 Host 探针：`fake-tty-reasoning-stream` PASS、`fake-tty-reasoning-tool-order` PASS、`fake-tty-reasoning-slow-start` PASS（startAt 4637 → middleAt 5201，确认逐段展开；answer 在展开期间正常到达）。
 - [x] 自动压缩 E2E 验收（2026-10-19，关闭 P1「自动压缩 E2E」）：用真实会话 `native-tui-9479c8bd-1142-4288-bc5b-0f5c0e4bd2c4`（command-code / `deepseek/deepseek-v4.1-flash-fast`，1M window，maxTokens 32768）复核 25 turns / 741 steps / 741 assistant messages 的完整事件流。触发是自动的：`compaction/start` 位于 turn 21 内部、前后为 `tool/result` 与 `compaction/summary`，全会话 `command/*` 事件为 0（没有手动 `/compact`）。阈值命中：压缩前最后一次请求 prompt = 798,777 tokens，`compactionThresholdTokens(1M, 32768) = 800,000`（`min(0.8 × 1M, 1M − 32768 − 65536)` = 80%），相差 1,223 tokens 即在下一 step 前触发。生命周期完整：start(4751) → summary(4752, `shadowedSeqs` 859 / `shadowedTokenCount` 527,432 / `shadowedRange` 8–3665 / summary 8,966 chars) → user/message `compact-checkpoint`(4753, 同 compactionId) → end(4754)，耗时 22.5s，全程仅一个 compactionId。prune：42 次 `compaction/prune`（184,896 tokens）全部发生在压缩前，压缩后为 0。效果：首个压缩后请求 prompt 222,987（相比 798,777 降 72%）；状态栏口径 `collectSessionMetrics` 在压缩前 ctx 79%（est 792,713）、压缩后 ctx 27%（est 265,281），阈值文案 `compact at 80%`。TUI 渲染：`✓ Context compacted  859 item(s) · ~527432 tokens` 卡片 + 823 字 summary 摘要，42 条 `Tool output pruned · N item(s) · ~M tokens` notice，`compact-checkpoint` 未产生重复 context 行（与已有卡片按 compactionId 去重），674 张 tool 卡片无残留 pending。结论：preset 自动压缩、prune、checkpoint 去重、context 百分比与阈值口径均与 Web 一致。
