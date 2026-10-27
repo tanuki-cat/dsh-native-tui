@@ -100,8 +100,7 @@ export function renderStatusRows(
   if (input.attachmentCount > 0) metaBits.push(palette.dim('attached ') + palette.accent(String(input.attachmentCount)))
   const hint = input.running
     ? 'enter steer · esc cancel · ctrl+c cancel · ctrl+d exit'
-    : 'enter send · /help · ctrl+d exit'
-  metaBits.push(palette.dim(hint))
+    : 'enter send · shift+tab think · /help · ctrl+d exit'
   const metrics = fold === undefined
     ? collectSessionMetrics(input.events as never, input.stats, input.contextWindow, input.contextMeter)
     : fold(input.events as never, input.stats, input.contextWindow, input.contextMeter)
@@ -111,20 +110,22 @@ export function renderStatusRows(
     + palette.dim('/')
     + palette.bold(palette.accent(input.model))
   const context = split.context === undefined ? undefined : splitContextLine(split.context)
-  rows.status.setText(
-    state + '   ' + model + '   ' + thinking + '\n\n' + metaBits.join('   '),
-  )
+  const divider = palette.dim('  │  ')
+  rows.status.setText([state, model, thinking, ...metaBits].join(divider))
   const mode = input.interactionMode
-  const modeLine = mode === undefined ? '' : (mode === 'custom'
+  const footerHead: string[] = []
+  if (mode !== undefined) footerHead.push((mode === 'custom'
     ? palette.warning('custom mode')
-    : (mode === 'accept-edits' ? palette.success : palette.warning)(MODE_LABELS[mode] + (mode === 'auto' ? ' · EXP' : ''))) + palette.dim(' · /mode') + '\n'
-  rows.footer.setText(
-    modeLine + palette.accent('↳ ') + palette.dim(split.usage)
-    + (context === undefined
-      ? ''
-      : '\n  ' + palette.context(metrics.contextPercent, metrics.contextCompactPercent)(context.head)
-        + (context.detail === '' ? '' : palette.dim(context.detail))),
+    : (mode === 'accept-edits' ? palette.success : palette.warning)(MODE_LABELS[mode] + (mode === 'auto' ? ' · EXP' : ''))) + palette.dim(' · /mode'))
+  if (context !== undefined) footerHead.push(
+    palette.context(metrics.contextPercent, metrics.contextCompactPercent)(context.head)
+      + (context.detail === '' ? '' : palette.dim(context.detail)),
   )
+  rows.footer.setText([
+    ...(footerHead.length === 0 ? [] : [footerHead.join(divider)]),
+    palette.accent('↳ ') + palette.dim(split.usage),
+    palette.dim(hint),
+  ].join('\n'))
 }
 
 /** Longest workspace label woven into the terminal window title. */

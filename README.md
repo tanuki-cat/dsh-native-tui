@@ -99,9 +99,9 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 - PTC 的 `run_code` 卡片在 `compact` 下列出程序实际派发的子调用：`read src/a.ts`、`bash <description>`、MCP 工具显示服务名 `mcp idea`；同一行只出现一次，超过 10 行折叠为 `├ … N more`，失败时额外显示一行 `├ ✕ <错误首行>`。
 - 上下文压缩：默认 preset 启用 `compaction-basic` 与 tool-result pruner。TUI 渲染 compaction start/summary/end；prune 隐藏对应 tool 卡片并保留 prune notice；session 级 tool memory 会忽略同一 callId 的晚到 / 重复 call/result，即使原始事件已离开 retained window。进程在 compaction 中途崩溃后 resume，卡片尾行显示 `⚠ interrupted` 而不是一直停在 `⟳ compacting…`。`/compact` 作为 Host command 可手动触发。
 - 终端窗口标题：启动后写入 `<产品标题> · <workspace 目录名>`（OSC 0），标签页能直接看出是哪个 checkout 的会话，例如 `DeepSeek Harness · dsh-native-tui`。控制字符会被压平（BEL 会截断 OSC 序列），目录名超过 48 字符截断；只在标题变化时写入。
-- 宽松排版：header 三行（产品标题、Session id、cwd）；transcript 只保留上下留白；状态区独立成块（`● idle   model provider/model   think max` + 空行 + preset/快捷键）；transcript / 状态区 / 输入框 / 分隔线 / 编辑框边框共用同一满宽列，无左右留白，宽度随终端 resize 自适应。
+- 页面骨架：header 展示产品标题、Session id、cwd；transcript 只保留上下留白。输入框上方将运行状态、model、think、preset 和附件数合为一行，用细分隔符分组，不额外插入空行。transcript、状态区、输入框与边框共用满宽列，窄终端自然换行，不截掉字段。
 - reasoning effort 同时决定 `think` 标签、状态栏分隔线和编辑器上下边框的颜色（low 暗绿 / medium 浅蓝 / high 粉红 / max 红；未设置或未知 effort 保持 dim，`plain` 主题不着色）。provider 蓝、model 青、preset 紫、attached 数量青。
-- footer 三行：当前模式及 `/mode` 入口、`↳ turns · steps · tok/s · tok · cache` 与 `ctx ...`。`ctx` 读 token meter 的 `contextPressure` 投影（最近一次 provider 采样 + 此后 surface 增减，compaction 影响已含在内），渲染为 `ctx 42%  (~420K / 1M · compact at 80%)`；`compact at` 是按 `compaction-basic` 的 `thresholdRatio`、`headroomTokens` 与该请求预留输出复算的触发点。首次 provider 采样前显示 `ctx —`，不猜占用。
+- 输入框下方依次显示三组信息：模式与 `ctx` 同行（模式旁保留 `/mode` 入口）、`↳ turns · steps · tok/s · tok · cache`、弱化的快捷键提示。`ctx` 读 token meter 的 `contextPressure` 投影（最近一次 provider 采样 + 此后 surface 增减，compaction 影响已含在内），渲染为 `ctx 42%  (~420K / 1M · compact at 80%)`；`compact at` 是按 `compaction-basic` 的 `thresholdRatio`、`headroomTokens` 与该请求预留输出复算的触发点。首次 provider 采样前显示 `ctx —`，不猜占用。
 - token 用量与 cache 命中率按 Web 口径：总量取四桶之和、部分命中不会显示成 100%，数字格式与 Web 统计 pill 一致。`tok/s` 是整段 Session 的累计 decode 速率（`decodeTokens / (decodeMs / 1000)`），不是瞬时速率，低于 10 时保留一位小数。
 - 可选 `fullscreen`：TuiAltScreen + ScrollView，header/status/editor 固定，鼠标滚轮滚动、文本选择复制。向上滚动离开末尾后，视口末行显示可点击的 `↓ jump to latest`，点击回到最新消息并恢复自动跟随（也可 `Ctrl+End`）。
 - 长会话渲染优化：每个行组件按宽度缓存结果（`MemoBlock`），`maxTranscriptEntries` 默认 600 限制每帧保留的行组件数；帧间隔按上次绘制时刻对齐并按实测帧成本自适应，内容签名未变的帧跳过重绘。

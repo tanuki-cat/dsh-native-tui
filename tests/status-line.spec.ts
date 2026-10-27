@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { Text, visibleWidth } from '@earendil-works/pi-tui'
+import { stripVTControlCharacters } from 'node:util'
 import { createPalette, type Palette } from '../src/ui/theme.js'
 import { renderStatusRows, splitContextLine, splitSessionMetrics, terminalWindowTitle, type StatusInput } from '../src/ui/status-line.js'
 
@@ -63,16 +65,17 @@ describe('renderStatusRows', () => {
     expect(state.header).toBe('◆ Test TUI\nsession-1\n/tmp/work')
   })
 
-  it('renders a spaced model/thinking block and a meta line', () => {
+  it('keeps runtime, model, reasoning, preset and attachments on one primary row', () => {
     const { state, rows: target } = rows()
     renderStatusRows(target, palette, inputOf({ attachmentCount: 2 }))
     expect(state.status).toContain('● idle')
     expect(state.status).toContain('model provider/model')
     expect(state.status).toContain('think max')
-    expect(state.status).toContain('\n\n')
+    expect(state.status).not.toContain('\n')
     expect(state.status).toContain('preset ptc')
     expect(state.status).toContain('attached 2')
-    expect(state.status).toContain('enter send')
+    expect(state.status).not.toContain('enter send')
+    expect(state.footer.split('\n').at(-1)).toBe('enter send · shift+tab think · /help · ctrl+d exit')
   })
 
   it.each([['manual', 'manual mode'], ['accept-edits', 'accept edits'], ['plan', 'plan mode'], ['auto', 'auto mode · EXP'], ['custom', 'custom mode']] as const)('shows %s below the editor without confusing Full access with Auto', (interactionMode, label) => {
@@ -87,7 +90,8 @@ describe('renderStatusRows', () => {
     renderStatusRows(target, palette, inputOf({ running: true, reasoningEffort: undefined }))
     expect(state.status).toContain('● working')
     expect(state.status).toContain('think default')
-    expect(state.status).toContain('enter steer')
+    expect(state.status).not.toContain('enter steer')
+    expect(state.footer.split('\n').at(-1)).toContain('enter steer · esc cancel')
   })
 
   it('colors the thinking label through the reasoning palette hook', () => {
@@ -124,12 +128,54 @@ describe('renderStatusRows', () => {
     expect(state.footer).toContain('\u001B[31mctx 80%')
   })
 
-  it('puts usage and context on separate footer lines', () => {
+  it('puts context ahead of usage and keeps help on its own final row', () => {
     const { state, rows: target } = rows()
     renderStatusRows(target, palette, inputOf())
     expect(state.footer).toContain('↳ 2 turns')
     expect(state.footer).toContain('50 tok/s')
-    expect(state.footer).toContain('\n  ctx 40%')
+    const lines = state.footer.split('\n')
+    expect(lines[0]).toBe('ctx 40%  (~400K / 1M · compact at 80%)')
+    expect(lines[1]).toContain('↳ 2 turns')
+    expect(lines[2]).toContain('enter send')
+  })
+})
+
+describe('status layout', () => {
+  it('groups mode and context above metrics and help without blank rows', () => {
+    const { state, rows: target } = rows()
+    renderStatusRows(target, palette, inputOf({ interactionMode: 'manual' }))
+    expect(state.status).toBe('● idle  │  model provider/model  │  think max  │  preset ptc')
+    const lines = state.footer.split('\n')
+    expect(lines).toHaveLength(3)
+    expect(lines[0]).toBe('manual mode · /mode  │  ctx 40%  (~400K / 1M · compact at 80%)')
+    expect(lines[1]).toContain('2 turns  ·  3 steps  ·  50 tok/s')
+    expect(lines[2]).toBe('enter send · shift+tab think · /help · ctrl+d exit')
+    expect(lines.every(line => line.trim() !== '')).toBe(true)
+  })
+
+  it('does not leave separators for an absent preset or context', () => {
+    const { state, rows: target } = rows()
+    renderStatusRows(target, palette, inputOf({ preset: undefined, contextWindow: undefined, contextMeter: undefined }))
+    expect(state.status).toBe('● idle  │  model provider/model  │  think max')
+    expect(state.footer.split('\n').filter(line => line.trim() === '')).toEqual([])
+    expect(state.footer).not.toMatch(/^\s*│|│\s*$/m)
+  })
+
+  it.each([32, 60, 100, 160])('preserves every field when the terminal resizes to %i columns', width => {
+    for (const theme of ['plain', 'dark'] as const) {
+      const { state, rows: target } = rows()
+      renderStatusRows(target, createPalette(theme), inputOf({
+        interactionMode: 'auto', provider: '路由', model: 'long-model-' + 'x'.repeat(70), attachmentCount: 2,
+      }))
+      const compact = (text: string) => stripVTControlCharacters(text).replaceAll(' ', '').replaceAll('\n', '')
+      for (const text of [state.status, state.footer]) {
+        const block = new Text(text, 0, 0)
+        block.render(160)
+        const rendered = block.render(width)
+        expect(rendered.every(line => visibleWidth(line) <= width)).toBe(true)
+        expect(compact(rendered.join('\n'))).toBe(compact(text))
+      }
+    }
   })
 })
 
