@@ -31,6 +31,7 @@ import { globalShortcut } from './keymap.js'
 import { LOCAL_COMMANDS } from './commands/catalog.js'
 import type { CommandContext } from './commands/context.js'
 import { runCommandLine } from './commands/router.js'
+import { cycleReasoningEffort } from './commands/model.js'
 import type { AgentDefaultModelService, LLM, SessionProjectionsService, SkillsCatalog } from './commands/services.js'
 import { openTuiSettings, showHostSettings } from './commands/settings.js'
 import { errorMessage } from './commands/shared.js'
@@ -602,6 +603,8 @@ export async function startTerminalApp(
     interactionDisposers = []
   }
 
+  let reasoningCycle = Promise.resolve()
+
   const switchTo = async (next: () => Promise<HostSession>): Promise<void> => {
     if (switching || disposed) return
     switching = true
@@ -618,6 +621,7 @@ export async function startTerminalApp(
       await active.dispose()
       if (disposed) return
       active = opened
+      reasoningCycle = Promise.resolve()
       const draft = drafts.restore(active.id)
       editor.setText(draft.text)
       pendingAttachments = draft.attachments
@@ -888,6 +892,17 @@ export async function startTerminalApp(
       else void pickStoredSession(commandContext()).then(id => {
         if (id !== undefined && id !== active.id) return runCommand('/resume ' + id)
       })
+      return { consume: true }
+    }
+    if (shortcut === 'cycle-reasoning') {
+      if (tui.hasOverlay()) return undefined
+      const ctx = commandContext()
+      const selected = ctx.modelSelection.current
+      reasoningCycle = reasoningCycle.then(() => cycleReasoningEffort(ctx, () =>
+        active === ctx.active && !switching && !disposed && !exiting
+        && modelSelection.current?.provider === selected?.provider
+        && modelSelection.current?.model === selected?.model,
+      )).catch(error => { pushNotice('error', 'Could not cycle reasoning effort: ' + errorMessage(error)) })
       return { consume: true }
     }
     if (shortcut === 'toggle-tool-previews') {

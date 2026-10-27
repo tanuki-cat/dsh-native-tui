@@ -74,7 +74,7 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 
 - 模型与 reasoning effort 通过 Host `agentDefaultModel.saveSelection` 持久化，重启或 `/new` 沿用它，不回落默认。
 - `/model` 打开可搜索的模型列表，也可直接 `/model provider/model` 切换。
-- `/reasoning` 列出或切换思考强度：`/reasoning high`、`/reasoning default`（清除显式 effort）、`/reasoning map`（编辑 level → wire 映射）。
+- `/reasoning` 列出或切换思考强度：`/reasoning high`、`/reasoning default`（清除显式 effort）、`/reasoning map`（编辑 level → wire 映射）。输入框获得焦点时，`Shift+Tab` 按当前模型提供的档位顺序循环，末档回到首档；未显式选档时从 provider 默认档的下一档开始，没有默认档则从首档开始。它只选择档位，不修改 level → wire 映射，沿用 `/reasoning` 的保存方式，并用于后续 step。
 - `/provider` 管理第三方模型路由：添加、查看、刷新模型目录、编辑输入模态、删除。
 - `/codex` 登录 ChatGPT Codex 并查询额度。
 - `/codebuddy` 登录 CodeBuddy / WorkBuddy（内置插件，见下文）。
@@ -153,6 +153,7 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 | 点击工具卡片首行 | 仅 fullscreen：切换单张卡片的展开状态 |
 | `Ctrl+N` | 打开同 workspace、preset 的空白 Session，没有匹配项时新建 |
 | `Alt+S` | 打开 Session 选择器，切换时保留各自的草稿与附件 |
+| `Shift+Tab` | 输入框中循环切换当前模型提供的思考强度，保留草稿；弹窗中不触发 |
 
 ### 会话与界面
 
@@ -502,6 +503,7 @@ node scripts/fake-tty-main-screen-scroll.mjs # main-screen 长 transcript
 node scripts/fake-tty-model-picker.mjs       # /model 选择器与冷/热路径耗时（需网络：查 CodeBuddy 目录）
 node scripts/fake-tty-context.mjs            # /context 占用、占比图与三个分项（自建 mock provider）
 node scripts/fake-tty-skills.mjs             # /skill 列表、分页、标签、选择过滤与真实调用链路（自建临时 workspace 与技能）
+node scripts/fake-tty-reasoning-cycle.mjs    # Shift+Tab 编码、连按、草稿、弹窗及 level → wire 映射（自建临时 profile 与 mock provider）
 ~~~
 
 普通终端环境可运行真实 PTY 冒烟：

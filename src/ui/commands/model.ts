@@ -95,8 +95,8 @@ export async function modelCommand(ctx: CommandContext, args: string): Promise<v
   if (selectedModel !== undefined) await selectModel(ctx, llm, selectedModel)
 }
 
-/** The `/reasoning` command. */
-export async function reasoningCommand(ctx: CommandContext, args: string): Promise<void> {
+async function changeReasoningEffort(ctx: CommandContext, args: string, cycle = false, isCurrent = (): boolean => true): Promise<void> {
+  if (ctx.signal.aborted || !isCurrent()) return
   const selected = ctx.modelSelection.current
   if (selected === undefined) {
     ctx.notice('warning', 'No active model selection is available.')
@@ -114,6 +114,7 @@ export async function reasoningCommand(ctx: CommandContext, args: string): Promi
   }
   try {
     const info = await llm.resolveModelInfo(selected.provider, selected.model)
+    if (ctx.signal.aborted || !isCurrent() || ctx.modelSelection.current !== selected) return
     const reasoning = info.reasoning
     if (reasoning === undefined || reasoning.efforts.length === 0) {
       ctx.notice('warning', 'Model ' + selected.provider + '/' + selected.model + ' exposes no reasoning efforts. Use /reasoning map to add levels and wire values, or choose another model.')
@@ -121,18 +122,24 @@ export async function reasoningCommand(ctx: CommandContext, args: string): Promi
     }
     const applyEffort = async (effort: string | undefined): Promise<void> => {
       const current = ctx.modelSelection.current
-      if (current === undefined)
-        return
+      if (current !== selected || ctx.signal.aborted || !isCurrent()) return
       ctx.modelSelection.current = {
         provider: current.provider,
         model: current.model,
         ...(effort === undefined ? {} : { reasoningEffort: ReasoningEffortId(effort) }),
       }
       ctx.notice('info', 'Reasoning effort: ' + (effort ?? 'provider default'))
-      await ctx.persistSelection()
       ctx.renderStatus()
+      await ctx.persistSelection()
     }
     const currentEffort = selected.reasoningEffort
+    if (cycle) {
+      const effective = currentEffort ?? reasoning.defaultEffort
+      const index = reasoning.efforts.findIndex(candidate => candidate.id === effective)
+      const next = reasoning.efforts[(index + 1) % reasoning.efforts.length]!.id
+      if (next !== currentEffort) await applyEffort(next)
+      return
+    }
     if (args !== '') {
       if (requested === 'default' || requested === 'auto' || requested === 'clear') {
         await applyEffort(undefined)
@@ -179,6 +186,17 @@ export async function reasoningCommand(ctx: CommandContext, args: string): Promi
     await applyEffort(choice === '__default__' ? undefined : choice)
   }
   catch (error) {
-    ctx.notice('error', 'Could not inspect reasoning efforts: ' + errorMessage(error))
+    if (!ctx.signal.aborted && isCurrent())
+      ctx.notice('error', 'Could not inspect reasoning efforts: ' + errorMessage(error))
   }
+}
+
+/** The `/reasoning` command. */
+export async function reasoningCommand(ctx: CommandContext, args: string): Promise<void> {
+  await changeReasoningEffort(ctx, args)
+}
+
+/** Cycle the model's advertised levels; isCurrent rejects stale session shortcuts. */
+export async function cycleReasoningEffort(ctx: CommandContext, isCurrent = (): boolean => true): Promise<void> {
+  await changeReasoningEffort(ctx, '', true, isCurrent)
 }

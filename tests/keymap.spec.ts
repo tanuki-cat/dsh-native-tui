@@ -61,6 +61,16 @@ describe('globalShortcut', () => {
     expect(globalShortcut('\x1b[110;5:3u', state())).toBeUndefined()
   })
 
+  it('cycles reasoning with legacy and kitty Shift+Tab only in the editor', () => {
+    for (const data of ['\x1b[Z', '\x1b[9;2u']) {
+      expect(globalShortcut(data, state())).toBe('cycle-reasoning')
+      expect(globalShortcut(data, state({ running: true, editorHasText: true }))).toBe('cycle-reasoning')
+      expect(globalShortcut(data, state({ editorFocused: false }))).toBeUndefined()
+    }
+    expect(globalShortcut('\x1b[9;2:3u', state())).toBeUndefined()
+    expect(globalShortcut('\t', state())).toBeUndefined()
+  })
+
   it('maps Ctrl+D to exit and ignores other input', () => {
     for (const data of ['\x04', '\x1b[100;5u']) expect(globalShortcut(data, state({ running: true }))).toBe('exit')
     expect(globalShortcut('a', state({ running: true }))).toBeUndefined()
