@@ -455,19 +455,21 @@ describe('context composition', () => {
     const tint = (bucket: 'system' | 'tools' | 'messages') => (text: string) => '[' + bucket + ':' + text + ']'
     const bar = contextCompositionBar({ system: 500, tools: 250, messages: 250 }, 25, tint)
     // 50/25/25 of the 10 filled cells is 5/2.5/2.5, so the runs are 5/3/2.
+    // Every bucket earns more than one cell here, so the minimum rule is moot.
     expect(bar).toBe('[system:' + '█'.repeat(5) + '][tools:' + '█'.repeat(3) + '][messages:' + '█'.repeat(2) + ']'
       + '[system:' + '░'.repeat(30) + ']')
   })
 
-  it('does not invent a cell for a bucket too small to earn one', () => {
-    // At this resolution the tool schema is genuinely under one cell of the fill;
-    // drawing a stub would claim a width it does not have.
+  it('keeps a cell for a bucket too small to earn one on share alone', () => {
+    // The Web panel keeps `min-width: 2px` on every segment. Without the same
+    // guarantee a 0.2% tool schema rounds to nothing and its legend row points at
+    // a colour the bar never draws — the defect this test pins.
     const tint = (bucket: 'system' | 'tools' | 'messages') => (text: string) => '[' + bucket + ':' + text + ']'
     const bar = contextCompositionBar({ system: 816, tools: 10, messages: 174 }, 25, tint)
-    expect(bar).not.toContain('[tools:')
-    // Its share is still stated in the legend, which is where sub-cell detail lives.
-    expect(contextCompositionShares({ systemTokens: 51_200, toolsTokens: 628, messageTokens: 10_900 }).tools)
-      .toBe(10)
+    expect(bar).toContain('[tools:█]')
+    // The cell comes out of the largest bucket, so the used share is unchanged.
+    expect([...contextCompositionBar({ system: 816, tools: 10, messages: 174 }, 25)]
+      .filter(cell => cell !== '░')).toHaveLength(10)
   })
 
   it('never renders measured usage as an empty track', () => {

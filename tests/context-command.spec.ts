@@ -156,14 +156,12 @@ describe('context report', () => {
     expect(rows[0]).toContain(palette.contextBucket('system')('█'))
     expect(rows[1]).toContain(palette.contextBucket('tools')('█'))
     expect(rows[2]).toContain(palette.contextBucket('messages')('█'))
-    // The bar repeats the hues of the buckets that earned a cell. The tool
-    // schema is 0.3% of the surface, under one of forty cells, so it has no
-    // segment at all — its share survives in the legend only.
+    // The bar repeats the hue of every bucket in the legend, including the 0.3%
+    // tool schema: it keeps a minimum cell so no row points at a missing colour.
     const bar = text.split('\n').find(line => /[█░]{8,}/.test(line)) ?? ''
-    // The system run is two cells, so its tinted text is two glyphs long.
     expect(bar).toContain(palette.contextBucket('system')('█'.repeat(2)))
-    expect(bar).toContain(palette.contextBucket('messages')('█'.repeat(8)))
-    expect(bar).not.toContain(palette.contextBucket('tools')('█'))
+    expect(bar).toContain(palette.contextBucket('tools')('█'))
+    expect(bar).toContain(palette.contextBucket('messages')('█'.repeat(7)))
   })
 
   it('stays plain when no palette is supplied', () => {

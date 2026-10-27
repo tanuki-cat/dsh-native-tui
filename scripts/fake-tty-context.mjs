@@ -205,6 +205,13 @@ child.on('exit', (code, signal) => {
     // One split total, stated as the occupancy, never as a rival figure.
     noCompetingTotal: (report.match(/Shares split the/g) ?? []).length === 1,
     caveat: report.includes('Reasoning the request does not replay is left out'),
+    // Every bucket in the legend must also own a segment, even a sub-1% one:
+    // the bar and the legend pair by colour, so a missing segment leaves a row
+    // pointing at nothing. `out` keeps the escape codes the stripped `report` drops.
+    segmentsMatchLegend: ['245', '141', '39'].every((code) => {
+      const tinted = new RegExp('\\u001B\\[38;5;' + code + 'm█').exec(out)
+      return tinted !== null
+    }),
     // The buckets share one glyph and are told apart by colour alone, so each
     // hue has to reach the terminal (system grey, tools violet, messages blue).
     bucketColors: ['245', '141', '39'].every(code => out.includes('\u001B[38;5;' + code + 'm')),

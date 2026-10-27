@@ -717,9 +717,12 @@ const BAR_TRACK_GLYPH = '░'
  * 25%, which is exactly how the Web panel is laid out and how this was misread.
  *
  * Inside the used share the cells are the printed composition shares
- * apportioned, so a segment never contradicts its number. A bucket that
- * apportions to no cell is simply not drawn — at this resolution it genuinely
- * occupies less than one cell, and inventing one would overstate it.
+ * apportioned, so a segment never contradicts its number. Every bucket with a
+ * share is guaranteed a cell, exactly as the Web panel keeps `min-width: 2px` on
+ * its segments: at forty cells a 0.2% tool schema rounds to nothing, and its
+ * legend row would then point at a colour the bar never shows. That cell comes
+ * out of the largest bucket — the only one that can spare it without
+ * disappearing — so the used share never grows past the headline percentage.
  * @param shares - tenths-of-a-percent shares from {@link contextCompositionShares}.
  * @param percent - whole-percent occupancy of the window.
  * @param tint - colours one bucket's cells; identity for a plain report.
@@ -738,11 +741,24 @@ export function contextCompositionBar(
   // track: one cell is the smallest thing this display can say.
   const filled = Math.min(BAR_CELLS, Math.max(1, Math.round(occupancy / 100 * BAR_CELLS)))
   const cells = apportion(weights, filled)
+  // Give every non-empty bucket at least one cell, taking it from the largest
+  // bucket that still has a spare, so no legend row points at a missing colour.
+  const present = weights
+    .map((weight, index) => ({ index, weight }))
+    .filter(entry => entry.weight > 0)
+    .sort((left, right) => right.weight - left.weight || left.index - right.index)
+  for (const entry of present) {
+    if ((cells[entry.index] ?? 0) > 0) continue
+    const donor = present.find(candidate => (cells[candidate.index] ?? 0) > 1)
+    if (donor === undefined) break
+    cells[donor.index] = (cells[donor.index] ?? 0) - 1
+    cells[entry.index] = 1
+  }
   const segments = cells
     .map((width, index) => (width > 0 ? tint(COMPOSITION_BUCKETS[index] ?? 'system')(BAR_FILL.repeat(width)) : ''))
     .join('')
-  // Apportionment can lose a cell to rounding when several buckets are tiny;
-  // pad the used share so the bar never understates the headline percentage.
+  // The minimum-cell rule conserves the total, and apportionment itself can only
+  // lose a cell to rounding, so the track is measured from the real total.
   const used = Math.max(filled, cells.reduce((sum, value) => sum + value, 0))
   return segments + tint('system')(BAR_TRACK_GLYPH.repeat(Math.max(0, BAR_CELLS - used)))
 }
