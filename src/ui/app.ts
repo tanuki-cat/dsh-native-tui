@@ -19,6 +19,7 @@ import type { DisplayMode, ResolvedConfig } from '../config.js'
 import { createHostSession, readContextBreakdown, readContextMeter, resumeHostSession, sessionAgentPreset, sessionModelSelection, type AgentPresetService, type HostSession } from '../runtime/agent.js'
 import { findLauncher, parseProfileArg, resumeHint } from '../runtime/launcher.js'
 import { reloadArgs } from '../runtime/reload.js'
+import { skillRows } from '../runtime/skill-catalog.js'
 import { createSessionMetricsMemo, type SessionMetrics, type SessionStats } from '../runtime/metrics.js'
 import { showApproval, showQuestionBatch } from './dialogs.js'
 import type { PendingAttachment } from '../runtime/attachments.js'
@@ -199,14 +200,8 @@ export async function startTerminalApp(
     const registry = skillRegistry()
     if (registry === undefined) return []
     try {
-      const list = await registry.list({ cwd: config.cwd, scope: active.agent })
-      return list
-        .filter(skill => skill.invocation === undefined || skill.invocation.userInvocable !== false)
-        .map(skill => ({
-          name: skill.name,
-          description: skill.description,
-          modelInvocable: skill.invocation === undefined || skill.invocation.modelInvocable !== false,
-        }))
+      const list = await registry.list({ cwd: active.agent.session.header.cwd ?? config.cwd, scope: active.agent })
+      return skillRows(list).filter(skill => skill.userInvocable)
     }
     catch {
       return []
@@ -671,7 +666,22 @@ export async function startTerminalApp(
       : resumeHostSession(host, id)
   }
 
-  const sendPrompt = (text: string): void => {
+  /**
+   * Put a skill invocation in front of whatever the user has already typed.
+   *
+   * The namespaced form bypasses commands with the same name. Prepending keeps
+   * the invocation separate from the existing draft and leaves room for instructions.
+   * @param name - kebab-case skill name the Host marked user-invocable.
+   */
+  const stageSkillInvocation = (name: string): void => {
+    const existing = editor.getExpandedText()
+    const token = '/skill:' + name + ' '
+    editor.setText(existing.trim() === '' ? token : token + existing)
+    tui.setFocus(editor)
+    tui.requestRender()
+  }
+
+  const sendPrompt = (text: string, historyText = text): void => {
     const content: ContentBlock[] = []
     if (text.trim() !== '') content.push({ type: 'text', text })
     for (const pending of pendingAttachments) content.push(pending.block)
@@ -684,7 +694,7 @@ export async function startTerminalApp(
       if (active.agent.status === 'running') active.agent.steer(message)
       else active.agent.followup(message)
       pendingAttachments.splice(0)
-      editor.addToHistory(text)
+      editor.addToHistory(historyText)
       renderStatus()
     } catch (error) {
       pushNotice('error', 'Prompt failed: ' + errorMessage(error))
@@ -731,6 +741,7 @@ export async function startTerminalApp(
         contextReserved = reservedTokens
       },
       readContext: readContextFigures,
+      stageSkillInvocation,
       persistSelection,
     }
   }

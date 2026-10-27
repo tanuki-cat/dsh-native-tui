@@ -51,6 +51,7 @@ function contextOf(services: Record<string, unknown> = {}): CommandContext & { n
     modelSelection: { current: undefined, assembled: undefined },
     setContextWindow: () => undefined,
     readContext: () => ({ metrics: { turns: 0, steps: 0, totalTokens: 0 }, breakdown: undefined }),
+    stageSkillInvocation: () => undefined,
     persistSelection: async () => undefined,
   }
 }

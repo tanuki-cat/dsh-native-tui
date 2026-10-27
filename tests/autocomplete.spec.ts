@@ -166,6 +166,56 @@ describe('TuiAutocompleteProvider', () => {
     ])
   })
 
+  it('offers namespaced skills with provenance even when a command shadows the short name', async () => {
+    const skills: readonly SkillSuggestion[] = [
+      { name: 'help', description: 'skill help', modelInvocable: true, provenance: 'project-dsh' },
+      { name: 'find-skills', description: 'discover skills', modelInvocable: false, provenance: 'bigpowers' },
+    ]
+    const completion = provider([], [], skills, LOCAL_COMMANDS)
+    const suggestions = await completion.getSuggestions(['/skill:fi'], 0, 9, { signal })
+    expect(suggestions?.prefix).toBe('/skill:fi')
+    expect(suggestions?.items).toEqual([{
+      value: '/skill:find-skills', label: '/skill:find-skills', description: '[u:bigpowers] discover skills',
+    }])
+    expect(await completion.getSuggestions(['/skill:find-skills instructions'], 0, 31, { signal })).toBeNull()
+    const shadowed = await completion.getSuggestions(['/skill:he'], 0, 9, { signal })
+    expect(shadowed?.items[0]).toMatchObject({ value: '/skill:help', description: '[u,m:project-dsh] skill help' })
+    const short = await completion.getSuggestions(['/fi'], 0, 3, { signal })
+    expect(short?.items.find(item => item.value === '/find-skills')?.description).toBe('[u:bigpowers] discover skills')
+  })
+
+  it('keeps the skill picker submittable alongside subcommands and namespaced skills', async () => {
+    const completion = provider([], [], [{ name: 'alpha', modelInvocable: true }], LOCAL_COMMANDS)
+    const suggestions = await completion.getSuggestions(['/skill'], 0, 6, { signal })
+    expect(suggestions?.items[0]?.value).toBe('/skill')
+    expect(suggestions?.items.map(item => item.value)).toEqual([
+      '/skill', '/skill list', '/skill read', '/skill:alpha',
+    ])
+    const alias = suggestions!.items[3]!
+    expect(completion.applyCompletion(['/skill later'], 0, 6, alias, suggestions!.prefix))
+      .toEqual({ lines: ['/skill:alpha later'], cursorLine: 0, cursorCol: 12 })
+  })
+
+  it('ignores a failed or cancelled skill lookup', async () => {
+    const controller = new AbortController()
+    const completion = new TuiAutocompleteProvider({
+      getAgent: () => agent,
+      getCommands: () => LOCAL_COMMANDS,
+      getSkills: async () => { controller.abort(); return [{ name: 'alpha', modelInvocable: true }] },
+      getFileReferences: () => undefined,
+      getSessionReferences: () => undefined,
+    })
+    expect(await completion.getSuggestions(['/skill:'], 0, 7, { signal: controller.signal })).toBeNull()
+    const failed = new TuiAutocompleteProvider({
+      getAgent: () => agent,
+      getCommands: () => LOCAL_COMMANDS,
+      getSkills: async () => { throw new Error('discovery failed') },
+      getFileReferences: () => undefined,
+      getSessionReferences: () => undefined,
+    })
+    expect(await failed.getSuggestions(['/skill:'], 0, 7, { signal })).toBeNull()
+  })
+
   it('completes @file candidates through the host service', async () => {
     const suggestions = await provider([
       { path: 'src', kind: 'directory' },

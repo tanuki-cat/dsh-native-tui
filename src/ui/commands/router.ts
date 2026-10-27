@@ -33,6 +33,7 @@ import { agentsCommand, jobsCommand, permissionsCommand } from './runtime-status
 import { helpCommand, statusCommand } from './session.js'
 import { sessionsCommand } from './sessions.js'
 import { settingsCommand } from './settings.js'
+import { skillCommand } from './skills.js'
 import { errorMessage } from './shared.js'
 import { diffCommand, toolCommand, toolsCommand } from './tools.js'
 import { exportCommand, openCommand, presetCommand, previewCommand } from './workspace-files.js'
@@ -46,8 +47,8 @@ export interface CommandRouterDeps {
   readonly switchTo: (next: () => Promise<HostSession>) => Promise<void>
   /** Reuse a matching blank visited in this terminal, or create one. */
   readonly openNewSession: (cwd: string, preset?: string) => Promise<HostSession>
-  /** Send a line as a prompt: `/init`, and the user-invocable-skill fallback. */
-  readonly sendPrompt: (text: string) => void
+  /** Send model text, preserving historyText in the editor when it differs. */
+  readonly sendPrompt: (text: string, historyText?: string) => void
   /** Drop the transcript and its local notices. */
   readonly clearTranscript: () => void
   /** Leave the process with this exit code. */
@@ -81,6 +82,23 @@ export async function runCommandLine(line: string, deps: CommandRouterDeps): Pro
     return prepared
   }
 
+  const skillCall = /^\/skill:([^\s]*)([\s\S]*)$/i.exec(line)
+  if (skillCall !== null) {
+    const requested = skillCall[1]!.toLowerCase()
+    if (requested === '') {
+      ctx().notice('warning', 'Usage: /skill:<name> [instructions]')
+      return
+    }
+    const skill = (await deps.skills()).find(candidate => candidate.name.toLowerCase() === requested)
+    if (skill === undefined) {
+      ctx().notice('warning', 'No user-invocable skill named "' + requested + '". Use /skill to search.')
+      return
+    }
+    // The Host injects bodies for /name gestures, not the terminal's /skill: alias.
+    deps.sendPrompt('/' + skill.name + skillCall[2]!, line)
+    return
+  }
+
   switch (name) {
     case 'reload':
       if (args !== '') {
@@ -112,6 +130,9 @@ export async function runCommandLine(line: string, deps: CommandRouterDeps): Pro
         return
       }
       contextCommand(ctx())
+      return
+    case 'skill':
+      await skillCommand(ctx(), args)
       return
     case 'cancel':
       ctx().active.agent.cancel({ kind: 'user' })

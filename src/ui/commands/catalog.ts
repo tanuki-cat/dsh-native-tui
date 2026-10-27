@@ -12,6 +12,8 @@ import type { CommandSuggestion } from '../autocomplete.js'
 /** `/help` rows, one line per command family. */
 export const HELP_LINES: readonly string[] = [
   '/help · /new · /init · /sessions · /resume [id] · /status · /context · /clear',
+  '/skill [<name>|list [page]|read <name>] · stage a skill call, review the catalog, or read one',
+  '/skill:<name> [instructions] · invoke a skill, including names shared with commands',
   'Ctrl+N: new/blank session · Alt+S: switch session (keep draft and attachments)',
   'Ctrl+O: expand/collapse all tool cards (main-screen may redraw history and clear terminal scrollback)',
   'Fullscreen only: click the first line of a tool card to toggle it',
@@ -41,6 +43,10 @@ export const LOCAL_COMMANDS: readonly CommandSuggestion[] = [
   { name: 'resume', description: 'resume a session', input: { hint: 'session-id' } },
   { name: 'status', description: 'show session, model, and preset' },
   { name: 'context', description: 'show context usage and its composition' },
+  { name: 'skill', description: 'pick a skill to invoke, review the catalog, or read one', input: { hint: '[<name>|list [page]|read <name>]' }, keepExactSubmit: true, subcommands: [
+    { name: 'list', description: 'page the skill table', hint: '[page]' },
+    { name: 'read', description: 'read one skill body', hint: '<name>' },
+  ] },
   { name: 'clear', description: 'clear the terminal view only' },
   { name: 'cancel', description: 'cancel the running turn' },
   { name: 'model', description: 'select a model', input: { hint: 'provider/model' } },

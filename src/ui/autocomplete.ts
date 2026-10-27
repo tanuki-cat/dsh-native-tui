@@ -4,6 +4,7 @@ import type {
   AutocompleteSuggestions,
 } from '@earendil-works/pi-tui'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import { skillBadge } from '../runtime/skill-catalog.js'
 import {
   activeAtToken,
   formatFileMention,
@@ -36,6 +37,7 @@ export interface SkillSuggestion {
   readonly description?: string
   /** False when only a human may invoke the skill; the editor annotates it. */
   readonly modelInvocable: boolean
+  readonly provenance?: string
 }
 
 /** One host-exported session mention candidate. */
@@ -114,9 +116,10 @@ export class TuiAutocompleteProvider implements AutocompleteProvider {
       const commands = this.options.getCommands()
       if (space === -1) {
         const query = body.toLowerCase()
+        const commandItems: AutocompleteItem[] = []
         const exact = commands.find(command => command.name.toLowerCase() === query)
         if (exact?.subcommands !== undefined && exact.subcommands.length > 0) {
-          const items: AutocompleteItem[] = []
+          const items = commandItems
           if (exact.keepExactSubmit === true) {
             items.push({
               value: '/' + exact.name,
@@ -133,17 +136,18 @@ export class TuiAutocompleteProvider implements AutocompleteProvider {
                 : { description: subcommand.description ?? subcommand.hint ?? '' }),
             })
           }
-          return items.length === 0 ? null : { items, prefix: beforeCursor }
         }
-        const commandItems: AutocompleteItem[] = commands
-          .filter(command => command.name.toLowerCase().startsWith(query))
-          .map(command => ({
-            value: '/' + command.name,
-            label: '/' + command.name,
-            ...(command.description === undefined && command.input?.hint === undefined
-              ? {}
-              : { description: command.description ?? command.input?.hint ?? '' }),
-          }))
+        else {
+          commandItems.push(...commands
+            .filter(command => command.name.toLowerCase().startsWith(query))
+            .map(command => ({
+              value: '/' + command.name,
+              label: '/' + command.name,
+              ...(command.description === undefined && command.input?.hint === undefined
+                ? {}
+                : { description: command.description ?? command.input?.hint ?? '' }),
+            })))
+        }
         let skills: readonly SkillSuggestion[] = []
         try {
           skills = await this.options.getSkills()
@@ -153,15 +157,20 @@ export class TuiAutocompleteProvider implements AutocompleteProvider {
         }
         if (request.signal.aborted) return null
         const commandNames = new Set(commands.map(command => command.name.toLowerCase()))
-        const skillItems: AutocompleteItem[] = skills
-          .filter(skill => skill.name.toLowerCase().startsWith(query) && !commandNames.has(skill.name.toLowerCase()))
-          .map(skill => ({
-            value: '/' + skill.name,
-            label: '/' + skill.name,
-            ...(skill.description === undefined
-              ? {}
-              : { description: (skill.modelInvocable ? '' : 'user-only · ') + skill.description }),
+        const skillItems: AutocompleteItem[] = skills.flatMap(skill => {
+          const names = commandNames.has(skill.name.toLowerCase())
+            ? ['skill:' + skill.name]
+            : [skill.name, 'skill:' + skill.name]
+          const description = skill.provenance === undefined
+            ? (skill.modelInvocable ? '' : 'user-only · ') + (skill.description ?? '')
+            : skillBadge({ userInvocable: true, modelInvocable: skill.modelInvocable, provenance: skill.provenance })
+              + (skill.description === undefined ? '' : ' ' + skill.description)
+          return names.filter(name => name.toLowerCase().startsWith(query)).map(name => ({
+            value: '/' + name,
+            label: '/' + name,
+            ...(description === '' ? {} : { description }),
           }))
+        })
         const items = [...commandItems, ...skillItems]
         return items.length === 0 ? null : { items, prefix: beforeCursor }
       }

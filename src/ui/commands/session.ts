@@ -7,33 +7,26 @@
 
 import { formatLocalTimestamp } from '../format-time.js'
 import type { CommandContext } from './context.js'
-import type { AgentPresetsService, SkillsCatalog } from './services.js'
+import type { AgentPresetsService } from './services.js'
 import { NL } from './shared.js'
+import { readSkillRows } from './skills.js'
 
-/** User-invocable skills for the `/help` footer. */
+/**
+ * User-invocable skills for the `/help` footer.
+ *
+ * Reads through the same catalog `/skill` lists, so the two surfaces cannot
+ * disagree about which skills exist; only the invocation filter differs, since a
+ * footer naming every model-only skill would bury the commands it is there to
+ * summarize.
+ * @param ctx - command context.
+ * @returns user-invocable skills, empty when discovery failed.
+ */
 export async function loadSkills(ctx: CommandContext): Promise<readonly { readonly name: string; readonly description: string; readonly modelInvocable: boolean }[]> {
-  let registry: SkillsCatalog | undefined
-  try {
-    registry = (ctx.active.agent.ctx.get('skills') as SkillsCatalog | undefined)
-      ?? (ctx.host.get('skills') as SkillsCatalog | undefined)
-  }
-  catch {
-    registry = ctx.host.get('skills') as SkillsCatalog | undefined
-  }
-  if (registry === undefined) return []
-  try {
-    const list = await registry.list({ cwd: ctx.config.cwd, scope: ctx.active.agent })
-    return list
-      .filter(skill => skill.invocation === undefined || skill.invocation.userInvocable !== false)
-      .map(skill => ({
-        name: skill.name,
-        description: skill.description,
-        modelInvocable: skill.invocation === undefined || skill.invocation.modelInvocable !== false,
-      }))
-  }
-  catch {
-    return []
-  }
+  const listed = await readSkillRows(ctx)
+  if ('error' in listed) return []
+  return listed.rows
+    .filter(row => row.userInvocable)
+    .map(row => ({ name: row.name, description: row.description, modelInvocable: row.modelInvocable }))
 }
 
 /** The `/status` notice. */

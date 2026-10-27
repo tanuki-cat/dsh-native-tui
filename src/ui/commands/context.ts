@@ -75,6 +75,15 @@ export interface CommandContext {
    * (undefined when that projection is not mounted).
    */
   readonly readContext: () => { readonly metrics: SessionMetrics; readonly breakdown: ContextBreakdown | undefined }
+  /**
+   * Put an invocation of a user-invocable skill into the prompt editor.
+   *
+   * The editor stages `/skill:<name>`, which the router turns into the Host's
+   * `/<name>` prompt gesture. Staging rather than sending keeps the draft
+   * under the user's control: they add their own instructions and submit once, so
+   * `/skill` never fires a request on their behalf.
+   */
+  readonly stageSkillInvocation: (name: string) => void
   /** Persist the current model selection for future sessions. */
   readonly persistSelection: () => Promise<void>
 }

@@ -115,7 +115,9 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 - `/help`、`/init`（生成 `AGENTS.md` 贡献指南，已存在不覆盖）。
 - slash 命令支持子命令补全，例如 `/provider` 显示 add/list/edit/models/input/remove。子命令已完整输入时回车直接执行；从补全中选中时，如果当前过滤结果只包含无参数子命令则直接执行，混有带参数子命令时保持插入。
 - `@file` 主机端补全（`file-reference-local`）：每行是「文件名 + 类型 · 完整路径」，与 pi agent 的文件补全一致。长路径只截断第一列的文件名，不会让所有行停在同一个公共目录前缀上。选中的路径作为普通 prompt 文本，模型需用 `read` 工具读取。
-- `/ <query>` 的本地/宿主命令+技能补全：命令之后列出 Host `ctx.skills` 的用户可调用技能（仅用户可调用的标注 `user-only`）。选中插入 `/skill-name`，回车按普通 prompt 发送，由 `dsh-tool-skill` 读取 `/name` 手势并注入技能正文。
+- `/` 补全在本地/宿主命令之后列出用户可调用技能，支持 `/<name>` 和 pi 风格的 `/skill:<name>`，并显示来源、调用标签与描述。输入 `/skill:` 可只筛选技能；技能与命令同名时使用 `/skill:<name>`。发送时由终端转换为 Host 的 `/<name>` 手势，交给 `dsh-tool-skill` 注入正文；输入历史保留 `/skill:<name>`，按 ↑ 回填后仍调用技能。
+- `/skill` 无参数打开可搜索选择器，选中后把 `/skill:<name> ` 放进输入框，保留原有草稿并聚焦。按 Enter 调用，也可以先补充指令（`/skill:alpha-skill 把这份报告改成表格`）；选择本身不会发送请求。`/skill <name>` 直接暂存调用；`/skill list [page]` 分页查看全表（每页 15 条）；`/skill read <name>` 阅读正文。
+- 列表按名称、调用标签、描述三列对齐，标签形如 `[u,m:user-agents]`——`u` 人可调用、`m` 模型可调用、两者都有才写 `u,m`；冒号后是发现来源（`project-dsh`、`user-agents` 等），包提供的技能显示包名（`bundled` 根下的 `bigpowers` 显示为 `[u:bigpowers]`）。`/skill list` **同时包含仅模型可调用的技能**，否则无法审查模型能自行调用什么；选择器只列人可调用的，模型专属技能会被宿主在注入边界拒绝，列出来等于承诺无法兑现。
 - `@@<query>` 引用其他 Session；发送时 Host session-reference 自动注入快照。
 
 ### 文件、导出与预览
@@ -163,6 +165,8 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 | `/resume <id>` | 恢复指定 Session |
 | `/status` | Session、cwd、模型、状态、事件数 |
 | `/context` | 上下文占用、压缩触发点，以及系统提示词 / 工具定义 / 对话消息的占比（三项合计等于占用） |
+| `/skill [<name>\|list [page]\|read <name>]` | 选择技能并暂存调用（Enter 发送）、分页查看全表、或阅读正文 |
+| `/skill:<name> [instructions]` | 调用指定技能并附带指令，不受同名命令遮蔽 |
 | `/clear` | 仅清空终端视图 |
 | `/cancel` | 取消当前 turn |
 | `/preset [id]` | 切换当前或下一次 `/new` 的 preset，并保存默认 preset |
@@ -471,7 +475,7 @@ pnpm test:watch
 pnpm build      # tsc -p tsconfig.build.json → dist/（gitignored）
 ~~~
 
-当前状态：71 个测试文件 / 844 个用例。代码风格见仓库根目录 `AGENTS.md`：TypeScript ESM（NodeNext），两空格缩进、单引号、无分号，单个源文件不超过 1000 行。
+测试文件与用例数量以 `pnpm test` 当次输出为准。代码风格见仓库根目录 `AGENTS.md`：TypeScript ESM（NodeNext），两空格缩进、单引号、无分号，单个源文件不超过 1000 行。
 
 ### 真实 Host 探针
 
@@ -497,6 +501,7 @@ node scripts/fake-tty-stream-smooth.mjs      # 流式大 chunk
 node scripts/fake-tty-main-screen-scroll.mjs # main-screen 长 transcript
 node scripts/fake-tty-model-picker.mjs       # /model 选择器与冷/热路径耗时（需网络：查 CodeBuddy 目录）
 node scripts/fake-tty-context.mjs            # /context 占用、占比图与三个分项（自建 mock provider）
+node scripts/fake-tty-skills.mjs             # /skill 列表、分页、标签、选择过滤与真实调用链路（自建临时 workspace 与技能）
 ~~~
 
 普通终端环境可运行真实 PTY 冒烟：

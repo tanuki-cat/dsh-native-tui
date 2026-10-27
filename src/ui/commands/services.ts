@@ -12,6 +12,7 @@
 import type { Session } from '@deepseek-ai/dsh-session'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { ModelSelection } from '@deepseek-ai/dsh-agent'
+import type { SkillSummaryLike } from '../../runtime/skill-catalog.js'
 
 /** The LLM catalogue the model and provider handlers read. */
 export interface LLM {
@@ -232,12 +233,24 @@ export interface AgentPresetsService {
   readonly defaultId?: string
 }
 
-/** User-invocable skills, for the `/help` footer. */
+/**
+ * The skill registry: every skill the Host can offer, with the invocation
+ * controls and discovery root each one advertises.
+ *
+ * The catalog is invocation-neutral by design, so the terminal decides what to
+ * offer: the `/` menu keeps user-invocable entries, while `/skill` lists both
+ * controls so what the model may call stays reviewable.
+ */
 export interface SkillsCatalog {
-  list(options?: { readonly cwd?: string; readonly signal?: AbortSignal; readonly scope?: unknown }): Promise<readonly {
+  list(options?: { readonly cwd?: string; readonly signal?: AbortSignal; readonly scope?: unknown }): Promise<readonly SkillSummaryLike[]>
+  /** Load one skill body, or undefined when the name no longer resolves. */
+  get?(name: string, options?: { readonly cwd?: string; readonly signal?: AbortSignal; readonly scope?: unknown }): Promise<{
     readonly name: string
     readonly description: string
     readonly whenToUse?: string
-    readonly invocation?: { readonly modelInvocable?: boolean; readonly userInvocable?: boolean }
-  }[]>
+    readonly path?: string
+    readonly content: string
+    readonly source?: string
+    readonly provider?: string
+  } | undefined>
 }

@@ -3,6 +3,8 @@ import type { SkillSuggestion } from '../src/ui/autocomplete.js'
 import type { CommandContext } from '../src/ui/commands/context.js'
 import { runCommandLine, type CommandRouterDeps } from '../src/ui/commands/router.js'
 import { INIT_AGENTS_PROMPT } from '../src/runtime/init-prompt.js'
+import { PromptEditor } from '../src/ui/prompt-editor.js'
+import { createPalette, editorTheme } from '../src/ui/theme.js'
 
 /** One recorded notice. */
 interface Notice {
@@ -12,14 +14,23 @@ interface Notice {
 
 /** A dispatcher whose every collaborator records what the line asked of it. */
 function harness(options: { readonly hostResult?: unknown; readonly skills?: readonly SkillSuggestion[]; readonly running?: boolean } = {}) {
+  const skillRegistry = {
+    list: async () => [
+      { name: 'alpha', description: 'first skill', invocation: { modelInvocable: true, userInvocable: true }, source: 'user-agents', provider: 'filesystem' },
+      { name: 'beta', description: 'second skill', invocation: { modelInvocable: true, userInvocable: false }, source: 'bundled', provider: 'bigpowers' },
+    ],
+  }
   const notices: Notice[] = []
   const calls: string[] = []
   const switched: Array<() => Promise<unknown>> = []
   const prompts: string[] = []
+  const history: string[] = []
   let contextBuilds = 0
   const context = {
     host: {
-      get: () => undefined,
+      // The skill registry is the one service /skill needs; everything else
+      // stays unmounted so a handler cannot quietly depend on it.
+      get: (name: string) => name === 'skills' ? skillRegistry : undefined,
       commands: {
         list: () => [],
         execute: async () => options.hostResult,
@@ -56,7 +67,7 @@ function harness(options: { readonly hostResult?: unknown; readonly skills?: rea
     context: () => { contextBuilds += 1; return context },
     switchTo: async next => { switched.push(next) },
     openNewSession: async (cwd, preset) => { calls.push('openNew:' + cwd + ':' + preset); return context.active },
-    sendPrompt: text => { prompts.push(text) },
+    sendPrompt: (text, historyText = text) => { prompts.push(text); history.push(historyText) },
     clearTranscript: () => { calls.push('clearTranscript') },
     exit: code => { calls.push('exit:' + String(code)) },
     reload: () => { calls.push('reload') },
@@ -66,7 +77,7 @@ function harness(options: { readonly hostResult?: unknown; readonly skills?: rea
     },
     skills: async () => options.skills ?? [],
   }
-  return { deps, notices, calls, switched, prompts, contextBuilds: () => contextBuilds }
+  return { deps, notices, calls, switched, prompts, history, contextBuilds: () => contextBuilds }
 }
 
 describe('command router', () => {
@@ -147,6 +158,23 @@ describe('command router', () => {
     expect(h.notices).toEqual([{ tone: 'warning', text: 'Usage: /context' }])
   })
 
+  it('dispatches /skill to the local handler', async () => {
+    const h = harness()
+    await runCommandLine('/skill list', h.deps)
+    expect(h.notices).toHaveLength(1)
+    expect(h.notices[0]?.text).toContain('2 skills')
+    // The bundled provider names its package, not the generic root.
+    expect(h.notices[0]?.text).toContain('[m:bigpowers]')
+  })
+
+  it('does not route /skill through the skill-invocation fallback', async () => {
+    // A skill named exactly "skill" would otherwise be sent as a prompt; the
+    // management command owns the name.
+    const h = harness({ skills: [{ name: 'skill', description: 'shadowed', modelInvocable: true }] })
+    await runCommandLine('/skill list', h.deps)
+    expect(h.prompts).toEqual([])
+  })
+
   it('passes an unknown name to the host before noticing it', async () => {
     const h = harness()
     await runCommandLine('/nope', h.deps)
@@ -164,5 +192,56 @@ describe('command router', () => {
     await runCommandLine('/COMMIT now', h.deps)
     expect(h.prompts).toEqual(['/COMMIT now'])
     expect(h.notices).toEqual([])
+  })
+
+  it.each([
+    ['/skill:commit', '/commit'],
+    ['/SKILL:COMMIT now', '/commit now'],
+    ['/skill:commit  first\nsecond', '/commit  first\nsecond'],
+    ['/skill:commit\twith tabs', '/commit\twith tabs'],
+  ])('normalizes %s into a Host skill gesture', async (line, prompt) => {
+    const h = harness({ hostResult: { text: 'must not intercept' }, skills: [{ name: 'commit', modelInvocable: true }] })
+    await runCommandLine(line, h.deps)
+    expect(h.prompts).toEqual([prompt])
+    expect(h.history).toEqual([line])
+    expect(h.notices).toEqual([])
+  })
+
+  it('can explicitly invoke a skill whose name belongs to a local command', async () => {
+    const h = harness({ skills: [{ name: 'help', modelInvocable: false }] })
+    await runCommandLine('/skill:help instructions', h.deps)
+    expect(h.prompts).toEqual(['/help instructions'])
+    expect(h.notices).toEqual([])
+  })
+
+  it.each(['exit', 'help'])('keeps a skill named %s callable when recalled from history', async name => {
+    const h = harness({ skills: [{ name, modelInvocable: true }] })
+    const editor = new PromptEditor({ terminal: { rows: 30 }, requestRender() {} } as never, editorTheme(createPalette('plain')))
+    const line = '/skill:' + name
+    await runCommandLine(line, h.deps)
+    editor.addToHistory(h.history[0]!)
+    editor.handleInput(String.fromCharCode(27) + '[A')
+    expect(editor.getExpandedText()).toBe(line)
+    await runCommandLine(editor.getExpandedText(), h.deps)
+    expect(h.prompts).toEqual(['/' + name, '/' + name])
+    expect(h.calls).toEqual([])
+  })
+
+  it.each(['/skill:', '/skill: instructions', '/skill:missing', '/skill:beta'])('does not send invalid skill calls: %s', async line => {
+    const h = harness()
+    await runCommandLine(line, h.deps)
+    expect(h.prompts).toEqual([])
+    expect(h.notices[0]?.tone).toBe('warning')
+  })
+
+  it('refuses to stage a model-only skill instead of sending it', async () => {
+    // beta is model-only in the harness registry. Staging it would produce a
+    // line the Host rejects at the injection boundary, so the router must stop
+    // before anything reaches the prompt.
+    const h = harness()
+    await runCommandLine('/skill beta', h.deps)
+    expect(h.prompts).toEqual([])
+    expect(h.notices[0]?.tone).toBe('warning')
+    expect(h.notices[0]?.text).toContain('is model-only')
   })
 })
