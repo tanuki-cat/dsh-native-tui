@@ -59,6 +59,7 @@ function contextOf(options: {
       assembled: undefined,
     },
     setContextWindow: () => undefined,
+    readContext: () => ({ metrics: { turns: 0, steps: 0, totalTokens: 0 }, breakdown: undefined }),
     persistSelection: async () => { persisted += 1 },
   }
 }

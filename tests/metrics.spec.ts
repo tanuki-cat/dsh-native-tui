@@ -1,16 +1,23 @@
 import { describe, expect, it } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
+import { visibleWidth as visibleWidthForTest } from '@earendil-works/pi-tui'
 import {
   collectSessionMetrics,
   compactionThresholdTokens,
+  contextBreakdown,
+  contextComposition,
+  contextCompositionBar,
+  contextCompositionShares,
   contextPressure,
   createSessionMetricsMemo,
   formatCacheHitPercent,
+  formatSharePercent,
   formatSessionMetrics,
   formatTokenCount,
   formatTokensPerSecond,
   contextWindowTokens,
   projectedContextTokens,
+  rebaseComposition,
 } from '../src/runtime/metrics.js'
 
 /** One provider usage reading, as a settlement or a streamed attempt carries it. */
@@ -380,6 +387,157 @@ describe('projected context occupancy', () => {
     expect(contextWindowTokens({})).toBeUndefined()
     expect(contextWindowTokens(undefined)).toBeUndefined()
     expect(contextWindowTokens({ contextWindow: 0 })).toBeUndefined()
+  })
+})
+
+describe('context composition', () => {
+  it('reads the counts from the projection state\'s nested field', () => {
+    // The unit publishes its counts under `breakdown`; only its client view
+    // flattens them, and `stateOf` hands out the raw state.
+    expect(contextBreakdown({ breakdown: { systemTokens: 51_200, toolsTokens: 628, messageTokens: 10_900 } }))
+      .toEqual({ systemTokens: 51_200, toolsTokens: 628, messageTokens: 10_900 })
+  })
+
+  it('narrows unusable figures to zero', () => {
+    // Absent figures read as zero so the legend never prints NaN, and a
+    // negative price (which the fold should never produce) is clamped.
+    expect(contextBreakdown({ breakdown: { systemTokens: -5, toolsTokens: 'x', messageTokens: undefined } }))
+      .toEqual({ systemTokens: 0, toolsTokens: 0, messageTokens: 0 })
+    // An initial state has no counts yet; that is an empty surface, not silence.
+    expect(contextBreakdown({})).toEqual({ systemTokens: 0, toolsTokens: 0, messageTokens: 0 })
+  })
+
+  it('reports an unmounted projection instead of an empty composition', () => {
+    // An unmounted unit and an empty surface are different silences: the first
+    // means "ask nothing", the second means "there is nothing yet".
+    expect(contextBreakdown(undefined)).toBeUndefined()
+    expect(contextBreakdown(null as never)).toBeUndefined()
+  })
+
+  it('apportions whole tenths of a percent that total 1000', () => {
+    // Rounding each bucket on its own would print 33.3/33.3/33.3 here.
+    expect(contextCompositionShares({ systemTokens: 1, toolsTokens: 1, messageTokens: 1 }))
+      .toEqual({ system: 334, tools: 333, messages: 333 })
+    expect(contextCompositionShares({ systemTokens: 51_200, toolsTokens: 628, messageTokens: 10_900 }))
+      .toEqual({ system: 816, tools: 10, messages: 174 })
+  })
+
+  it('keeps a bucket too small for a whole percent distinct from zero', () => {
+    // The Web panel prints this as ~628 next to a bar segment; a "0%" label
+    // would claim the segment means nothing.
+    const shares = contextCompositionShares({ systemTokens: 51_200, toolsTokens: 628, messageTokens: 10_900 })
+    expect(formatSharePercent(shares.tools)).toBe('1.0%')
+    expect(formatSharePercent(4)).toBe('0.4%')
+    expect(formatSharePercent(1000)).toBe('100.0%')
+  })
+
+  it('leaves an empty composition at zero without dividing by it', () => {
+    expect(contextCompositionShares({ systemTokens: 0, toolsTokens: 0, messageTokens: 0 }))
+      .toEqual({ system: 0, tools: 0, messages: 0 })
+    expect(contextComposition({ systemTokens: 0, toolsTokens: 0, messageTokens: 0 }, 25))
+      .toEqual({ rows: [], bar: '' })
+  })
+
+  it('fills only the occupied share of the window, never the whole bar', () => {
+    // The bug this pins: a fully painted bar beside "Context used: 25%" reads as
+    // 100% occupancy. The track spans the window, so the fill length is the
+    // headline percentage.
+    const bar = contextCompositionBar({ system: 800, tools: 100, messages: 100 }, 25)
+    expect(visibleWidthForTest(bar)).toBe(40)
+    const filled = [...bar].filter(cell => cell !== '░').length
+    expect(filled).toBe(10)
+    expect(bar.endsWith('░'.repeat(30))).toBe(true)
+  })
+
+  it('sizes each segment inside the filled share from its printed share', () => {
+    // The buckets share one glyph and are told apart by colour, exactly as the
+    // Web panel does, so the tint is what exposes each run's width here.
+    const tint = (bucket: 'system' | 'tools' | 'messages') => (text: string) => '[' + bucket + ':' + text + ']'
+    const bar = contextCompositionBar({ system: 500, tools: 250, messages: 250 }, 25, tint)
+    // 50/25/25 of the 10 filled cells is 5/2.5/2.5, so the runs are 5/3/2.
+    expect(bar).toBe('[system:' + '█'.repeat(5) + '][tools:' + '█'.repeat(3) + '][messages:' + '█'.repeat(2) + ']'
+      + '[system:' + '░'.repeat(30) + ']')
+  })
+
+  it('does not invent a cell for a bucket too small to earn one', () => {
+    // At this resolution the tool schema is genuinely under one cell of the fill;
+    // drawing a stub would claim a width it does not have.
+    const tint = (bucket: 'system' | 'tools' | 'messages') => (text: string) => '[' + bucket + ':' + text + ']'
+    const bar = contextCompositionBar({ system: 816, tools: 10, messages: 174 }, 25, tint)
+    expect(bar).not.toContain('[tools:')
+    // Its share is still stated in the legend, which is where sub-cell detail lives.
+    expect(contextCompositionShares({ systemTokens: 51_200, toolsTokens: 628, messageTokens: 10_900 }).tools)
+      .toBe(10)
+  })
+
+  it('never renders measured usage as an empty track', () => {
+    // Rounding a 0.5% occupancy to zero cells would contradict the headline.
+    expect([...contextCompositionBar({ system: 1000, tools: 0, messages: 0 }, 1)].filter(c => c !== '░')).toHaveLength(1)
+    expect(contextCompositionBar({ system: 1000, tools: 0, messages: 0 }, 100)).toBe('█'.repeat(40))
+  })
+
+  it('renders an empty bar only for an empty composition', () => {
+    expect(contextCompositionBar({ system: 0, tools: 0, messages: 0 }, 25)).toBe('')
+    // An untouched surface still gets its track, so the bar's length keeps
+    // meaning "share of the window".
+    expect(contextCompositionBar({ system: 1000, tools: 0, messages: 0 }, 0)).toBe('░'.repeat(40))
+  })
+
+  it('labels the rows in bar order and names their bucket', () => {
+    const { rows } = contextComposition({ systemTokens: 600, toolsTokens: 300, messageTokens: 100 }, 25)
+    // Every row paints the same cell, so the bucket key is what carries colour.
+    expect(rows.map(row => [row.bucket, row.label, row.tenths])).toEqual([
+      ['system', 'system prompt', 600],
+      ['tools', 'tool definitions', 300],
+      ['messages', 'messages', 100],
+    ])
+    expect(new Set(rows.map(row => row.glyph))).toEqual(new Set(['█']))
+  })
+})
+
+describe('composition rebasing', () => {
+  it('makes the buckets sum to the occupancy', () => {
+    // The real defect: messages alone exceeded the whole occupancy.
+    const raw = { systemTokens: 50_331, toolsTokens: 628, messageTokens: 373_473 }
+    const rebased = rebaseComposition(raw, 291_662)
+    const sum = (rebased?.systemTokens ?? 0) + (rebased?.toolsTokens ?? 0) + (rebased?.messageTokens ?? 0)
+    expect(sum).toBe(291_662)
+    expect(rebased?.messageTokens).toBeLessThan(291_662)
+    expect(rebased?.rebuilt).toBe('out-of-scale')
+  })
+
+  it('keeps the estimator proportions while changing their magnitude', () => {
+    expect(rebaseComposition({ systemTokens: 600, toolsTokens: 300, messageTokens: 100 }, 1_000))
+      .toEqual({ systemTokens: 600, toolsTokens: 300, messageTokens: 100, rebuilt: 'out-of-scale' })
+  })
+
+  it('subtracts the reasoning the request never replays', () => {
+    // Without a thinkingSignature the adapter strips those blocks, so their
+    // priced tokens come off the bucket and the rest is rescaled onto the
+    // occupancy: 500 system against 500-250 dropped messages.
+    expect(rebaseComposition({ systemTokens: 500, toolsTokens: 0, messageTokens: 500 }, 1_000, 250))
+      .toEqual({ systemTokens: 667, toolsTokens: 0, messageTokens: 333, rebuilt: 'out-of-scale' })
+  })
+
+  it('never lets the dropped figure drive a bucket negative', () => {
+    // More reasoning priced than the bucket holds means the two sources
+    // disagree; clamping keeps the split renderable instead of flipping signs.
+    expect(rebaseComposition({ systemTokens: 100, toolsTokens: 0, messageTokens: 50 }, 1_000, 500))
+      .toEqual({ systemTokens: 1000, toolsTokens: 0, messageTokens: 0, rebuilt: 'out-of-scale' })
+  })
+
+  it('ignores an unusable anchor instead of inventing one', () => {
+    const raw = { systemTokens: 1, toolsTokens: 1, messageTokens: 1 }
+    expect(rebaseComposition(raw, undefined)).toBeUndefined()
+    expect(rebaseComposition(raw, 0)).toBeUndefined()
+    expect(rebaseComposition(raw, Number.NaN)).toBeUndefined()
+    expect(rebaseComposition({ systemTokens: 0, toolsTokens: 0, messageTokens: 0 }, 1_000)).toBeUndefined()
+  })
+
+  it('ignores a negative or unusable dropped figure', () => {
+    const raw = { systemTokens: 500, toolsTokens: 500, messageTokens: 0 }
+    expect(rebaseComposition(raw, 1_000, -5)).toEqual(rebaseComposition(raw, 1_000, 0))
+    expect(rebaseComposition(raw, 1_000, Number.NaN)).toEqual(rebaseComposition(raw, 1_000, 0))
   })
 })
 

@@ -24,6 +24,7 @@ import { attachCommand, attachmentsCommand } from './attachments.js'
 import { changesCommand, deliverablesCommand, filesCommand } from './artifacts.js'
 import { HELP_LINES } from './catalog.js'
 import type { CommandContext } from './context.js'
+import { contextCommand } from './context-stats.js'
 import { mcpCommand } from './mcp.js'
 import { modelCommand, reasoningCommand } from './model.js'
 import { pluginsCommand } from './plugins.js'
@@ -104,6 +105,13 @@ export async function runCommandLine(line: string, deps: CommandRouterDeps): Pro
       return
     case 'status':
       statusCommand(ctx())
+      return
+    case 'context':
+      if (args !== '') {
+        ctx().notice('warning', 'Usage: /context')
+        return
+      }
+      contextCommand(ctx())
       return
     case 'cancel':
       ctx().active.agent.cancel({ kind: 'user' })

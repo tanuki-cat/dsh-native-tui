@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import type { AgentHandle } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { createHostSession, readContextMeter, resumeHostSession, sessionAgentPreset, sessionModelSelection, sessionReservedCompletionTokens } from '../src/runtime/agent.js'
+import { createHostSession, readContextBreakdown, readContextMeter, resumeHostSession, sessionAgentPreset, sessionModelSelection, sessionReservedCompletionTokens, unreplayedReasoningTokens } from '../src/runtime/agent.js'
 import type { ResolvedConfig } from '../src/config.js'
 
 const config: ResolvedConfig = {
@@ -77,6 +77,70 @@ describe('context meter reading', () => {
     const session = { requestHeader: () => ({ config: { provider: 'p', model: 'm', maxTokens: 100_000 } }) }
     expect(readContextMeter({ stateOf: () => ({ surfaceTokens: 0 }) }, session as never, undefined).reading)
       .toEqual({ reservedTokens: 100_000 })
+  })
+})
+
+describe('context breakdown reading', () => {
+  const session = { requestHeader: () => undefined, snapshotEvents: () => [] }
+
+  it('reads the composition from its own projection key', () => {
+    // The composition is a separate unit from the pressure projection: the
+    // pressure fold prices the surface with the provider's own numbers, while
+    // this one prices it with the meter's fixed estimator. Without an anchor the
+    // projection's own figures are reported unchanged.
+    const projections = {
+      stateOf: (target: unknown, key: string) => key === 'contextBreakdown'
+        ? { breakdown: { systemTokens: 51_200, toolsTokens: 628, messageTokens: 10_900 }, surfaceTokens: 62_728, systems: [] }
+        : undefined,
+    }
+    expect(readContextBreakdown(projections, session as never))
+      .toEqual({ systemTokens: 51_200, toolsTokens: 628, messageTokens: 10_900 })
+  })
+
+  it('rebases onto the occupancy so no bucket exceeds it', () => {
+    const projections = {
+      stateOf: (target: unknown, key: string) => key === 'contextBreakdown'
+        ? { breakdown: { systemTokens: 50_331, toolsTokens: 628, messageTokens: 373_473 } }
+        : undefined,
+    }
+    // The real session: messages alone read larger than the whole context.
+    const rebased = readContextBreakdown(projections, session as never, 291_662)
+    expect(rebased?.messageTokens).toBeLessThan(291_662)
+    expect((rebased?.systemTokens ?? 0) + (rebased?.toolsTokens ?? 0) + (rebased?.messageTokens ?? 0))
+      .toBe(291_662)
+  })
+
+  it('prices the reasoning the provider never receives', () => {
+    /** One durable settlement carrying the given content blocks. */
+    const settlement = (blocks: readonly unknown[]) => ({
+      type: 'assistant/message',
+      data: { message: { role: 'assistant', content: blocks } },
+    })
+    const signed = { type: 'reasoning', text: 'a'.repeat(40), thinkingSignature: '{"id":"rs_1"}' }
+    const unsigned = { type: 'reasoning', text: 'b'.repeat(40) }
+    // 40 chars / 4 = 10 tokens, plus the estimator's 4-token block overhead.
+    expect(unreplayedReasoningTokens({ snapshotEvents: () => [settlement([unsigned])] } as never)).toBe(14)
+    // A signed block replays, so nothing is dropped.
+    expect(unreplayedReasoningTokens({ snapshotEvents: () => [settlement([signed])] } as never)).toBe(0)
+    expect(unreplayedReasoningTokens({ snapshotEvents: () => [settlement([signed, unsigned])] } as never)).toBe(14)
+  })
+
+  it('counts only reasoning, not other message content', () => {
+    // A text-only session drops nothing; the figure must not scale with the
+    // surface, only with the unreplayable part of it.
+    expect(unreplayedReasoningTokens({ snapshotEvents: () => [] } as never)).toBe(0)
+    const textOnly = { type: 'assistant/message', data: { message: { role: 'assistant', content: [{ type: 'text', text: 'hi' }] } } }
+    expect(unreplayedReasoningTokens({ snapshotEvents: () => [textOnly] } as never)).toBe(0)
+    // The system prompt is not folded into the messages bucket, so it cannot
+    // dilute a figure that is subtracted from that bucket.
+    const system = { type: 'system/message', data: { message: { role: 'system', content: [{ type: 'text', text: 'x'.repeat(400) }] } } }
+    const reasoningOnly = { type: 'assistant/message', data: { message: { role: 'assistant', content: [{ type: 'reasoning', text: 'b'.repeat(40) }] } } }
+    expect(unreplayedReasoningTokens({ snapshotEvents: () => [system, reasoningOnly] } as never)).toBe(14)
+  })
+
+  it('reports an unmounted meter instead of an empty composition', () => {
+    expect(readContextBreakdown({ stateOf: () => undefined }, session as never)).toBeUndefined()
+    expect(readContextBreakdown(undefined, session as never)).toBeUndefined()
   })
 })
 

@@ -14,6 +14,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { ResolvedConfig } from '../../config.js'
 import type { HostSession } from '../../runtime/agent.js'
 import type { PendingAttachment } from '../../runtime/attachments.js'
+import type { ContextBreakdown, SessionMetrics } from '../../runtime/metrics.js'
 import type { Palette } from '../theme.js'
 import type { LLM } from './services.js'
 
@@ -68,6 +69,12 @@ export interface CommandContext {
    * the status row can price context against the compaction threshold.
    */
   readonly setContextWindow: (tokens: number | undefined, reservedTokens?: number) => void
+  /**
+   * The session's context figures, read from the same meter inputs the status
+   * row prices: its folded metrics and the meter's heuristic composition
+   * (undefined when that projection is not mounted).
+   */
+  readonly readContext: () => { readonly metrics: SessionMetrics; readonly breakdown: ContextBreakdown | undefined }
   /** Persist the current model selection for future sessions. */
   readonly persistSelection: () => Promise<void>
 }

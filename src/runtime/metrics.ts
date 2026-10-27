@@ -45,6 +45,186 @@ export function projectedContextTokens(state: ContextPressureState | undefined):
   return Math.max(0, Math.round(pressure + surface - sampled))
 }
 
+/**
+ * Shape of the token-meter's `contextBreakdown` projection state.
+ *
+ * The counts sit under `breakdown`: the unit keeps its surviving system prompts
+ * and a surface total alongside them, and only its client view flattens the
+ * three figures. `SessionProjections.stateOf` returns that raw state, so the
+ * nested shape is what this reader has to accept.
+ */
+export interface ContextBreakdownState {
+  readonly breakdown?: {
+    readonly systemTokens?: unknown
+    readonly toolsTokens?: unknown
+    readonly messageTokens?: unknown
+  }
+}
+
+/** Heuristic composition of the next request's context, in estimator tokens. */
+export interface ContextBreakdown {
+  readonly systemTokens: number
+  readonly toolsTokens: number
+  readonly messageTokens: number
+  /**
+   * Set when the projection's own figures could not be trusted and the buckets
+   * were rebuilt: why, for the report to state.
+   */
+  readonly rebuilt?: 'out-of-scale'
+}
+
+/**
+ * One bucket's share of the heuristic total, in tenths of a percent.
+ *
+ * Integer tenths rather than whole percent because a real composition is
+ * lopsided: a 628-token tool schema against a 51K system prompt is 1.2%, and
+ * rounding to whole percent would print 0% next to a bucket that visibly owns a
+ * bar segment. The three figures always sum to 1000, so the printed column adds
+ * up to exactly 100.0%.
+ */
+export interface ContextCompositionShares {
+  readonly system: number
+  readonly tools: number
+  readonly messages: number
+}
+
+function asTokens(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.round(value) : 0
+}
+
+/**
+ * Read the token meter's heuristic composition from its raw projection state.
+ *
+ * These three figures use the meter's fixed density estimate, so they will not
+ * sum to the provider-anchored occupancy: the estimator underprices CJK text and
+ * JSON schemas, which is exactly the error anchoring keeps out of the total.
+ * Present them as a composition of the surface, never as the occupancy itself.
+ * @param state - the `contextBreakdown` state, or undefined when unregistered.
+ * @returns the three buckets, or undefined when the projection is unmounted.
+ */
+export function contextBreakdown(state: ContextBreakdownState | undefined): ContextBreakdown | undefined {
+  if (state === undefined || state === null || typeof state !== 'object') return undefined
+  const counts = state.breakdown
+  return {
+    systemTokens: asTokens(counts?.systemTokens),
+    toolsTokens: asTokens(counts?.toolsTokens),
+    messageTokens: asTokens(counts?.messageTokens),
+  }
+}
+
+/**
+ * Rebase a composition onto the provider's own prompt count.
+ *
+ * The projection prices the surface with a fixed 4-chars-per-token estimate and
+ * counts every retained node, including `reasoning` blocks. Measured against a
+ * real session those two choices compound badly: reasoning is priced at ~42% of
+ * the surface but is only replayed to the provider when it carries a
+ * `thinkingSignature`, and this profile's blocks carry none — so the estimate
+ * drifts away from the occupancy instead of tracking it, and a single bucket ends
+ * up larger than the total the provider billed.
+ *
+ * Two corrections keep the parts inside the whole:
+ * 1. `unreplayedTokens` comes off `messageTokens`, because the request never
+ *    carries that reasoning. Subtracting an absolute figure keeps the numerator
+ *    and the denominator priced by the same estimator; only the reasoning leaves
+ *    the bucket — the rest of the messages still enter the request, so weighting
+ *    the whole bucket would collapse every remaining token into the system prompt.
+ * 2. The remainder is scaled so the buckets sum to `occupancyTokens`, which
+ *    preserves the estimator's `proportions` while giving them the provider's
+ *    magnitude. Proportions are what the panel is for; the absolute figure is
+ *    the occupancy line's job.
+ * @param breakdown - buckets as the projection priced them.
+ * @param occupancyTokens - provider-anchored occupancy to rebase onto.
+ * @param unreplayedTokens - heuristic tokens of reasoning the request drops.
+ * @returns rebucketed figures summing to the occupancy, or undefined to keep the
+ *   projection's own figures when there is nothing to rebase onto.
+ */
+export function rebaseComposition(
+  breakdown: ContextBreakdown,
+  occupancyTokens: number | undefined,
+  unreplayedTokens = 0,
+): ContextBreakdown | undefined {
+  if (occupancyTokens === undefined || !Number.isFinite(occupancyTokens) || occupancyTokens <= 0) return undefined
+  const unreplayed = Number.isFinite(unreplayedTokens) ? Math.max(0, unreplayedTokens) : 0
+  const weights = [
+    breakdown.systemTokens,
+    breakdown.toolsTokens,
+    Math.max(0, breakdown.messageTokens - unreplayed),
+  ]
+  const total = weights.reduce((sum, value) => sum + value, 0)
+  if (total <= 0) return undefined
+  // Largest-remainder apportionment onto the anchored total keeps the integer
+  // buckets summing to exactly the occupancy, with no rounding drift.
+  const exact = weights.map(weight => weight / total * occupancyTokens)
+  const units = exact.map(value => Math.floor(value))
+  let remaining = Math.round(occupancyTokens) - units.reduce((sum, value) => sum + value, 0)
+  const byRemainder = exact
+    .map((value, index) => ({ index, remainder: value - (units[index] ?? 0) }))
+    .sort((left, right) => right.remainder - left.remainder || left.index - right.index)
+  for (const entry of byRemainder) {
+    if (remaining <= 0) break
+    units[entry.index] = (units[entry.index] ?? 0) + 1
+    remaining -= 1
+  }
+  return {
+    systemTokens: units[0] ?? 0,
+    toolsTokens: units[1] ?? 0,
+    messageTokens: units[2] ?? 0,
+    rebuilt: 'out-of-scale',
+  }
+}
+
+/**
+ * Split a total into integer units that sum to it, proportional to the weights.
+ *
+ * Largest-remainder apportionment: floor everything, then spend the leftover
+ * units on the largest fractional parts (ties by bucket order). Rounding each
+ * bucket on its own would let a three-way split read 33.3/33.3/33.3 or 100.0/0/
+ * 0, and the printed column would then contradict the bar drawn beside it.
+ * @param weights - non-negative bucket sizes.
+ * @param total - units to apportion.
+ * @returns one unit count per bucket, summing to `total` whenever `total` allows.
+ */
+function apportion(weights: readonly number[], total: number): number[] {
+  const sum = weights.reduce((acc, weight) => acc + weight, 0)
+  if (sum <= 0 || total <= 0) return weights.map(() => 0)
+  const exact = weights.map(weight => weight / sum * total)
+  const units = exact.map(value => Math.floor(value))
+  let remaining = total - units.reduce((acc, value) => acc + value, 0)
+  const byRemainder = exact
+    .map((value, index) => ({ index, remainder: value - (units[index] ?? 0) }))
+    .sort((left, right) => right.remainder - left.remainder || left.index - right.index)
+  for (const entry of byRemainder) {
+    if (remaining <= 0) break
+    units[entry.index] = (units[entry.index] ?? 0) + 1
+    remaining -= 1
+  }
+  return units
+}
+
+/**
+ * Share of each composition bucket, in tenths of a percent summing to 1000.
+ * @param breakdown - heuristic composition.
+ * @returns per-bucket tenths; all zero for an empty composition.
+ */
+export function contextCompositionShares(breakdown: ContextBreakdown): ContextCompositionShares {
+  const [system = 0, tools = 0, messages = 0] = apportion(
+    [breakdown.systemTokens, breakdown.toolsTokens, breakdown.messageTokens],
+    1_000,
+  )
+  return { system, tools, messages }
+}
+
+/**
+ * Render one share as `82.4%`.
+ * @param tenths - tenths of a percent from {@link contextCompositionShares}.
+ * @returns the percentage with one decimal, which keeps 0.1 distinct from 0.
+ */
+export function formatSharePercent(tenths: number): string {
+  const whole = Math.floor(tenths / 10)
+  return String(whole) + '.' + String(tenths % 10) + '%'
+}
+
 /** Context occupancy next to the compaction trigger, all as shares of the window. */
 export interface ContextPressure {
   /** Estimated model-visible tokens (surface + tools + system prompt). */
@@ -485,6 +665,121 @@ function formatContext(metrics: SessionMetrics): string {
   const trigger = compact === undefined ? '' : ' · compact at ' + String(compact) + '%'
   return 'ctx ' + String(metrics.contextPercent) + '%  (~'
     + formatTokenCount(estimate) + ' / ' + formatTokenCount(window) + trigger + ')'
+}
+
+/** One composition bucket as `/context` prints it. */
+export interface ContextBreakdownRow {
+  /** Which bucket this row is, for the palette's per-bucket color role. */
+  readonly bucket: 'system' | 'tools' | 'messages'
+  /** Legend label, matching the Web meter's panel rows. */
+  readonly label: string
+  /** Bucket glyph: the same cell the bar paints, so the row marks its own segment. */
+  readonly glyph: string
+  /** Heuristic tokens in this bucket. */
+  readonly tokens: number
+  /** Tenths of a percent of the heuristic total; the three always sum to 1000. */
+  readonly tenths: number
+}
+
+/** Heuristic composition plus the shares and bar derived from it. */
+export interface ContextComposition {
+  /** One row per bucket, in bar-segment order. */
+  readonly rows: readonly ContextBreakdownRow[]
+  /**
+   * Track representing the whole model window, with the used share split by the
+   * printed composition shares; empty for an empty surface.
+   */
+  readonly bar: string
+}
+
+/** Cells in the bar: enough resolution for the composition, short enough for a narrow terminal. */
+const BAR_CELLS = 40
+
+/**
+ * The one glyph every bucket is drawn with.
+ *
+ * Colour, not shape, separates the buckets — the same choice the Web panel makes
+ * with its three tinted bar segments. Distinct block glyphs would also work, but
+ * a legend row then has to repeat its own shape, and no choice of three block
+ * characters reads clearly at one-cell widths on every font.
+ */
+const BAR_FILL = '█'
+
+/** Glyph for the part of the window the context has not used. */
+const BAR_TRACK_GLYPH = '░'
+
+/**
+ * Render the bar the Web panel draws under its headline.
+ *
+ * The bar spans the MODEL WINDOW, not the composition: only the used share is
+ * filled, so its length states the same occupancy percentage the headline
+ * prints. Filling the whole width would say "100% used" while the headline said
+ * 25%, which is exactly how the Web panel is laid out and how this was misread.
+ *
+ * Inside the used share the cells are the printed composition shares
+ * apportioned, so a segment never contradicts its number. A bucket that
+ * apportions to no cell is simply not drawn — at this resolution it genuinely
+ * occupies less than one cell, and inventing one would overstate it.
+ * @param shares - tenths-of-a-percent shares from {@link contextCompositionShares}.
+ * @param percent - whole-percent occupancy of the window.
+ * @param tint - colours one bucket's cells; identity for a plain report.
+ * @returns one row of block characters; empty for an empty composition.
+ */
+export function contextCompositionBar(
+  shares: ContextCompositionShares,
+  percent: number,
+  tint: (bucket: 'system' | 'tools' | 'messages') => (text: string) => string = () => (text: string) => text,
+): string {
+  const weights = [shares.system, shares.tools, shares.messages]
+  if (weights.every(weight => weight <= 0)) return ''
+  const occupancy = Number.isFinite(percent) ? Math.max(0, Math.min(100, percent)) : 0
+  if (occupancy <= 0) return tint('system')(BAR_TRACK_GLYPH.repeat(BAR_CELLS))
+  // A window that any usage at all was measured in must not render as an empty
+  // track: one cell is the smallest thing this display can say.
+  const filled = Math.min(BAR_CELLS, Math.max(1, Math.round(occupancy / 100 * BAR_CELLS)))
+  const cells = apportion(weights, filled)
+  const segments = cells
+    .map((width, index) => (width > 0 ? tint(COMPOSITION_BUCKETS[index] ?? 'system')(BAR_FILL.repeat(width)) : ''))
+    .join('')
+  // Apportionment can lose a cell to rounding when several buckets are tiny;
+  // pad the used share so the bar never understates the headline percentage.
+  const used = Math.max(filled, cells.reduce((sum, value) => sum + value, 0))
+  return segments + tint('system')(BAR_TRACK_GLYPH.repeat(Math.max(0, BAR_CELLS - used)))
+}
+
+/** Bucket keys, in bar-segment order, matching the palette's per-bucket color role. */
+const COMPOSITION_BUCKETS = ['system', 'tools', 'messages'] as const
+
+/** Legend labels, in bar-segment order, worded as the Web meter's panel words them. */
+const COMPOSITION_LABELS = ['system prompt', 'tool definitions', 'messages'] as const
+
+/**
+ * Turn one composition reading into the legend rows and bar `/context` prints.
+ * @param breakdown - heuristic composition from {@link contextBreakdown}.
+ * @param percent - whole-percent occupancy of the window, which sets the bar's length.
+ * @param tint - colours one bucket's cells; identity for a plain report.
+ * @returns the legend rows and the bar; empty rows for an empty surface.
+ */
+export function contextComposition(
+  breakdown: ContextBreakdown,
+  percent: number,
+  tint?: (bucket: 'system' | 'tools' | 'messages') => (text: string) => string,
+): ContextComposition {
+  const values = [breakdown.systemTokens, breakdown.toolsTokens, breakdown.messageTokens]
+  const total = values.reduce((sum, value) => sum + value, 0)
+  if (total === 0) return { rows: [], bar: '' }
+  const shares = contextCompositionShares(breakdown)
+  const percents = [shares.system, shares.tools, shares.messages]
+  return {
+    rows: values.map((tokens, index) => ({
+      bucket: COMPOSITION_BUCKETS[index] ?? 'system',
+      label: COMPOSITION_LABELS[index] ?? '',
+      glyph: BAR_FILL,
+      tokens,
+      tenths: percents[index] ?? 0,
+    })),
+    bar: contextCompositionBar(shares, percent, tint),
+  }
 }
 
 /**

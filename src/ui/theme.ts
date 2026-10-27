@@ -24,6 +24,13 @@ export interface Palette {
   readonly preset: (text: string) => string
   /** Color the context-meter head by occupancy and the compaction trigger. */
   readonly context: (percent: number | undefined, triggerPercent?: number) => (text: string) => string
+  /**
+   * Color one composition bucket, keyed by the same names the Web meter's panel
+   * uses: system prompt grey, tool definitions purple, messages blue. Keeping the
+   * three distinct matters more than the exact hues, because the bar and its
+   * legend pair by color in the terminal as they do on the Web.
+   */
+  readonly contextBucket: (bucket: 'system' | 'tools' | 'messages') => (text: string) => string
 }
 
 const identity = (text: string): string => text
@@ -59,6 +66,7 @@ export function createPalette(theme: Config['theme']): Palette {
       reasoning: () => identity,
       preset: identity,
       context: () => identity,
+      contextBucket: () => identity,
     }
   }
   // Tool cards use a neutral surface instead of a saturated state color: the
@@ -92,6 +100,15 @@ export function createPalette(theme: Config['theme']): Palette {
     if (percent >= Math.max(0, trigger - 20)) return warning
     return dim
   }
+  // The Web meter tints its three legend rows with grey-blue, #a78bfa, and
+  // blue-450. The terminal has no static brand palette, so these are the closest
+  // 256-colour sits: a neutral grey, the same violet family as /preset, and the
+  // accent blue. All three stay separable on light and dark backgrounds.
+  const bucketCodes: Record<'system' | 'tools' | 'messages', string> = theme === 'light'
+    ? { system: '38;5;243', tools: '38;5;98', messages: '38;5;25' }
+    : { system: '38;5;245', tools: '38;5;141', messages: '38;5;39' }
+  const contextBucket = (bucket: 'system' | 'tools' | 'messages'): ((text: string) => string) =>
+    sgr(bucketCodes[bucket], '39')
   return {
     plain: false,
     dim,
@@ -111,6 +128,7 @@ export function createPalette(theme: Config['theme']): Palette {
     reasoning,
     preset: sgr(theme === 'light' ? '38;5;91' : '38;5;141', '39'),
     context,
+    contextBucket,
   }
 }
 

@@ -4,7 +4,16 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import type { Session } from '@deepseek-ai/dsh-session'
 import { randomUUID } from 'node:crypto'
 import type { ResolvedConfig } from '../config.js'
-import { contextWindowTokens, projectedContextTokens, type ContextMeterReading, type ContextPressureState } from './metrics.js'
+import {
+  contextBreakdown,
+  contextWindowTokens,
+  projectedContextTokens,
+  rebaseComposition,
+  type ContextBreakdown,
+  type ContextBreakdownState,
+  type ContextMeterReading,
+  type ContextPressureState,
+} from './metrics.js'
 import { NATIVE_TUI_SESSION_ID_PREFIX } from './session-list.js'
 
 /** One live Host Agent and its owned handle. */
@@ -115,6 +124,66 @@ export function readContextMeter(
       ...(reserved === undefined ? {} : { reservedTokens: reserved }),
     },
   }
+}
+
+/**
+ * Heuristic tokens of the reasoning the provider never receives.
+ *
+ * pi-ai replays a `thinking` block only when it carries a `thinkingSignature`;
+ * a block without one is dropped from the request entirely. Gateways that stream
+ * reasoning without a signature (this profile's does) therefore leave the meter
+ * pricing text the next request does not carry, and since that pricing is folded
+ * into `messageTokens`, that bucket ends up claiming more context than the
+ * session is billed for.
+ *
+ * Returned as an absolute figure on purpose: the caller subtracts it from the
+ * projection's own `messageTokens`, so the numerator and the denominator are
+ * priced the same way and no third estimator has to agree with the meter's.
+ * @param session - session whose surface is read.
+ * @returns heuristic tokens of unreplayable reasoning; 0 when all of it replays.
+ */
+export function unreplayedReasoningTokens(session: Session): number {
+  // The meter's fixed estimator: 4 characters per token plus 4 per block.
+  const price = (text: string): number => Math.ceil(text.length / 4) + 4
+  let tokens = 0
+  for (const event of session.snapshotEvents()) {
+    const type = event.type as string
+    if (type !== 'assistant/message' && type !== 'assistant/attempt') continue
+    const message = (event.data as { readonly message?: { readonly role?: unknown; readonly content?: readonly unknown[] } }).message
+    if (message?.role === 'system' || !Array.isArray(message?.content)) continue
+    for (const block of message.content) {
+      const candidate = block as { readonly type?: unknown; readonly text?: unknown; readonly thinkingSignature?: unknown }
+      if (candidate.type !== 'reasoning' || typeof candidate.text !== 'string') continue
+      if (candidate.thinkingSignature === undefined) tokens += price(candidate.text)
+    }
+  }
+  return tokens
+}
+
+/**
+ * Read the token meter's heuristic composition of the next request's context.
+ *
+ * A separate projection from {@link readContextMeter} on purpose: the meter
+ * prices the composition with its fixed estimator, while the occupancy figure is
+ * anchored to the provider's own usage, so the two never sum to each other.
+ *
+ * The projection's raw figures are rebased onto the provider's own prompt count
+ * so no bucket can exceed the total: its estimator prices reasoning the request
+ * never carries, which on a real session pushed one bucket past the occupancy.
+ * @param projections - live Session projections, or undefined when unmounted.
+ * @param session - session whose breakdown state is read.
+ * @param occupancyTokens - provider-anchored occupancy to rebase the split onto.
+ * @returns the three buckets, or undefined when the meter is not mounted.
+ */
+export function readContextBreakdown(
+  projections: ContextPressureReader | undefined,
+  session: Session,
+  occupancyTokens?: number,
+): ContextBreakdown | undefined {
+  const state = projections?.stateOf(session, 'contextBreakdown') as ContextBreakdownState | undefined
+  const raw = contextBreakdown(state)
+  if (raw === undefined) return undefined
+  return rebaseComposition(raw, occupancyTokens, unreplayedReasoningTokens(session)) ?? raw
 }
 
 /**

@@ -162,6 +162,7 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 | `/sessions` | 列出本终端创建的 Session |
 | `/resume <id>` | 恢复指定 Session |
 | `/status` | Session、cwd、模型、状态、事件数 |
+| `/context` | 上下文占用、压缩触发点，以及系统提示词 / 工具定义 / 对话消息的占比（三项合计等于占用） |
 | `/clear` | 仅清空终端视图 |
 | `/cancel` | 取消当前 turn |
 | `/preset [id]` | 切换当前或下一次 `/new` 的 preset，并保存默认 preset |
@@ -470,7 +471,7 @@ pnpm test:watch
 pnpm build      # tsc -p tsconfig.build.json → dist/（gitignored）
 ~~~
 
-当前状态：70 个测试文件 / 802 个用例。代码风格见仓库根目录 `AGENTS.md`：TypeScript ESM（NodeNext），两空格缩进、单引号、无分号，单个源文件不超过 1000 行。
+当前状态：71 个测试文件 / 844 个用例。代码风格见仓库根目录 `AGENTS.md`：TypeScript ESM（NodeNext），两空格缩进、单引号、无分号，单个源文件不超过 1000 行。
 
 ### 真实 Host 探针
 
@@ -495,6 +496,7 @@ node scripts/fake-tty-window-title.mjs       # 终端窗口标题（OSC 0）
 node scripts/fake-tty-stream-smooth.mjs      # 流式大 chunk
 node scripts/fake-tty-main-screen-scroll.mjs # main-screen 长 transcript
 node scripts/fake-tty-model-picker.mjs       # /model 选择器与冷/热路径耗时（需网络：查 CodeBuddy 目录）
+node scripts/fake-tty-context.mjs            # /context 占用、占比图与三个分项（自建 mock provider）
 ~~~
 
 普通终端环境可运行真实 PTY 冒烟：

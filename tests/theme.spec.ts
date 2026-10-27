@@ -42,6 +42,35 @@ describe('reasoning colors', () => {
     expect(createPalette('plain').context(90)('x')).toBe('x')
   })
 
+  it('tints the three composition buckets like the Web meter', () => {
+    // The Web panel tints system grey-blue, tools #a78bfa, messages blue-450.
+    // The terminal keeps that mapping and only picks the nearest 256-color sits.
+    const dark = createPalette('dark')
+    expect(dark.contextBucket('system')('x')).toContain('38;5;245')
+    expect(dark.contextBucket('tools')('x')).toContain('38;5;141')
+    expect(dark.contextBucket('messages')('x')).toContain('38;5;39')
+    // Light mode deepens each hue so it stays readable on a pale background.
+    const light = createPalette('light')
+    expect(light.contextBucket('system')('x')).toContain('38;5;243')
+    expect(light.contextBucket('tools')('x')).toContain('38;5;98')
+    expect(light.contextBucket('messages')('x')).toContain('38;5;25')
+  })
+
+  it('keeps the three buckets distinguishable from each other', () => {
+    // Colour is the only thing separating the bar segments, so two buckets
+    // sharing a hue would merge into one unreadable run.
+    for (const theme of ['dark', 'light'] as const) {
+      const palette = createPalette(theme)
+      const tints = new Set([
+        palette.contextBucket('system')('x'),
+        palette.contextBucket('tools')('x'),
+        palette.contextBucket('messages')('x'),
+      ])
+      expect(tints.size).toBe(3)
+    }
+    expect(createPalette('plain').contextBucket('tools')('x')).toBe('x')
+  })
+
   it('uses the effort color for editor borders and follows changes', () => {
     let effort: string | undefined = 'low'
     const palette = createPalette('dark')

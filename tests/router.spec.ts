@@ -38,6 +38,18 @@ function harness(options: { readonly hostResult?: unknown; readonly skills?: rea
     showHostSettings: () => undefined,
     modelSelection: { current: undefined, assembled: undefined },
     setContextWindow: () => undefined,
+    readContext: () => ({
+      metrics: {
+        turns: 1,
+        steps: 2,
+        totalTokens: 71_000,
+        contextPercent: 6,
+        contextEstimateTokens: 61_100,
+        contextWindowTokens: 1_000_000,
+        contextCompactPercent: 80,
+      },
+      breakdown: { systemTokens: 51_200, toolsTokens: 628, messageTokens: 10_900 },
+    }),
     persistSelection: async () => undefined,
   } as unknown as CommandContext
   const deps: CommandRouterDeps = {
@@ -116,6 +128,23 @@ describe('command router', () => {
     const h = harness()
     await runCommandLine('/codex status', h.deps)
     expect(h.notices.map(notice => notice.text).join('\n')).toContain('credential store is unavailable')
+  })
+
+  it('prints the context figures through the shared reader', async () => {
+    const h = harness()
+    await runCommandLine('/context', h.deps)
+    expect(h.notices).toHaveLength(1)
+    expect(h.notices[0]?.tone).toBe('info')
+    expect(h.notices[0]?.text).toContain('Context used: 6%')
+    expect(h.notices[0]?.text).toContain('system prompt')
+    expect(h.notices[0]?.text).toContain('tool definitions')
+    expect(h.notices[0]?.text).toContain('messages')
+  })
+
+  it('rejects context arguments instead of ignoring them', async () => {
+    const h = harness()
+    await runCommandLine('/context 3', h.deps)
+    expect(h.notices).toEqual([{ tone: 'warning', text: 'Usage: /context' }])
   })
 
   it('passes an unknown name to the host before noticing it', async () => {

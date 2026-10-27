@@ -11,7 +11,7 @@ import type { CommandSuggestion } from '../autocomplete.js'
 
 /** `/help` rows, one line per command family. */
 export const HELP_LINES: readonly string[] = [
-  '/help · /new · /init · /sessions · /resume [id] · /status · /clear',
+  '/help · /new · /init · /sessions · /resume [id] · /status · /context · /clear',
   'Ctrl+N: new/blank session · Alt+S: switch session (keep draft and attachments)',
   'Ctrl+O: expand/collapse all tool cards (main-screen may redraw history and clear terminal scrollback)',
   'Fullscreen only: click the first line of a tool card to toggle it',
@@ -40,6 +40,7 @@ export const LOCAL_COMMANDS: readonly CommandSuggestion[] = [
   { name: 'sessions', description: 'list persisted sessions' },
   { name: 'resume', description: 'resume a session', input: { hint: 'session-id' } },
   { name: 'status', description: 'show session, model, and preset' },
+  { name: 'context', description: 'show context usage and its composition' },
   { name: 'clear', description: 'clear the terminal view only' },
   { name: 'cancel', description: 'cancel the running turn' },
   { name: 'model', description: 'select a model', input: { hint: 'provider/model' } },

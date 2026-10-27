@@ -16,10 +16,10 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm/types'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { DisplayMode, ResolvedConfig } from '../config.js'
-import { createHostSession, readContextMeter, resumeHostSession, sessionAgentPreset, sessionModelSelection, type AgentPresetService, type HostSession } from '../runtime/agent.js'
+import { createHostSession, readContextBreakdown, readContextMeter, resumeHostSession, sessionAgentPreset, sessionModelSelection, type AgentPresetService, type HostSession } from '../runtime/agent.js'
 import { findLauncher, parseProfileArg, resumeHint } from '../runtime/launcher.js'
 import { reloadArgs } from '../runtime/reload.js'
-import { createSessionMetricsMemo, type SessionStats } from '../runtime/metrics.js'
+import { createSessionMetricsMemo, type SessionMetrics, type SessionStats } from '../runtime/metrics.js'
 import { showApproval, showQuestionBatch } from './dialogs.js'
 import type { PendingAttachment } from '../runtime/attachments.js'
 import { TuiAutocompleteProvider, type SessionReferenceService, type SkillSuggestion } from './autocomplete.js'
@@ -443,6 +443,41 @@ export async function startTerminalApp(
   const metricsFold = createSessionMetricsMemo()
 
   /**
+   * Everything the context figures are read from: the routed capacity the meter
+   * reported, the meter's own reading, the session-stats projection, and the log.
+   */
+  const contextInputs = () => {
+    const projections = host.get('sessionProjections') as SessionProjectionsService | undefined
+    const meter = readContextMeter(projections, active.agent.session, contextReserved)
+    return {
+      projections,
+      meter,
+      // The routed request's own capacity wins, as on the Web meter; the model
+      // catalog value only stands in before the first request is routed.
+      window: meter.window ?? contextWindow,
+      stats: projections?.stateOf(active.agent.session, 'sessionStats') as SessionStats | undefined,
+      events: active.agent.session.snapshotEvents(),
+    }
+  }
+
+  /**
+   * The context figures both readers share: the status row prices them on every
+   * event, and `/context` prints the same numbers on demand through the one
+   * memoized fold, so a repaint between the two cannot make them disagree.
+   * @returns the folded metrics and the meter's heuristic composition.
+   */
+  const readContextFigures = (): { readonly metrics: SessionMetrics; readonly breakdown: ReturnType<typeof readContextBreakdown> } => {
+    const inputs = contextInputs()
+    const metrics = metricsFold(inputs.events, inputs.stats, inputs.window, inputs.meter.reading)
+    return {
+      metrics,
+      // Rebased onto the occupancy the row reports, so the split can never add
+      // up to more context than the session is actually paying for.
+      breakdown: readContextBreakdown(inputs.projections, active.agent.session, metrics.contextEstimateTokens),
+    }
+  }
+
+  /**
    * Coalesce status repaints.
    *
    * One durable event per model step arrives in bursts — a settlement, its tool
@@ -465,8 +500,7 @@ export async function startTerminalApp(
     if (disposed) return
     reasoningEffort = modelSelection.current?.reasoningEffort
     const options = active.agent.options
-    const projections = host.get('sessionProjections') as SessionProjectionsService | undefined
-    const meter = readContextMeter(projections, active.agent.session, contextReserved)
+    const inputs = contextInputs()
     renderStatusRows({ header, status, footer }, palette, {
       title,
       sessionId: active.id,
@@ -477,12 +511,10 @@ export async function startTerminalApp(
       reasoningEffort,
       preset: currentPreset(host.get('agentPresets') as AgentPresetService | undefined, active.agent.ctx),
       attachmentCount: pendingAttachments.length,
-      // The routed request's own capacity wins, as on the Web meter; the model
-      // catalog value only stands in before the first request is routed.
-      contextWindow: meter.window ?? contextWindow,
-      contextMeter: meter.reading,
-      stats: projections?.stateOf(active.agent.session, 'sessionStats') as SessionStats | undefined,
-      events: active.agent.session.snapshotEvents(),
+      contextWindow: inputs.window,
+      contextMeter: inputs.meter.reading,
+      stats: inputs.stats,
+      events: inputs.events,
     }, metricsFold)
     syncWindowTitle()
     tui.requestRender()
@@ -698,6 +730,7 @@ export async function startTerminalApp(
         contextWindow = tokens
         contextReserved = reservedTokens
       },
+      readContext: readContextFigures,
       persistSelection,
     }
   }
