@@ -16,6 +16,7 @@ export const inject = [
   'approval',
   'llm',
   'permissionPresets',
+  'interactionModes',
   'jobs',
   'subagents',
   'workspaceRegistry',

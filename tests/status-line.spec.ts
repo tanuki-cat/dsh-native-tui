@@ -75,6 +75,13 @@ describe('renderStatusRows', () => {
     expect(state.status).toContain('enter send')
   })
 
+  it.each([['manual', 'manual mode'], ['accept-edits', 'accept edits'], ['plan', 'plan mode'], ['auto', 'auto mode · EXP'], ['custom', 'custom mode']] as const)('shows %s below the editor without confusing Full access with Auto', (interactionMode, label) => {
+    const { state, rows: target } = rows()
+    renderStatusRows(target, palette, inputOf({ interactionMode }))
+    expect(state.footer.startsWith(label + ' · /mode')).toBe(true)
+    expect(state.footer).toContain('2 turns')
+  })
+
   it('uses the running vocabulary and hides the default thinking label', () => {
     const { state, rows: target } = rows()
     renderStatusRows(target, palette, inputOf({ running: true, reasoningEffort: undefined }))

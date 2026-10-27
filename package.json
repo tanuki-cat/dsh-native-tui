@@ -31,6 +31,10 @@
       "types": "./dist/mcp-manager.d.ts",
       "default": "./dist/mcp-manager.js"
     },
+    "./interaction-modes": {
+      "types": "./dist/interaction-modes.d.ts",
+      "default": "./dist/interaction-modes.js"
+    },
     "./codebuddy": {
       "types": "./dist/codebuddy.d.ts",
       "default": "./dist/codebuddy.js"
@@ -56,6 +60,7 @@
     "@earendil-works/pi-tui": "1.4.0",
     "fflate": "^0.8.3",
     "@deepseek-ai/dsh-computer-use": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-experimental-auto-review": "0.2.1-rc.3",
     "@deepseek-ai/dsh-experimental-computer-use-cua-driver-native": "0.2.1-rc.3",
     "@deepseek-ai/dsh-mcp-client": "0.2.1-rc.3",
     "@deepseek-ai/dsh-mcp-resources": "0.2.1-rc.3",

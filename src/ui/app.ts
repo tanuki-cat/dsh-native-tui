@@ -32,6 +32,7 @@ import { LOCAL_COMMANDS } from './commands/catalog.js'
 import type { CommandContext } from './commands/context.js'
 import { runCommandLine } from './commands/router.js'
 import { cycleReasoningEffort } from './commands/model.js'
+import type { InteractionModeService as ModeService } from '../interaction-modes.js'
 import type { AgentDefaultModelService, LLM, SessionProjectionsService, SkillsCatalog } from './commands/services.js'
 import { openTuiSettings, showHostSettings } from './commands/settings.js'
 import { errorMessage } from './commands/shared.js'
@@ -505,6 +506,7 @@ export async function startTerminalApp(
       provider: modelSelection.current?.provider ?? options.provider ?? 'deepseek-official',
       model: modelSelection.current?.model ?? options.model ?? 'deepseek-flash',
       reasoningEffort,
+      interactionMode: (host.get('interactionModes') as ModeService | undefined)?.current(active.agent),
       preset: currentPreset(host.get('agentPresets') as AgentPresetService | undefined, active.agent.ctx),
       attachmentCount: pendingAttachments.length,
       contextWindow: inputs.window,

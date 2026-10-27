@@ -57,8 +57,36 @@
     - id: codebuddy
       name: dsh-native-tui/codebuddy
 
+    - id: auto-review
+      name: '@deepseek-ai/dsh-experimental-auto-review'
+
+    - id: interaction-modes
+      name: dsh-native-tui/interaction-modes
+
     - id: native-tui
       name: dsh-native-tui
+
+# Session modes keep the Host permission log authoritative. Auto is contributed
+# only by the reviewer above, never by an unrestricted configured preset.
+- id: permission
+  config:
+    defaultPreset: !!js process.env.DSH_PERMISSION_MODE ?? 'accept-edits'
+    presets:
+      manual:
+        sandbox: read-only
+        approval: ask
+        name: Manual
+        description: Read-only files; one-shot wider writes require approval.
+      accept-edits:
+        sandbox: workspace-write
+        approval: ask
+        name: Accept edits
+        description: Workspace edits without prompts; wider writes require approval.
+      plan:
+        sandbox: read-only
+        approval: ask
+        name: Plan
+        description: Explore read-only, then review the plan before implementation.
 
 # The Web surface moves these per-agent contributions behind presets. The terminal
 # now does the same; keeping them in the base plane would duplicate preset tools.

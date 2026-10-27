@@ -101,7 +101,7 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 - 终端窗口标题：启动后写入 `<产品标题> · <workspace 目录名>`（OSC 0），标签页能直接看出是哪个 checkout 的会话，例如 `DeepSeek Harness · dsh-native-tui`。控制字符会被压平（BEL 会截断 OSC 序列），目录名超过 48 字符截断；只在标题变化时写入。
 - 宽松排版：header 三行（产品标题、Session id、cwd）；transcript 只保留上下留白；状态区独立成块（`● idle   model provider/model   think max` + 空行 + preset/快捷键）；transcript / 状态区 / 输入框 / 分隔线 / 编辑框边框共用同一满宽列，无左右留白，宽度随终端 resize 自适应。
 - reasoning effort 同时决定 `think` 标签、状态栏分隔线和编辑器上下边框的颜色（low 暗绿 / medium 浅蓝 / high 粉红 / max 红；未设置或未知 effort 保持 dim，`plain` 主题不着色）。provider 蓝、model 青、preset 紫、attached 数量青。
-- footer 两行：`↳ turns · steps · tok/s · tok · cache` 与 `ctx ...`。`ctx` 读 token meter 的 `contextPressure` 投影（最近一次 provider 采样 + 此后 surface 增减，compaction 影响已含在内），渲染为 `ctx 42%  (~420K / 1M · compact at 80%)`；`compact at` 是按 `compaction-basic` 的 `thresholdRatio`、`headroomTokens` 与该请求预留输出复算的触发点。首次 provider 采样前显示 `ctx —`，不猜占用。
+- footer 三行：当前模式及 `/mode` 入口、`↳ turns · steps · tok/s · tok · cache` 与 `ctx ...`。`ctx` 读 token meter 的 `contextPressure` 投影（最近一次 provider 采样 + 此后 surface 增减，compaction 影响已含在内），渲染为 `ctx 42%  (~420K / 1M · compact at 80%)`；`compact at` 是按 `compaction-basic` 的 `thresholdRatio`、`headroomTokens` 与该请求预留输出复算的触发点。首次 provider 采样前显示 `ctx —`，不猜占用。
 - token 用量与 cache 命中率按 Web 口径：总量取四桶之和、部分命中不会显示成 100%，数字格式与 Web 统计 pill 一致。`tok/s` 是整段 Session 的累计 decode 速率（`decodeTokens / (decodeMs / 1000)`），不是瞬时速率，低于 10 时保留一位小数。
 - 可选 `fullscreen`：TuiAltScreen + ScrollView，header/status/editor 固定，鼠标滚轮滚动、文本选择复制。向上滚动离开末尾后，视口末行显示可点击的 `↓ jump to latest`，点击回到最新消息并恢复自动跟随（也可 `Ctrl+End`）。
 - 长会话渲染优化：每个行组件按宽度缓存结果（`MemoBlock`），`maxTranscriptEntries` 默认 600 限制每帧保留的行组件数；帧间隔按上次绘制时刻对齐并按实测帧成本自适应，内容签名未变的帧跳过重绘。
@@ -183,7 +183,25 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 | `/provider [add\|list\|edit [route]\|models <route>\|input [provider/model]\|remove <route>]` | 配置或查看 provider；刷新模型目录；编辑输入模态；删除 route |
 | `/codex [status\|setup\|login [browser\|device]\|logout\|models\|help]` | ChatGPT Codex 登录、路由与额度 |
 | `/codebuddy [status\|login [cn\|en\|all]\|logout [cn\|en\|all]\|models [refresh]\|quota\|checkin\|prompt [show\|reset]\|doctor]` | CodeBuddy / WorkBuddy 账号与模型 |
-| `/permissions [preset]` | 列出或切换权限预设 |
+| `/mode [manual\|accept-edits\|plan\|auto]` | 打开模式选择器或切换当前会话模式 |
+| `/permissions [preset]` | 无参数使用模式选择器；保留高级 Host preset 的直接选择 |
+
+### 交互模式
+
+新会话默认 **accept edits**；显式的 `DSH_PERMISSION_MODE` 或 profile 默认权限配置优先，恢复会话沿用 Host 中已保存的权限和规划状态。输入框下方显示当前模式，`/mode` 打开选择器。Shift+Tab 仍切换思考强度，不用于切换权限。
+
+| 模式 | 行为 |
+|---|---|
+| `manual` | 文件 sandbox 为 read-only；写操作通过 Host 的一次性扩大范围请求审批，其他非只读工具逐次询问 |
+| `accept-edits` | 文件 sandbox 为 workspace-write；工作区 `write`/`edit` 自动执行，超出文件范围仍需审批；shell、未知 MCP 等非只读工具逐次询问 |
+| `plan` | 启用 Host 规划提示词和 read-only 文件 sandbox；guard 拒绝写入、shell、委派和未知 MCP 调用，只开放已知读取、搜索、提问和计划审核工具 |
+| `auto` | EXP：使用当前 Agent 模型逐次审核受控工具调用，并以 Full access 执行获准调用；拒绝时询问用户，审核失败则不执行 |
+
+使用 `/mode manual`、`/mode accept-edits`、`/mode plan` 或 `/mode auto` 直接选择。模式切换仅允许在当前 turn 空闲时进行。选择 Auto 必须额外确认风险，不会把 Auto 保存为新会话默认值；原始 `danger-full-access` preset 不显示为 Auto。
+
+Plan 保留工具目录，用策略和最终 guard 限制受控调用；`exit_plan_mode` 展示完整计划，用户选择继续规划时保持限制，批准后从下一 step 恢复进入 Plan 前的权限。若原 reviewer/preset 已不可用，保留 Plan 限制，用户需要显式选择可用模式。Plan 中不能用高级 `/permissions` 绕过限制。
+
+这些模式复用 DSH Host 的权限语义，并非 Claude Code 权限引擎的完整替代。PTC 内层 `tools.*` 调用接受相同 guard 和 Auto 审核；外层程序仍由 Host 文件 sandbox 约束，但任意 Node 网络副作用不属于完整逐调用审核边界。Auto 可能误判并消耗额外模型 tokens；需要严格的外部副作用隔离时，应另用受限 profile、容器或专用工具策略，不能仅依赖交互模式。
 
 ### 环境与扩展
 
@@ -504,6 +522,8 @@ node scripts/fake-tty-model-picker.mjs       # /model 选择器与冷/热路径�
 node scripts/fake-tty-context.mjs            # /context 占用、占比图与三个分项（自建 mock provider）
 node scripts/fake-tty-skills.mjs             # /skill 列表、分页、标签、选择过滤与真实调用链路（自建临时 workspace 与技能）
 node scripts/fake-tty-reasoning-cycle.mjs    # Shift+Tab 编码、连按、草稿、弹窗及 level → wire 映射（自建临时 profile 与 mock provider）
+node scripts/fake-tty-interaction-modes.mjs native # 四模式、真实文件效果、plan 审核和 Auto 审核（自建临时 profile）
+node scripts/fake-tty-interaction-modes.mjs ptc    # 相同边界的 PTC 内层链路；需要宿主允许创建子进程 sandbox
 ~~~
 
 普通终端环境可运行真实 PTY 冒烟：

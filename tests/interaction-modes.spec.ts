@@ -1,0 +1,234 @@
+import { describe, expect, it, vi } from 'vitest'
+import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { Session } from '@deepseek-ai/dsh-session'
+import { apply, type InteractionModeService, type ModeExecution } from '../src/interaction-modes.js'
+
+type Decision = { kind: string; reason?: string }
+type ExecListener = (exec: ModeExecution, next: () => Promise<Decision>) => Promise<Decision>
+type StepListener = (request: { agent: Agent; signal: AbortSignal }, next: () => Promise<Decision>) => Promise<Decision>
+function harness() {
+  const listeners = new Map<string, unknown>()
+  const guards = new Set<(exec: ModeExecution) => string | undefined>()
+  const cleanups: Array<() => void> = []
+  const events: Array<{ type: string; data: { preset?: string; active?: boolean } }> = []
+  let preset = 'accept-edits', auto = true, hasPlan = true, directPlan = true
+  let planState: { active: boolean; pending?: boolean } = { active: false }
+  const permissions = {
+    get names() { return ['read-only', 'workspace-write', 'danger-full-access', 'manual', 'accept-edits', 'plan', ...(auto ? ['auto'] : [])] },
+    current: () => preset,
+    resolve: vi.fn((mode: string) => ({ sandbox: mode === 'auto' ? 'danger-full-access' : mode === 'accept-edits' ? 'workspace-write' : 'read-only', approval: 'ask' })),
+    set: vi.fn((_session: Session, next: string) => {
+      if (!permissions.names.includes(next)) throw new Error('preset unavailable')
+      if (preset === next) return
+      preset = next
+      events.push({ type: 'permission/preset', data: { preset: next } })
+    }),
+  }
+  const plan = { get: () => planState, set: vi.fn((_agent: Agent, active: boolean) => { planState = { active } }) }
+  const agent = { status: 'idle', session: { snapshotEvents: () => events }, ctx: { get: () => hasPlan && directPlan ? plan : undefined } } as unknown as Agent
+  const commands = {
+    list: vi.fn(() => hasPlan ? [{ name: 'plan', definitionId: '@deepseek-ai/dsh-plan-mode' }] : []),
+    execute: vi.fn(async (_agent: Agent, line: string, _attachments: readonly never[], _signal: AbortSignal) => {
+      events.push({ type: 'plan/mode', data: { active: line === '/plan' } })
+      return { result: { kind: 'success', text: 'Plan updated' } }
+    }),
+  }
+  let modes!: InteractionModeService
+  const ctx = {
+    get: (name: string) => name === 'permissionPresets' ? permissions : name === 'commands' ? commands : { guard: (guard: (exec: ModeExecution) => string | undefined) => { guards.add(guard); return () => { guards.delete(guard) } } },
+    provide: (_name: string, value: InteractionModeService) => { modes = value },
+    effect: (run: () => () => void) => { cleanups.push(run()) },
+    on: (event: string, callback: unknown) => { listeners.set(event, callback); cleanups.push(() => { listeners.delete(event) }) },
+  }
+  apply(ctx as never)
+  const exec = (name: string, args: unknown = {}, inner = false): ModeExecution => ({ name, arguments: args, agent, ...(inner ? { parent: {} } : {}) })
+  return {
+    modes, agent, permissions, plan, guards, listeners, exec, commands, events,
+    get preset() { return preset },
+    set preset(value: string) { preset = value },
+    set auto(value: boolean) { auto = value },
+    set hasPlan(value: boolean) { hasPlan = value },
+    set directPlan(value: boolean) { directPlan = value },
+    set planState(value: { active: boolean; pending?: boolean }) { planState = value },
+    gate: (execution: ModeExecution, downstream: Decision = { kind: 'allow' }) =>
+      (listeners.get('tools/pre-execute') as ExecListener)(execution, async () => downstream),
+    step: (decision: Decision = { kind: 'accept' }) => (listeners.get('agent/pre-step') as StepListener)(
+      { agent, signal: new AbortController().signal }, async () => decision),
+    dispose: () => { for (const cleanup of cleanups.reverse()) cleanup() },
+  }
+}
+
+describe('interaction modes', () => {
+  it('uses the Host accept-edits identity without creating a parallel mode log', () => {
+    const h = harness()
+    expect(h.modes.current(h.agent)).toBe('accept-edits')
+    expect(h.permissions.set).not.toHaveBeenCalled()
+  })
+
+  it.each(['manual', 'accept-edits', 'plan', 'auto'] as const)('selects %s through Host permissions and the scoped plan controller', mode => {
+    const h = harness()
+    h.modes.set(h.agent, mode)
+    expect(h.preset).toBe(mode)
+    expect(h.plan.set).toHaveBeenCalledWith(h.agent, mode === 'plan')
+    expect(h.modes.current(h.agent)).toBe(mode)
+  })
+
+  it('uses the Host command when a planning group isolates planMode from agent.ctx', async () => {
+    const h = harness()
+    h.directPlan = false
+    await h.modes.set(h.agent, 'plan')
+    expect(h.commands.execute).toHaveBeenCalledWith(h.agent, '/plan', [], expect.any(AbortSignal))
+    expect(h.modes.current(h.agent)).toBe('plan')
+    await h.modes.set(h.agent, 'manual')
+    expect(h.commands.execute).toHaveBeenLastCalledWith(h.agent, '/plan off', [], expect.any(AbortSignal))
+    expect(h.modes.current(h.agent)).toBe('manual')
+  })
+
+  it('rolls back a failed isolated Host plan command', async () => {
+    const h = harness()
+    h.directPlan = false
+    h.commands.execute.mockResolvedValueOnce({ result: { kind: 'error', text: 'plan failed' } })
+    await expect(h.modes.set(h.agent, 'plan')).rejects.toThrow('plan failed')
+    expect(h.preset).toBe('accept-edits')
+  })
+
+  it('does not accept a replacement /plan command without the Host definition identity', () => {
+    const h = harness()
+    h.directPlan = false
+    h.commands.list.mockReturnValue([{ name: 'plan', definitionId: 'unrelated-plugin' }])
+    expect(() => h.modes.set(h.agent, 'plan')).toThrow('unavailable')
+  })
+
+  it('does not advertise a mislabeled preset as a safe mode', () => {
+    const h = harness()
+    h.permissions.resolve.mockReturnValue({ sandbox: 'danger-full-access', approval: 'never' })
+    expect(h.modes.current(h.agent)).toBe('custom')
+    expect(h.modes.available(h.agent)).toEqual([])
+    expect(() => h.modes.set(h.agent, 'plan')).toThrow('unavailable')
+  })
+
+  it('does not label unrestricted access as Auto', () => {
+    const h = harness()
+    h.preset = 'danger-full-access'
+    expect(h.modes.current(h.agent)).toBe('custom')
+  })
+
+  it('refuses unavailable Auto and plan modes without changing permissions', () => {
+    const h = harness()
+    h.auto = false
+    expect(() => h.modes.set(h.agent, 'auto')).toThrow('unavailable')
+    h.hasPlan = false
+    expect(() => h.modes.set(h.agent, 'plan')).toThrow('unavailable')
+    expect(h.permissions.set).not.toHaveBeenCalled()
+  })
+
+  it('does not change permissions during a running turn', () => {
+    const h = harness()
+    Object.assign(h.agent, { status: 'running' })
+    expect(() => h.modes.set(h.agent, 'auto')).toThrow('running turn')
+    expect(h.permissions.set).not.toHaveBeenCalled()
+  })
+
+  it('rolls back permission selection if plan activation fails', () => {
+    const h = harness()
+    h.plan.set.mockImplementationOnce(() => { throw new Error('plan unavailable') })
+    expect(() => h.modes.set(h.agent, 'plan')).toThrow('plan unavailable')
+    expect(h.preset).toBe('accept-edits')
+  })
+
+  it.each(['read', 'read_image', 'glob', 'grep', 'web_fetch', 'skill', 'ask_user_question', 'exit_plan_mode', 'write', 'edit'])('leaves %s to the Host file sandbox or read path in accept-edits mode', async name => {
+    const h = harness()
+    expect(await h.gate(h.exec(name))).toEqual({ kind: 'allow' })
+  })
+
+  it.each(['manual', 'accept-edits'] as const)('asks for non-read tools in %s, including PTC inner dispatch', async mode => {
+    const h = harness()
+    h.modes.set(h.agent, mode)
+    for (const name of ['bash', 'mcp__server__write', 'subagent']) {
+      expect((await h.gate(h.exec(name))).kind).toBe('ask')
+      expect((await h.gate(h.exec(name, {}, true))).kind).toBe('ask')
+    }
+  })
+
+  it('never weakens a downstream denial, and lets one-shot shell approval stay with its owner', async () => {
+    const h = harness()
+    const denial = { kind: 'deny', reason: 'another policy' }
+    expect(await h.gate(h.exec('bash'), denial)).toBe(denial)
+    expect(await h.gate(h.exec('bash', { sandbox_permissions: 'workspace-write' }))).toEqual({ kind: 'allow' })
+    expect((await h.gate(h.exec('mcp__fake__write', { sandbox_permissions: 'workspace-write' }))).kind).toBe('ask')
+  })
+
+  it('does not replace the Host Auto reviewer with an allow decision', async () => {
+    const h = harness()
+    h.modes.set(h.agent, 'auto')
+    expect(await h.gate(h.exec('bash'))).toEqual({ kind: 'allow' })
+    expect(await h.gate(h.exec('bash'), { kind: 'deny', reason: 'reviewer denied' })).toEqual({ kind: 'deny', reason: 'reviewer denied' })
+  })
+
+  it.each(['write', 'edit', 'bash', 'subagent', 'mcp__idea__read_file', 'working_directory'])('blocks %s in plan mode through a final guard, native and PTC', name => {
+    const h = harness()
+    h.modes.set(h.agent, 'plan')
+    const args = name === 'working_directory' ? { cd: '/other' } : {}
+    expect(h.modes.planDenial(h.exec(name, args))).toContain('Plan mode blocks')
+    expect(h.modes.planDenial(h.exec(name, args, true))).toContain('Plan mode blocks')
+  })
+
+  it('keeps the PTC transport confined and rejects explicit sandbox widening in plan mode', () => {
+    const h = harness()
+    h.modes.set(h.agent, 'plan')
+    expect(h.modes.planDenial(h.exec('run_code'))).toBeUndefined()
+    expect(h.modes.planDenial(h.exec('read'))).toBeUndefined()
+    expect(h.modes.planDenial(h.exec('exit_plan_mode'))).toBeUndefined()
+    expect(h.modes.planDenial(h.exec('working_directory'))).toBeUndefined()
+    expect(h.modes.planDenial(h.exec('run_code', { sandbox_permissions: 'danger-full-access' }))).toContain('escalation')
+    h.preset = 'danger-full-access'
+    expect(h.modes.planDenial(h.exec('run_code'))).toContain('read-only sandbox')
+  })
+
+  it.each(['manual', 'accept-edits', 'auto'] as const)('restores %s after accepted plan exit instead of resetting to a broader default', async before => {
+    const h = harness()
+    h.modes.set(h.agent, before)
+    h.modes.set(h.agent, 'plan')
+    h.planState = { active: true, pending: false }
+    await h.step()
+    expect(h.preset).toBe(before)
+  })
+
+  it('retains plan restrictions after rejection or an aborted pre-step', async () => {
+    const h = harness()
+    h.modes.set(h.agent, 'plan')
+    h.planState = { active: true, pending: false }
+    await h.step({ kind: 'reject' })
+    expect(h.preset).toBe('plan')
+    h.planState = { active: true }
+    await h.step()
+    expect(h.preset).toBe('plan')
+  })
+
+  it('reconciles an existing Host /plan selection before the next tools run', async () => {
+    const h = harness()
+    h.planState = { active: false, pending: true }
+    expect(h.modes.current(h.agent)).toBe('plan')
+    await h.step()
+    expect(h.preset).toBe('plan')
+  })
+
+  it('fails closed when the previous Auto reviewer disappeared during plan mode', () => {
+    const h = harness()
+    h.modes.set(h.agent, 'auto')
+    h.modes.set(h.agent, 'plan')
+    h.auto = false
+    h.planState = { active: false }
+    expect(() => h.modes.reconcilePlan(h.agent)).toThrow('unavailable')
+    expect(h.preset).toBe('plan')
+  })
+
+  it('owns guard and listener registrations through the plugin context', () => {
+    const h = harness()
+    expect(h.guards.size).toBe(1)
+    expect(h.listeners.size).toBe(2)
+    h.dispose()
+    expect(h.guards.size).toBe(0)
+    expect(h.listeners.size).toBe(0)
+  })
+})

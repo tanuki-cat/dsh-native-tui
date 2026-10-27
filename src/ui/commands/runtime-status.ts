@@ -9,9 +9,20 @@ import { formatLocalTimestamp } from '../format-time.js'
 import type { CommandContext } from './context.js'
 import type { JobsService, PermissionPresets, SubagentsService } from './services.js'
 import { NL, errorMessage } from './shared.js'
+import { isInteractionMode } from '../../interaction-modes.js'
+import type { InteractionModeService as ModeService } from '../../interaction-modes.js'
+import { modeCommand } from './mode.js'
 
 /** The `/permissions` command. */
 export async function permissionsCommand(ctx: CommandContext, args: string): Promise<void> {
+  const modes = ctx.host.get('interactionModes') as ModeService | undefined
+  if (modes !== undefined) {
+    if (args === '' || isInteractionMode(args)) { await modeCommand(ctx, args); return }
+    if (modes.current(ctx.active.agent) === 'plan') {
+      ctx.notice('warning', 'Leave plan mode through /mode before selecting an advanced permission preset.')
+      return
+    }
+  }
   const presets = ctx.host.get('permissionPresets') as PermissionPresets | undefined
   if (presets === undefined) {
     ctx.notice('warning', 'The permission-preset service is unavailable.')

@@ -12,6 +12,7 @@ import type { AgentPresetService } from '../runtime/agent.js'
 import type { ContextMeterReading, SessionMetrics, SessionStats } from '../runtime/metrics.js'
 import { collectSessionMetrics, formatSessionMetrics } from '../runtime/metrics.js'
 import type { Palette } from './theme.js'
+import { MODE_LABELS, type InteractionMode } from '../interaction-modes.js'
 
 /** The pi-tui text components the status rows write into. */
 export interface StatusRows {
@@ -29,6 +30,7 @@ export interface StatusInput {
   readonly provider: string
   readonly model: string
   readonly reasoningEffort: string | undefined
+  readonly interactionMode?: InteractionMode | 'custom'
   readonly preset: string | undefined
   readonly attachmentCount: number
   readonly contextWindow: number | undefined
@@ -112,8 +114,12 @@ export function renderStatusRows(
   rows.status.setText(
     state + '   ' + model + '   ' + thinking + '\n\n' + metaBits.join('   '),
   )
+  const mode = input.interactionMode
+  const modeLine = mode === undefined ? '' : (mode === 'custom'
+    ? palette.warning('custom mode')
+    : (mode === 'accept-edits' ? palette.success : palette.warning)(MODE_LABELS[mode] + (mode === 'auto' ? ' · EXP' : ''))) + palette.dim(' · /mode') + '\n'
   rows.footer.setText(
-    palette.accent('↳ ') + palette.dim(split.usage)
+    modeLine + palette.accent('↳ ') + palette.dim(split.usage)
     + (context === undefined
       ? ''
       : '\n  ' + palette.context(metrics.contextPercent, metrics.contextCompactPercent)(context.head)

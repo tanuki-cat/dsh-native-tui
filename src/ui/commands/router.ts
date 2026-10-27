@@ -34,6 +34,7 @@ import { helpCommand, statusCommand } from './session.js'
 import { sessionsCommand } from './sessions.js'
 import { settingsCommand } from './settings.js'
 import { skillCommand } from './skills.js'
+import { modeCommand } from './mode.js'
 import { errorMessage } from './shared.js'
 import { diffCommand, toolCommand, toolsCommand } from './tools.js'
 import { exportCommand, openCommand, presetCommand, previewCommand } from './workspace-files.js'
@@ -160,6 +161,10 @@ export async function runCommandLine(line: string, deps: CommandRouterDeps): Pro
     case 'reasoning':
       await reasoningCommand(ctx(), args)
       return
+    case 'mode':
+      await modeCommand(ctx(), args)
+      return
+    case 'permission':
     case 'permissions':
       await permissionsCommand(ctx(), args)
       return
