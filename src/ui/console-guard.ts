@@ -1,8 +1,8 @@
 /**
  * Keep Host and dependency logging off the terminal while the TUI owns it.
  *
- * The Host and its plugins log with plain `console.info` / `console.warn`; the
- * DeepSeek account catalogue announces every model listing that way. Those calls
+ * The Host and its plugins log through `console`; DeepSeek's catalogue also
+ * writes successful listing diagnostics to stderr with `console.error`. These calls
  * write straight to the terminal and land at the cursor, on top of a row the
  * renderer has already painted — a row of the status block or the prompt is
  * replaced by the line, and the next differential repaint does not repair it
@@ -21,7 +21,7 @@
 
 import { format } from 'node:util'
 
-/** Console method a captured line came from; the caller maps it to a notice tone. */
+/** Captured console level, normalized for known informational stderr diagnostics. */
 export type ConsoleLevel = 'log' | 'info' | 'debug' | 'trace' | 'warn' | 'error' | 'dir'
 
 /** One line a guarded console call produced. */
@@ -45,6 +45,9 @@ export interface ConsoleGuardOptions {
 /** Console methods that write to the terminal. */
 const CAPTURED = ['log', 'info', 'debug', 'trace', 'warn', 'error', 'dir'] as const
 
+// Host listing success uses console.error only to keep diagnostics on stderr.
+const LISTING_SUCCESS = /^\[llm-deepseek-(?:api-key|account)\] model listing from https?:\/\/[^\s]+ loaded \d+ model\(s\), skipped \d+ row\(s\)$/u
+
 /** One console method this guard can replace. */
 type CapturedMethod = (typeof CAPTURED)[number]
 
@@ -57,8 +60,8 @@ interface Replacement {
 /**
  * Hold `console` output until {@link ConsoleGuard.restore} runs.
  *
- * A line repeated in a row is dropped: a catalogue that re-announces the same
- * listing on every open would otherwise repeat one notice forever. A line
+ * A line repeated at the same level is dropped: a catalogue that re-announces
+ * the same listing would otherwise repeat one notice forever. A line
  * produced while the sink is still handling the previous one is dropped too, so
  * a sink that logs cannot recurse into itself.
  * @param options - sink for each captured line.
@@ -68,6 +71,7 @@ export function holdConsoleOutput(options: ConsoleGuardOptions): ConsoleGuard {
   const target = console as unknown as Record<string, ((...data: unknown[]) => void) | undefined>
   const replacements: Replacement[] = []
   let previousText: string | undefined
+  let previousLevel: ConsoleLevel | undefined
   let delivering = false
   for (const method of CAPTURED) {
     const original = target[method]
@@ -75,12 +79,14 @@ export function holdConsoleOutput(options: ConsoleGuardOptions): ConsoleGuard {
     replacements.push({ method, original })
     target[method] = (...data: unknown[]): void => {
       const text = format(...data).trimEnd()
+      const level = method === 'error' && LISTING_SUCCESS.test(text) ? 'info' : method
       // `console.log()` prints an empty line; there is nothing to report.
-      if (text === '' || text === previousText || delivering) return
+      if (text === '' || text === previousText && level === previousLevel || delivering) return
       previousText = text
+      previousLevel = level
       delivering = true
       try {
-        options.onLine({ level: method, text })
+        options.onLine({ level, text })
       }
       finally {
         delivering = false

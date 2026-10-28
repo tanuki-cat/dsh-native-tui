@@ -1,74 +1,80 @@
+import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { once } from 'node:events'
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
-// A Host plugin's console line must not land raw inside the painted frame: it
-// would overwrite the prompt or the status row (and stay there, because the next
-// differential repaint treats those rows as unchanged). The TUI captures
-// `console` for as long as it owns the screen: routine info goes to the opt-in
-// debug trace, warnings become transcript notices.
-const here = dirname(fileURLToPath(import.meta.url))
-const home = '/tmp/dsh-native-tui-console-home'
-mkdirSync(home + '/profiles/tui/node_modules', { recursive: true })
-writeFileSync(home + '/profiles/tui/cordis.yml', '# dsh profile root\n[]\n')
-writeFileSync(home + '/profiles/tui/package.json', JSON.stringify({
-  name: 'dsh-profile-tui',
-  private: true,
-  dependencies: { 'dsh-native-tui': 'link:' + process.cwd() },
-  dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', 'dsh-native-tui'] } },
-}, null, 2) + '\n')
-writeFileSync(home + '/profiles/tui/cordis.patch.yml', `- id: native-tui
-  name: dsh-native-tui
-  config:
-    agentPreset: standard
-`)
-try { symlinkSync(process.cwd(), home + '/profiles/tui/node_modules/dsh-native-tui', 'dir') }
-catch (error) { if (error?.code !== 'EEXIST') throw error }
-
-const inject = pathToFileURL(join(here, 'fake-tty-console-inject.mjs')).href
-const child = spawn(process.execPath, ['scripts/fake-tty-entry.mjs', '--profile', 'tui'], {
-  cwd: process.cwd(),
-  env: {
-    ...process.env,
-    DSH_HOME: home,
-    COLUMNS: '120',
-    LINES: '36',
-    TERM: 'xterm-256color',
-    COLORTERM: 'truecolor',
-    DSH_NATIVE_TUI_DEBUG: '1',
-    NODE_OPTIONS: [process.env.NODE_OPTIONS, '--import ' + inject].filter(Boolean).join(' '),
-  },
-  stdio: ['pipe', 'pipe', 'pipe'],
-})
-let out = ''
-let err = ''
-child.stdout.on('data', data => { out += String(data) })
-child.stderr.on('data', data => { err += String(data) })
-const timers = []
-timers.push(setTimeout(() => { try { child.stdin.write('\x04') } catch {} }, 5500))
-timers.push(setTimeout(() => { try { child.kill('SIGKILL') } catch {} }, 12000))
-child.on('exit', (code, signal) => {
-  for (const timer of timers) clearTimeout(timer)
-  // Routine info never reaches the screen at all; the warning reaches it only as
-  // a painted notice row. A raw plugin write would put either text into a row it
-  // does not own, which is exactly the reported "prompt filled with a log line".
-  const infoOnScreen = out.includes('model listing from')
-  const noticeSeen = out.includes('! [llm-deepseek-account] probe warning line')
-  const rawWarnWrite = /(^|[\r\n])\[llm-deepseek-account\] probe warning line/.test(out)
-  const promptFilled = /(^|[\r\n])>[^\r\n]*\[llm-deepseek-account\]/.test(out)
-  const traced = err.includes('[native-tui] console.info: [llm-deepseek-account] model listing')
-  const pass = !infoOnScreen && noticeSeen && !rawWarnWrite && !promptFilled && traced && out.includes('enter send')
-  console.log('EXIT', code, signal)
-  console.log('INFO_ON_SCREEN', infoOnScreen)
-  console.log('WARNING_AS_NOTICE', noticeSeen)
-  console.log('RAW_WARNING_WRITE', rawWarnWrite)
-  console.log('PROMPT_FILLED', promptFilled)
-  console.log('INFO_TRACED', traced)
-  console.log('PASS', pass)
-  console.log('--- TAIL ---')
-  console.log(out.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').slice(-1800))
-  console.log('--- STDERR ---')
-  console.log(err.slice(-900))
-  process.exit(pass ? 0 : 1)
-})
+const here = dirname(fileURLToPath(import.meta.url)), repo = dirname(here)
+const root = await realpath(tmpdir())
+const home = await mkdtemp(join(root, 'native-tui-console-'))
+let child, closed, timeout, killTimer
+try {
+  const profile = join(home, 'profiles/tui')
+  await mkdir(join(profile, 'node_modules'), { recursive: true })
+  await writeFile(join(profile, 'cordis.yml'), '[]\n')
+  await writeFile(join(profile, 'package.json'), JSON.stringify({
+    name: 'console-probe', private: true,
+    dependencies: { 'dsh-native-tui': 'link:' + repo },
+    dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', 'dsh-native-tui'] } },
+  }))
+  await writeFile(join(profile, 'cordis.patch.yml'), '- id: native-tui\n  name: dsh-native-tui\n  config:\n    agentPreset: standard\n')
+  await symlink(repo, join(profile, 'node_modules/dsh-native-tui'), 'dir')
+  const inject = pathToFileURL(join(here, 'fake-tty-console-inject.mjs')).href
+  child = spawn(process.execPath, ['scripts/fake-tty-entry.mjs', '--profile', 'tui'], {
+    cwd: repo,
+    env: {
+      ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !/KEY|TOKEN|SECRET|CREDENTIAL/.test(key))),
+      DSH_HOME: home, DSH_NATIVE_TUI_NO_LAUNCHER: '1', TERM: 'xterm-256color',
+      DSH_NATIVE_TUI_DEBUG: '1', NODE_OPTIONS: '--import ' + inject,
+    },
+    stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
+  })
+  closed = once(child, 'close')
+  let out = '', err = '', sent = false, exiting = false, timedOut = false
+  const traced = () => ['llm-deepseek-api-key', 'llm-deepseek-account']
+    .every(owner => err.includes('[native-tui] console.info: [' + owner + '] model listing'))
+  const notices = () => out.includes('! [llm-deepseek-account] probe warning line')
+    && out.includes('✕ [llm-deepseek-account] probe error line')
+  const advance = () => {
+    if (!sent && out.includes('enter send')) {
+      sent = true
+      child.send('native-tui-console-probe')
+    }
+    if (!exiting && notices() && traced()) {
+      exiting = true
+      child.stdin.write(String.fromCharCode(4))
+    }
+  }
+  child.stdout.on('data', data => { out += String(data); advance() })
+  child.stderr.on('data', data => { err += String(data); advance() })
+  timeout = setTimeout(() => {
+    timedOut = true
+    child.kill('SIGTERM')
+    killTimer = setTimeout(() => { child.kill('SIGKILL') }, 5000)
+  }, 20000)
+  const [code, signal] = await closed
+  assert(!timedOut, 'Console probe timed out: ' + err.slice(-2000))
+  assert.equal(signal, null)
+  assert.equal(code, 0, err.slice(-2000))
+  const result = {
+    infoOnScreen: out.includes('model listing from'),
+    warningAsNotice: out.includes('! [llm-deepseek-account] probe warning line'),
+    errorAsNotice: out.includes('✕ [llm-deepseek-account] probe error line'),
+    rawDiagnosticWrite: /(^|[\r\n])\[llm-deepseek-(?:account|api-key)\]/.test(out),
+    infoTraced: traced(),
+  }
+  assert(sent && exiting && !result.infoOnScreen && result.warningAsNotice && result.errorAsNotice
+    && !result.rawDiagnosticWrite && result.infoTraced, JSON.stringify(result))
+  console.log('PASS console diagnostics ' + JSON.stringify(result))
+} finally {
+  clearTimeout(timeout)
+  clearTimeout(killTimer)
+  if (child && child.exitCode === null && child.signalCode === null) {
+    child.kill('SIGKILL')
+    await closed.catch(() => {})
+  }
+  if (dirname(home) !== root || !home.startsWith(join(root, 'native-tui-console-'))) throw new Error('unsafe cleanup target')
+  await rm(home, { recursive: true, force: true })
+}

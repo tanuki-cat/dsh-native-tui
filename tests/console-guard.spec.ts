@@ -25,6 +25,47 @@ function withRealConsole(run: (sink: { writes: string[] }) => void): void {
 }
 
 describe('holdConsoleOutput', () => {
+  it.each(['llm-deepseek-api-key', 'llm-deepseek-account'])('classifies %s successful stderr diagnostics as info', owner => {
+    withRealConsole((sink) => {
+      const lines: unknown[] = []
+      const text = '[' + owner + '] model listing from https://api.deepseek.com/models loaded 2 model(s), skipped 0 row(s)'
+      const guard = holdConsoleOutput({ onLine: line => { lines.push(line) } })
+      try { console.error('[' + owner + ']', 'model listing from https://api.deepseek.com/models loaded 2 model(s), skipped 0 row(s)') }
+      finally { guard.restore() }
+      expect(lines).toEqual([{ level: 'info', text }])
+      expect(sink.writes).toEqual([])
+    })
+  })
+
+  it.each([
+    '[llm-deepseek-account] model listing from https://api.deepseek.com/models failed (503); keeping the previous catalog',
+    '[llm-deepseek-api-key] authentication failed',
+    '[other-plugin] model listing from https://api.deepseek.com/models loaded 2 model(s), skipped 0 row(s)',
+    '[llm-deepseek-account-extra] model listing from https://api.deepseek.com/models loaded 2 model(s), skipped 0 row(s)',
+    '[llm-deepseek-account] model listing from https://api.deepseek.com/models loaded 2 model(s), skipped 0 row(s); fatal error',
+    '[llm-deepseek-account] model listing from https://api.deepseek.com/models loaded 2 model(s), skipped 0 row(s)\nrequest failed',
+    'unrelated error',
+  ])('retains error severity for %s', text => {
+    withRealConsole(() => {
+      const lines: unknown[] = []
+      const guard = holdConsoleOutput({ onLine: line => { lines.push(line) } })
+      try { console.error(text) }
+      finally { guard.restore() }
+      expect(lines).toEqual([{ level: 'error', text }])
+    })
+  })
+
+  it('retains warnings and does not deduplicate a severity change after an info diagnostic', () => {
+    withRealConsole(() => {
+      const lines: unknown[] = []
+      const text = '[llm-deepseek-account] model listing from https://api.deepseek.com/models loaded 0 model(s), skipped 3 row(s)'
+      const guard = holdConsoleOutput({ onLine: line => { lines.push(line) } })
+      try { console.error(text); console.warn(text); console.warn(text) }
+      finally { guard.restore() }
+      expect(lines).toEqual([{ level: 'info', text }, { level: 'warn', text }])
+    })
+  })
+
   it('routes console.info to the sink instead of the terminal', () => {
     withRealConsole((sink) => {
       const lines: unknown[] = []
