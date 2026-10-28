@@ -30,6 +30,7 @@ export const HELP_LINES: readonly string[] = [
   '/files [path] · /changes [diff <index>] · /deliverables [panel|open|reveal <index>]',
   '/tools · /tool <index> · /diff [index] · /exit',
   '/attach <path>|paste|preview <i>|list|clear · /attachments · /exit',
+  '/login · 引导选择登录平台（CodeBuddy / Codex / DeepSeek 官方，DeepSeek 官方待实现）',
   '/codebuddy [status|login|logout|models [refresh]|quota|checkin|prompt [show|reset]|doctor]',
   '/codex [status|setup|login [browser|device]|logout|models]',
   '@@<query> references another session · /exit',
@@ -98,6 +99,7 @@ export const LOCAL_COMMANDS: readonly CommandSuggestion[] = [
     { name: 'list', description: 'list configured MCP servers' },
     { name: 'remove', description: 'remove an MCP server', hint: '<name>' },
   ] },
+  { name: 'login', description: '引导选择登录平台（DeepSeek 官方待实现）' },
   { name: 'codebuddy', description: 'CodeBuddy / WorkBuddy sign-in, models and credits', input: { hint: '[status|login|logout|models [refresh]|quota|checkin|prompt [show|reset]|doctor]' }, subcommands: [
     { name: 'status', description: 'sign-in state, token rotation, catalogue' },
     { name: 'login', description: 'open the browser sign-in', hint: '[cn|en|all]' },

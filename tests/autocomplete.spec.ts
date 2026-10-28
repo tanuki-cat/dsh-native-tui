@@ -86,6 +86,18 @@ describe('TuiAutocompleteProvider', () => {
     expect(await provider().getSuggestions(['/provider add'], 0, 13, { signal })).toBeNull()
   })
 
+  it('offers login as a guided command without platform subcommands', async () => {
+    const completion = provider([], [], [], LOCAL_COMMANDS)
+    const suggestions = await completion.getSuggestions(['/log'], 0, 4, { signal })
+    expect(suggestions?.items).toEqual([{
+      value: '/login', label: '/login', description: '引导选择登录平台（DeepSeek 官方待实现）',
+    }])
+    expect(await completion.getSuggestions(['/login '], 0, 7, { signal })).toBeNull()
+    const command = LOCAL_COMMANDS.find(item => item.name === 'login')
+    expect(command?.subcommands).toBeUndefined()
+    expect(command?.input).toBeUndefined()
+  })
+
   it('offers the codebuddy prompt subcommand', async () => {
     const exact = await provider([], [], [], LOCAL_COMMANDS).getSuggestions(['/codebuddy'], 0, 10, { signal })
     expect(exact?.prefix).toBe('/codebuddy')
