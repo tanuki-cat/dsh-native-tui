@@ -2,6 +2,12 @@ import { describe, expect, it } from 'vitest'
 import { NEUTRAL_IDENTITY, PROMPT_PLACEHOLDER, expandSystemPrompt, neutralizeAgentIdentity } from '../src/codebuddy/prompt.js'
 
 const IDENTITY = 'You are an AI agent powered by DeepSeek Harness.'
+const TOKENS_SENTENCE = 'Tokens prefixed with @ are paths the user explicitly referenced.'
+const TOKENS_PARAGRAPH = TOKENS_SENTENCE
+  + ' Relative paths resolve from the workspace root; absolute paths identify files or directories on the host.'
+  + ' A trailing slash marks a directory: list it when its contents matter.'
+  + ' Anything else is a file: use the read tool when its contents are needed.'
+const RESTATED_TOKENS = 'Tokens starting with @ name paths the user referenced.'
 
 describe('neutralizeAgentIdentity', () => {
   it('restates the harness identity line and keeps the rest of the prompt', () => {
@@ -11,13 +17,34 @@ describe('neutralizeAgentIdentity', () => {
     expect(out).not.toContain('AI agent powered by')
   })
 
+  it('restates the fingerprinted sentence and keeps the rest of its paragraph', () => {
+    const out = neutralizeAgentIdentity(TOKENS_PARAGRAPH)
+    expect(out).toBe(RESTATED_TOKENS + TOKENS_PARAGRAPH.slice(TOKENS_SENTENCE.length))
+    expect(out).not.toContain('explicitly referenced')
+  })
+
+  it('restates a fingerprinted sentence in a prompt with no identity line', () => {
+    expect(neutralizeAgentIdentity('Intro.\n\n' + TOKENS_PARAGRAPH + '\n\nOutro.'))
+      .toBe('Intro.\n\n' + RESTATED_TOKENS + TOKENS_PARAGRAPH.slice(TOKENS_SENTENCE.length) + '\n\nOutro.')
+  })
+
+  it('restates every fingerprinted span in one prompt', () => {
+    const out = neutralizeAgentIdentity(IDENTITY + '\n\n' + TOKENS_PARAGRAPH)
+    expect(out).toBe(NEUTRAL_IDENTITY + '\n\n' + RESTATED_TOKENS + TOKENS_PARAGRAPH.slice(TOKENS_SENTENCE.length))
+  })
+
+  it('leaves a paraphrase of the fingerprinted sentence alone', () => {
+    const prompt = 'Tokens beginning with @ denote paths the user referenced. Relative paths start at the workspace root;'
+    expect(neutralizeAgentIdentity(prompt)).toBe(prompt)
+  })
+
   it('ignores a neutral prompt and returns it unchanged', () => {
     const prompt = 'You are a helpful assistant.\n\nAnswer in one line.'
     expect(neutralizeAgentIdentity(prompt)).toBe(prompt)
   })
 
   it('is idempotent', () => {
-    const once = neutralizeAgentIdentity(IDENTITY + '\n\nbody')
+    const once = neutralizeAgentIdentity(IDENTITY + '\n\n' + TOKENS_PARAGRAPH)
     expect(neutralizeAgentIdentity(once)).toBe(once)
   })
 

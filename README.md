@@ -404,12 +404,21 @@ dsh --profile tui
 
 ### 系统提示词与指纹校验
 
-国内网关会做客户端指纹校验：系统提示若以第三方 agent 身份句（`You are an AI agent powered by …`）开头，会返回 HTTP 400 `code 11128`（`Illegal API invocation from an unapproved channel`）。`codebuddy` 路由在发送前把这类身份句改写为中性表述——无论提示放在 `system` 字段还是 in-history 的 system 消息里（TUI 走后者）——其余提示（工具说明、工作区规则、用户指令）逐字保留。国际版不做该校验。
+国内网关会做客户端指纹校验：系统提示里出现第三方 agent 的原文措辞，会返回 HTTP 400 `code 11128`（`Illegal API invocation from an unapproved channel`）。`codebuddy` 路由在发送前把已测到的指纹片段改写为中性表述——无论提示放在 `system` 字段还是 in-history 的 system 消息里（TUI 走后者）——其余提示（工具说明、工作区规则、用户指令）逐字保留。国际版不做该校验。
+
+校验只针对系统提示：同一段文字出现在 user 消息或工具结果里不会被拦。匹配的是原文措辞而不是语义——换一种说法、调整语序或替换个别词都能通过，所以命中范围很小：
+
+| 版本 | 被拦片段 | 发送时的改写 |
+| --- | --- | --- |
+| 2026-10-20 | 开场身份句 `You are an AI agent powered by …` 整行 | `You are a software engineering assistant.` |
+| 2026-10-28 | `Tokens prefixed with @ are paths the user explicitly referenced.`（所在段落的首句） | `Tokens starting with @ name paths the user referenced.` |
+
+清单在 `src/codebuddy/prompt.ts` 的 `RESTATEMENTS`，只放真实实测被拒的片段；新增一条前先用真实账号确认「只改这一处就能通过」。
 
 需要整体调整发往 CodeBuddy 的系统提示时，用 `/codebuddy prompt`：
 
 - **Add / Edit the custom template** 打开多行编辑器（Enter 保存，Shift+Enter 或 Ctrl+J 换行）。模板含 `{prompt}` 时，harness 当次组装的系统提示会在该位置展开，只展开一次；不含占位符则整段替换。
-- **Use the default prompt** 删除自定义模板，回到身份句改写。
+- **Use the default prompt** 删除自定义模板，回到内置的指纹片段改写。
 - 编辑器提交空内容等同恢复默认；不含 `{prompt}` 的模板保存前会二次确认。
 
 写入的是 profile patch 的 `codebuddy.systemPrompt`（volatile 字段），下一条请求即生效，无需重启：

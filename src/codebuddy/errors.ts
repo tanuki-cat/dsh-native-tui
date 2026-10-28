@@ -122,7 +122,7 @@ function businessCodeIn(text: string): unknown {
 export function hintForGatewayError(errorMessage: string | undefined): string | undefined {
   if (typeof errorMessage !== 'string' || errorMessage === '') return undefined
   if (businessCodeIn(errorMessage) === 11128) {
-    return 'CodeBuddy refused this call as a non-official client (channel verification). Retrying will not help; the CN route already restates the harness identity line, so a new fingerprint may have been added upstream.'
+    return 'CodeBuddy refused this call as a non-official client (channel verification). Retrying will not help; the CN route already restates the prompt spans measured so far, so a new fingerprint may have been added upstream.'
   }
   switch (classifyGatewayCode(businessCodeIn(errorMessage))) {
     case 'no_such_model':

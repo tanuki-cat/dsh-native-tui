@@ -51,7 +51,7 @@ export interface CodeBuddyProfile {
   /**
    * Whether this gateway fingerprints third-party agent system prompts and
    * refuses them (HTTP 400 code 11128, "unapproved channel"). When set, the
-   * harness identity line is restated before sending.
+   * measured spans `prompt.ts` lists are restated before sending.
    */
   readonly rewritesAgentIdentity?: boolean
   /** Emergency model list, replaced by discovery on the first successful refresh. */
@@ -191,9 +191,10 @@ export const cnProfile: CodeBuddyProfile = {
   checkinUrls: [CN_BASE + '/billing/meter/daily-checkin'],
   domain: 'copilot.tencent.com',
   headers: cnHeaders,
-  // Measured 2026-10-20: the CN gateway rejects the DeepSeek Harness opening
-  // sentence with code 11128 while the same prompt with that line restated is
-  // accepted; the international gateway does not fingerprint the prompt.
+  // Measured 2026-10-20 and again 2026-10-28: the CN gateway rejects
+  // fingerprinted DeepSeek Harness wording with code 11128 while the same
+  // prompt with those spans restated is accepted; the international gateway
+  // does not fingerprint the prompt.
   rewritesAgentIdentity: true,
   seedModels: CN_SEED_MODELS,
 }

@@ -505,7 +505,7 @@ export async function buildChatPayload(
     const harnessPrompt = typeof leading.content === 'string' ? leading.content : ''
     leading.content = expandSystemPrompt(template, harnessPrompt)
   }
-  // The CN gateway refuses a third-party agent identity wherever the prompt is
+  // The CN gateway refuses fingerprinted prompt spans wherever the prompt is
   // carried: as `options.system` and as an in-history system message (the
   // harness can deliver the composed prompt either way). Restating every
   // system message keeps both paths on the same approved wording while the
