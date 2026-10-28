@@ -5,5 +5,7 @@ Object.defineProperty(process.stdin, 'isRaw', { value: false, writable: true, co
 process.stdin.setRawMode = () => process.stdin
 process.stdout.columns = Number(process.env.FAKE_TTY_COLUMNS ?? 100)
 process.stdout.rows = 30
-const { runCli } = await import('/opt/homebrew/lib/node_modules/@deepseek-ai/dsh/lib/bin.js')
+const { pathToFileURL } = await import('node:url')
+const entry = process.env.DSH_CLI_ENTRY ?? '/opt/homebrew/lib/node_modules/@deepseek-ai/dsh/lib/bin.js'
+const { runCli } = await import(pathToFileURL(entry).href)
 await runCli()
