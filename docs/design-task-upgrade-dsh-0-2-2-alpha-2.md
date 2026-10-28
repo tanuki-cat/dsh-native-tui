@@ -1,15 +1,15 @@
 # DSH 0.2.2-alpha.2 适配与升级
 
-> 状态：待实施
+> 状态：已实施；验证结果与未验收项见末节
 > 日期：2026-10-28
 > 升级前基线：`8d4ca9db17493e9ce88f6a871f5ebee24ef7f385`，tag `v0.2.1-rc.3`
 > 核心目标：`dsh-v0.2.2-alpha.2`（`f3803c9697`）
 
 ## 结论
 
-插件当前依赖 `0.2.1-rc.3`。核心升级包含模型选择、子代理配置及工具执行器变更，不能只替换版本号。本任务先修复兼容性，再接入模型目录展示与权限问答改进；不修改核心仓库，不自动更新用户全局 CLI 或真实 profile。
+升级前插件依赖 `0.2.1-rc.3`。核心升级包含模型选择、子代理配置及工具执行器变更，不能只替换版本号。本任务先修复兼容性，再接入模型目录展示与权限问答改进；不修改核心仓库，不自动更新用户全局 CLI 或真实 profile。
 
-本地检查时，全局 `dsh --version` 为 `0.2.1-rc.3`，相邻核心源码位于目标标签。以下结论来自两版本源码对比；目标版本构建与运行验收尚未执行。
+本地检查时，全局 `dsh --version` 为 `0.2.1-rc.3`，相邻核心源码位于目标标签。以下适配项来自两版本源码对比；目标版本构建与运行结果记录在末节。
 
 ## 范围与实施顺序
 
@@ -55,7 +55,7 @@
 
 ## 验证与验收
 
-以下为计划，不表示已经通过。实施期间在本节记录实际命令与结果。
+以下列出验收范围；已执行命令、结果和限制以末节为准。
 
 1. 新依赖下执行 `pnpm typecheck`，新增/调整模型选择、预设组合、目录刷新和权限问答单元测试。
 2. 执行 `pnpm check`，确认构建、测试及源文件行数符合本仓库约定。
@@ -74,8 +74,25 @@
 
 ## 实施进度与证据
 
-- [ ] 文档与基线 tag 已推送。
-- [ ] 目标依赖、模型选择和 preset 迁移完成。
-- [ ] 目录角标、实时刷新和权限问答完成。
-- [ ] 投影读取完成或有明确兼容保留说明。
-- [ ] 单元测试、构建、隔离 Host 探针完成，未验收项已列明。
+- [x] 文档提交 `8b4474e` 与基线 tag 已推送；远程 main 和 tag 的 peeled commit 已核验。
+- [x] DSH 依赖升级至 `0.2.2-alpha.2`，Cordis/schema 对齐至 `4.0.6-alpha.1` / `3.18.6-alpha.1`。Node 要求为 `>=24.9.0`。模型选择、自动 effort、create/resume setup 和 preset 已迁移。
+- [x] 目录角标、实时刷新和权限问答完成；刷新乱序、加载期间更新、关闭后晚到结果、失败保留模型、角标移除及拒绝/取消有单元覆盖。
+- [x] 统计改用公开 `snapshot(session, keys).values`：占用直接读取 Host 的 projectedTokens，组成采用 flattened view，Session 总计采用 sessionStats view；没有保留 deprecated registry stateOf，也未重复注册 Host 投影。
+- [x] 单元测试、构建、隔离 Host 探针已执行；限制如下。
+
+### 通过的检查
+
+- `pnpm check`：82 个测试文件、1083 个测试通过，typecheck 与 build 通过。随后修改的关闭检查、模型 setup 断言分别经过 27 个目录/问答/模型专项测试、20 个 agent 测试和 build 复核。
+- `pnpm peers check`：无 peer dependency 问题。
+- `git diff --check`、`node --check scripts/upgrade-core-e2e.mjs`：通过。
+- `pnpm pack --pack-destination .tmp`：生成目标版本 tarball；检查时发现旧 dist 留有已删除源码的编译文件，已确认绝对路径后清理整个生成目录并重新构建，最终打包使用干净产物。
+- `DSH_CLI_ENTRY="$PWD/.tmp/dsh-alpha2-runtime/node_modules/@deepseek-ai/dsh/lib/bin.js" node scripts/upgrade-core-e2e.mjs`：8 个场景通过。standard/ptc/minimal/cordis 均验证新建、恢复、实际请求 model-b、自动 effort 及 reload；恢复前将部署默认模型改回 model-a，Session 仍使用 model-b。standard/ptc/cordis 验证真实 read 工具往返；minimal 不提供 read，保持既有工具范围，只验证模型请求。standard/cordis 检查 list_agents 与 list_subagent_models 已出现。证据目录：`.tmp/upgrade-core-g7Uloz`。
+- 使用独立临时 profile、相同 DSH_CLI_ENTRY 执行 `node scripts/fake-tty-approval.mjs`：allow、reject、cancel-row、cancel-esc 四种原生审批结果通过，输出 `OK approval waterfall verified`。
+
+### 环境限制与未验收项
+
+- `DSH_CLI_ENTRY="…/lib/bin.js" node scripts/fake-tty-tool-details.mjs` 未通过：在 accept-edits 下启动 PTC 子进程时，系统返回 `sandbox-exec: sandbox_apply: Operation not permitted`，工具结果为 `sandbox-unavailable`。没有关闭沙箱或改成无限权限来制造通过结果。PTC 普通 read 往返已通过，但该审批详情/文件效果探针仍须在允许创建 sandbox 的普通宿主终端复验。
+- 独立 CLI 安装第一次因 pnpm 的 `ERR_PNPM_IGNORED_BUILDS` 退出。检查 postinstall 后，仅在隔离运行时配置中允许 dsh-subprocess-local 恢复 spawn-helper 执行位，其余可选构建明确禁止；重新安装成功。未修改全局安装或真实 profile。
+- 本轮未单独实测上游 job_output 的 steer 唤醒、glob 性能、技能根故障隔离；也未使用真实凭据验证 DeepSeek 自动目录刷新、Gemini 签名回放或 CUA 系统授权。目录更新交互采用本地事件及受控异步结果验证，不声称已完成外部服务验收或性能测量。
+- VM Script、Liveshare 及额外模型插件权限仍按范围约定延期。
+- 后续适配代码和本节回填尚未提交/推送；远程 main 仅包含已推送的方案文档，基线 tag 不变。

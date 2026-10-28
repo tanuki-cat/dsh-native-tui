@@ -11,9 +11,9 @@ Session、模型、工具、审批、压缩、MCP、插件都由 Host 提供，�
 
 ### 环境要求
 
-- Node `^22.19.0 || >=24.0.0`
+- Node `>=24.9.0`
 - pnpm（仓库使用 `pnpm-lock.yaml`，不要用 npm / yarn）
-- 全局安装的 `dsh` 0.2.1-rc.3
+- 全局安装的 `dsh` 0.2.2-alpha.2
 
 ### 安装
 
@@ -64,7 +64,7 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 ### 会话与 Agent
 
 - 新建 / 恢复 Session，owned root Agent；`/sessions` 只列出本终端创建的 Session（排除 Web Session 与 subagent 子会话）。
-- 恢复 Session 时读取持久化的 model/selection 与 `request/header`，恢复模型、reasoning effort 和 preset。
+- 模型与 reasoning effort 由 Host `agent.model` 读写并随 Session 持久化；恢复会话和 `/reload` 沿用记录，provider 默认思考档保持自动，不固化为显式选择。preset 从 Session 记录恢复。
 - Agent Presets：`standard` / `ptc` / `minimal` / `cordis`。`/preset` 可在首个 turn 前切换当前 Session；已开始的 Session 锁定，选择用于下一次 `/new`，同时写入 `agent-preset-registry.selectedDefault`。
 - Workspace 列表 / 创建 / 切换 / pin / unpin / archive / unarchive；Schedule 列表 / 创建 / 删除。
 - 子代理列表（`/agents`）、后台任务列表与终止（`/jobs`）。
@@ -73,7 +73,7 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 ### 模型与凭据
 
 - 模型与 reasoning effort 通过 Host `agentDefaultModel.saveSelection` 持久化，重启或 `/new` 沿用它，不回落默认。
-- `/model` 打开可搜索的模型列表，也可直接 `/model provider/model` 切换。
+- `/model` 打开可搜索的模型列表，显示 Host 提供的模型角标；打开期间按 provider 独立刷新，保留搜索词和选中项，某个目录失败或变慢不阻塞其他目录更新。也可直接 `/model provider/model` 切换；连续选择以最新有效请求为准。
 - `/reasoning` 列出或切换思考强度：`/reasoning high`、`/reasoning default`（清除显式 effort）、`/reasoning map`（编辑 level → wire 映射）。输入框获得焦点时，`Shift+Tab` 按当前模型提供的档位顺序循环，末档回到首档；未显式选档时从 provider 默认档的下一档开始，没有默认档则从首档开始。它只选择档位，不修改 level → wire 映射，沿用 `/reasoning` 的保存方式，并用于后续 step。
 - `/provider` 管理第三方模型路由：添加、查看、刷新模型目录、编辑输入模态、删除。
 - `/codex` 登录 ChatGPT Codex 并查询额度。
@@ -87,7 +87,8 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
   - `standard` / `cordis` 等 native 预设直接走 `tool/call` / `tool/result` 顶层卡片；`minimal` 不暴露 `write`/`edit`。
 - `write`/`edit` 渲染 ± diff 行，卡片头显示产生它的工具与文件，如 `⚙ edit · src/file.ts`。
 - 审批与问答 waterfall。所有独立 overlay（Choice / TextInput / Approval、Markdown / Text Pager、Image）统一使用带边框和全宽背景的 opaque dialog frame，长内容自动换行 / 补齐。审批按 toolName 与 callId 精确读取本次原生或 PTC 调用的参数，展示实际命令、目标路径或 MCP 方法；无法匹配时明确显示参数不可用，不借用相邻调用。`View full request details` 可查看完整 JSON，按视觉行翻页并随窗口缩放；Esc 返回原审批，查看详情本身不批准请求。长预览会标记截断，为批准、拒绝与取消保留空间。
-- 问答面板支持单选与多选：Space 勾选、Enter 提交，Other 提供自由文本（多选时会与已勾选项一并返回）；每题都有 `Skip this question` 行（无选项文本题为 `Answer… / Skip this question` 菜单），跳过只返回 `{ id, selected: [] }` 并继续批次；Esc 或请求 signal 中止会以 `UserQuestionError(ASK_ABORTED)` 取消整批。
+- 权限问答（`approval` intent）只提供调用方声明的批准、拒绝及可选持久授权，默认选中拒绝，不显示 Other 或跳过。动作保持可见，完整权限说明可分页查看，查看详情不会授权。展示标签与授权答案值分离；Esc 或请求中止不会批准。
+- 普通问答面板支持单选与多选：Space 勾选、Enter 提交，Other 提供自由文本（多选时会与已勾选项一并返回）；每题都有 `Skip this question` 行（无选项文本题为 `Answer… / Skip this question` 菜单），跳过只返回 `{ id, selected: [] }` 并继续批次；Esc 或请求 signal 中止会以 `UserQuestionError(ASK_ABORTED)` 取消整批。
 - 运行中 `Esc` / `Ctrl+C` 取消 turn；输入框有草稿时 `Esc` 先清空草稿，空输入才取消（overlay 聚焦时不触发）。
 
 ### 渲染与显示
@@ -519,7 +520,7 @@ pnpm build      # tsc -p tsconfig.build.json → dist/（gitignored）
 ~~~sh
 pnpm build
 pnpm pack --pack-destination .tmp
-DSH_HOME=/tmp/dsh-native-tui-approval-home dsh plugin --profile tui add .tmp/dsh-native-tui-0.2.1-rc.3.tgz
+DSH_HOME=/tmp/dsh-native-tui-approval-home dsh plugin --profile tui add .tmp/dsh-native-tui-0.2.2-alpha.2.tgz
 DSH_HOME=/tmp/dsh-native-tui-approval-home node scripts/fake-tty-approval.mjs
 ~~~
 
@@ -541,6 +542,8 @@ node scripts/fake-tty-interaction-modes.mjs ptc    # 相同边界的 PTC 内层�
 node scripts/fake-tty-tool-details.mjs             # 显式 accept-edits 下的真实 PTC 卡片及审批详情；使用隔离 profile、本地 MCP 命名 fixture 和 mock provider
 node scripts/fake-tty-permission-restart.mjs       # minimal 同会话 Agent 重建、取消及权限恢复；使用终端 fence fixture，不依赖物理 PTY
 ~~~
+
+升级核心时，`scripts/upgrade-core-e2e.mjs` 要求 `DSH_CLI_ENTRY` 指向已安装的 `0.2.2-alpha.2` CLI 的 `lib/bin.js`；探针使用独立的 `.tmp/upgrade-core-*` profile 和本地 mock provider，保留输出证据。通用 fake-TTY 入口同样支持该变量，不设置时仍使用既有全局安装路径。
 
 普通终端环境可运行真实 PTY 冒烟：
 
@@ -581,10 +584,10 @@ python3 scripts/pty-smoke.py
 
 ## 兼容性
 
-- 已在全局 dsh 0.2.1-rc.3 上通过真实 Host 探针；生产与开发的 DSH 依赖统一为 0.2.1-rc.3。
+- DSH 依赖统一为 `0.2.2-alpha.2`，Cordis 为 `4.0.6-alpha.1`；使用隔离安装的目标 CLI 通过四套预设的新建、恢复、模型路由及 reload 探针，不依赖全局 CLI 版本。旧核心不在本版本支持范围。
 - Preset patch 从 `@deepseek-ai/dsh-web-app` 的 standard/ptc/minimal/cordis 复制而来：standard/ptc/minimal 需要 `subagent-model-selection-settings` Host 行，cordis 需要 cordis host-runner 与 `tool-cordis/host`。
 - `@file` 补全依赖 `@deepseek-ai/dsh-file-reference-local`。
-- pi-tui 1.4.0；Node `^22.19.0 || >=24.0.0`。
+- pi-tui 1.4.0；Node `>=24.9.0`。
 
 ## License
 
