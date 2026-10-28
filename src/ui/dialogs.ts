@@ -15,6 +15,7 @@ import {
 import type { ApprovalOutcome, ApprovalRequest } from '@deepseek-ai/dsh-user-approval'
 import { approvalArguments, approvalRequestDetails } from './approval-preview.js'
 import { showApprovalDetails } from './approval-details.js'
+import { showPermissionQuestion } from './question-approval.js'
 import { ptcCallLine } from './tool-preview.js'
 import { literalToolText } from './tool-output.js'
 import {
@@ -811,7 +812,11 @@ async function answerOne(
   // Esc cancels the whole batch with ASK_ABORTED. Skipping one question is an
   // explicit row, so the rest of the batch still runs.
   const title = questionTitle(question, index, total)
-
+  if (question.intent?.kind === 'approval') {
+    const choice = await showPermissionQuestion(tui, palette, { ...question, intent: question.intent }, index, total, showChoice, dialogFrame, signal)
+    if (choice === undefined) throw abortedQuestion()
+    return { id: question.id, selected: [choice] }
+  }
   if (options.length === 0) {
     for (;;) {
       const mode = await showChoice(tui, palette, title, [
