@@ -101,9 +101,9 @@ class SearchChoiceDialog implements Component {
   onSelect?: (item: { value: string; label: string; description?: string }) => void
   onCancel?: () => void
   constructor(
-    private readonly title: string,
-    private readonly items: readonly ChoiceItem[],
-    private readonly hint: string,
+    private title: string,
+    private items: readonly ChoiceItem[],
+    private hint: string,
     private readonly palette: Palette,
   ) {
     this.input = new Input({ prompt: 'search: ', placeholder: 'type to filter' })
@@ -111,7 +111,15 @@ class SearchChoiceDialog implements Component {
     this.list = this.makeList('')
   }
 
-  private makeList(filter: string): SelectList {
+  update(title: string, items: readonly ChoiceItem[], hint?: string): void {
+    const selected = this.list.getSelectedItem()?.value
+    this.title = title
+    this.items = items
+    if (hint !== undefined) this.hint = hint
+    this.list = this.makeList(this.input.getValue(), selected)
+  }
+
+  private makeList(filter: string, selected?: string): SelectList {
     const query = filter.trim().toLowerCase()
     const matches = this.items.filter(item => query === ''
       || item.value.toLowerCase().includes(query)
@@ -122,6 +130,8 @@ class SearchChoiceDialog implements Component {
       12,
       selectTheme(this.palette),
     )
+    const index = matches.findIndex(item => item.value === selected)
+    if (index >= 0) list.setSelectedIndex(index)
     list.onSelect = item => { this.onSelect?.(item) }
     list.onCancel = () => { this.onCancel?.() }
     return list
@@ -250,6 +260,7 @@ export function showSearchChoice(
   items: readonly ChoiceItem[],
   hint: string,
   signal?: AbortSignal,
+  observe?: (update: (title: string, items: readonly ChoiceItem[], hint?: string) => void) => () => void,
 ): Promise<string | undefined> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted === true) {
@@ -257,11 +268,13 @@ export function showSearchChoice(
       return
     }
     let handle: ReturnType<TUI['showOverlay']> | undefined
+    let stopUpdates: (() => void) | undefined
     let settled = false
     const finish = (value: string | undefined): void => {
       if (settled) return
       settled = true
       signal?.removeEventListener('abort', onAbort)
+      stopUpdates?.()
       handle?.hide()
       resolve(value)
     }
@@ -271,12 +284,23 @@ export function showSearchChoice(
       handle = tui.showOverlay(dialog, { width: 84, maxHeight: '85%', anchor: 'center' })
       dialog.onSelect = item => { finish(item.value) }
       dialog.onCancel = () => { finish(undefined) }
+      stopUpdates = observe?.((nextTitle, nextItems, nextHint) => {
+        if (settled) return
+        dialog.update(nextTitle, nextItems, nextHint)
+        tui.requestRender()
+      })
+      if (settled) stopUpdates?.()
     }
     catch (error) {
+      settled = true
+      signal?.removeEventListener('abort', onAbort)
+      stopUpdates?.()
+      handle?.hide()
       reject(error)
       return
     }
     signal?.addEventListener('abort', onAbort, { once: true })
+    if (Boolean(signal?.aborted)) onAbort()
   })
 }
 
@@ -787,6 +811,7 @@ async function answerOne(
   // Esc cancels the whole batch with ASK_ABORTED. Skipping one question is an
   // explicit row, so the rest of the batch still runs.
   const title = questionTitle(question, index, total)
+
   if (options.length === 0) {
     for (;;) {
       const mode = await showChoice(tui, palette, title, [

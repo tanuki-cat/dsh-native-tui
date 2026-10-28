@@ -12,6 +12,7 @@
 import type { Session } from '@deepseek-ai/dsh-session'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { ModelSelection } from '@deepseek-ai/dsh-agent'
+import type { LlmModelInfo } from '@deepseek-ai/dsh-llm'
 import type { SkillSummaryLike } from '../../runtime/skill-catalog.js'
 
 /** The LLM catalogue the model and provider handlers read. */
@@ -26,7 +27,7 @@ export interface LLM {
     readonly baseURLEnv?: readonly string[]
     readonly declared?: boolean
   }[]
-  listModels(provider: string): Promise<readonly { readonly id: string; readonly name: string; readonly description?: string }[]>
+  listModels(provider: string): Promise<readonly Pick<LlmModelInfo, 'id' | 'name' | 'description' | 'badge'>[]>
   discoverModels(settingsNs: string, request: {
     readonly provider?: string
     readonly baseURL?: string

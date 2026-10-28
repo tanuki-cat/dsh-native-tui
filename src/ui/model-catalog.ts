@@ -7,7 +7,7 @@ import { dialogFrame } from './dialogs.js'
 /** One Host-owned model catalogue; failures are not empty catalogues. */
 export interface ProviderListing {
   readonly provider: { readonly id: string }
-  readonly models: readonly { readonly id: string; readonly name: string; readonly description?: string }[]
+  readonly models: Awaited<ReturnType<LLM['listModels']>>
   readonly error?: string
 }
 

@@ -6,12 +6,12 @@
 
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { sameModelSelection } from '../../runtime/model-selection.js'
-import { showChoice, showSearchChoice } from '../dialogs.js'
+import { showChoice } from '../dialogs.js'
 import type { CommandContext, ModelSelectionState } from './context.js'
 import { openReasoningMapEditor } from './reasoning-map.js'
 import type { LLM } from './services.js'
 import { errorMessage } from './shared.js'
-import { loadModelCatalog } from '../model-catalog.js'
+import { showModelPicker } from '../model-picker.js'
 
 const modelRequests = new WeakMap<ModelSelectionState, object>()
 
@@ -70,37 +70,7 @@ export async function modelCommand(ctx: CommandContext, args: string): Promise<v
     await selectModel(ctx, llm, args)
     return
   }
-  let listings
-  try {
-    listings = await loadModelCatalog(llm, ctx.tui, ctx.palette, ctx.signal)
-  } catch {
-    ctx.notice('error', 'Could not load model catalogs. Check provider configuration and retry /model.')
-    return
-  }
-  if (listings === undefined || ctx.signal.aborted) return
-  const failures = listings.filter(row => row.error !== undefined)
-  if (failures.length > 0) {
-    ctx.notice('warning', 'Model catalogs unavailable: ' + failures.map(row => row.provider.id + ' (' + row.error + ')').join(', '))
-  }
-  const items: Array<{ value: string; label: string; description?: string }> = []
-  for (const { provider, models } of listings) {
-    for (const model of models) {
-      const value = provider.id + '/' + model.id
-      const current = ctx.modelSelection.current?.provider === provider.id && ctx.modelSelection.current?.model === model.id
-      items.push({
-        value,
-        label: (current ? '* ' : '  ') + value,
-        description: model.name + (model.description === undefined ? '' : ' — ' + model.description),
-      })
-    }
-  }
-  if (items.length === 0) {
-    ctx.notice('warning', failures.length === 0
-      ? 'The LLM catalog advertises no models.'
-      : 'No models loaded. Some catalogs failed; check credentials or connectivity.')
-    return
-  }
-  const selectedModel = await showSearchChoice(ctx.tui, ctx.palette, 'Select model · ' + String(items.length) + ' available', items, 'Type to filter · ↑/↓ moves · Enter selects · Esc cancels', ctx.signal)
+  const selectedModel = await showModelPicker(ctx, llm)
   if (selectedModel !== undefined) await selectModel(ctx, llm, selectedModel)
 }
 
