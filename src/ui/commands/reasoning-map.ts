@@ -61,7 +61,7 @@ async function dropUnmappedEffort(ctx: CommandContext, label: string, efforts: R
   if (current === undefined || effort === undefined || Object.hasOwn(efforts, effort)) return
   ctx.modelSelection.current = { provider: current.provider, model: current.model }
   try {
-    await ctx.persistSelection()
+    await ctx.persistSelection({ provider: current.provider, model: current.model })
   }
   catch (error) {
     ctx.notice('warning', 'The map was saved, but the previous effort could not be cleared: ' + errorMessage(error))

@@ -10,55 +10,30 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 export const COMPACTION_THRESHOLD_RATIO = 0.8
 export const COMPACTION_HEADROOM_TOKENS = 65_536
 
-/** Shape of the token-meter's `contextPressure` projection state. */
+/** Public context-pressure view from the Host projection snapshot. */
 export interface ContextPressureState {
   readonly contextWindow?: unknown
   readonly pressureTokens?: unknown
-  readonly surfaceTokens?: unknown
-  readonly sampledSurfaceTokens?: unknown
+  readonly projectedTokens?: unknown
 }
 
-/**
- * Route capacity recorded on the latest request envelope.
- * @param state - the `contextPressure` state, or undefined when unregistered.
- * @returns the window the request declared, or undefined before one was routed.
- */
+/** Read the routed capacity; an absent or invalid capacity is unknown. */
 export function contextWindowTokens(state: ContextPressureState | undefined): number | undefined {
   const window = state?.contextWindow
   return typeof window === 'number' && Number.isFinite(window) && window > 0 ? Math.round(window) : undefined
 }
 
-/**
- * Occupancy the token meter expects the NEXT request to pay, from its raw
- * projection state. `SessionProjections.stateOf` returns host state rather than
- * the wire view, so the view's own formula lives here: the newest provider
- * sample plus the surface's movement since that sample was taken.
- * @param state - the `contextPressure` state, or undefined when unregistered.
- * @returns estimated tokens, or undefined before the first usage sample.
- */
+/** Use Host-priced occupancy, falling back to its last provider sample. */
 export function projectedContextTokens(state: ContextPressureState | undefined): number | undefined {
-  const pressure = state?.pressureTokens
-  const surface = state?.surfaceTokens
-  const sampled = state?.sampledSurfaceTokens
-  if (typeof pressure !== 'number') return undefined
-  if (typeof surface !== 'number' || typeof sampled !== 'number') return Math.max(0, Math.round(pressure))
-  return Math.max(0, Math.round(pressure + surface - sampled))
+  const tokens = state?.projectedTokens ?? state?.pressureTokens
+  return typeof tokens === 'number' && Number.isFinite(tokens) ? Math.max(0, Math.round(tokens)) : undefined
 }
 
-/**
- * Shape of the token-meter's `contextBreakdown` projection state.
- *
- * The counts sit under `breakdown`: the unit keeps its surviving system prompts
- * and a surface total alongside them, and only its client view flattens the
- * three figures. `SessionProjections.stateOf` returns that raw state, so the
- * nested shape is what this reader has to accept.
- */
+/** Public, flattened composition view from the Host projection snapshot. */
 export interface ContextBreakdownState {
-  readonly breakdown?: {
-    readonly systemTokens?: unknown
-    readonly toolsTokens?: unknown
-    readonly messageTokens?: unknown
-  }
+  readonly systemTokens?: unknown
+  readonly toolsTokens?: unknown
+  readonly messageTokens?: unknown
 }
 
 /** Heuristic composition of the next request's context, in estimator tokens. */
@@ -93,7 +68,7 @@ function asTokens(value: unknown): number {
 }
 
 /**
- * Read the token meter's heuristic composition from its raw projection state.
+ * Read the token meter's heuristic composition from its public projection view.
  *
  * These three figures use the meter's fixed density estimate, so they will not
  * sum to the provider-anchored occupancy: the estimator underprices CJK text and
@@ -104,7 +79,7 @@ function asTokens(value: unknown): number {
  */
 export function contextBreakdown(state: ContextBreakdownState | undefined): ContextBreakdown | undefined {
   if (state === undefined || state === null || typeof state !== 'object') return undefined
-  const counts = state.breakdown
+  const counts = state
   return {
     systemTokens: asTokens(counts?.systemTokens),
     toolsTokens: asTokens(counts?.toolsTokens),

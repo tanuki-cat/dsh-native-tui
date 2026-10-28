@@ -358,17 +358,17 @@ describe('projected context occupancy', () => {
   it('adds the surface movement since the usage sample', () => {
     // The provider sampled 429_078 tokens when the surface held 600_000; it has
     // since grown to 641_605, so the next request pays the difference too.
-    expect(projectedContextTokens({ pressureTokens: 429_078, surfaceTokens: 641_605, sampledSurfaceTokens: 600_000 }))
+    expect(projectedContextTokens({ pressureTokens: 429_078, projectedTokens: 470_683 }))
       .toBe(470_683)
   })
 
   it('holds the sample when the surface is unchanged', () => {
-    expect(projectedContextTokens({ pressureTokens: 429_078, surfaceTokens: 600_000, sampledSurfaceTokens: 600_000 }))
+    expect(projectedContextTokens({ pressureTokens: 429_078, projectedTokens: 429_078 }))
       .toBe(429_078)
   })
 
   it('shrinks after a compaction replacement', () => {
-    expect(projectedContextTokens({ pressureTokens: 725_224, surfaceTokens: 200_000, sampledSurfaceTokens: 700_000 }))
+    expect(projectedContextTokens({ pressureTokens: 725_224, projectedTokens: 225_224 }))
       .toBe(225_224)
   })
 
@@ -378,7 +378,7 @@ describe('projected context occupancy', () => {
 
   it('has nothing to report without a usage sample', () => {
     expect(projectedContextTokens(undefined)).toBeUndefined()
-    expect(projectedContextTokens({ surfaceTokens: 10 })).toBeUndefined()
+    expect(projectedContextTokens({})).toBeUndefined()
   })
 
   it('reads the capacity recorded on the routed request', () => {
@@ -391,17 +391,15 @@ describe('projected context occupancy', () => {
 })
 
 describe('context composition', () => {
-  it('reads the counts from the projection state\'s nested field', () => {
-    // The unit publishes its counts under `breakdown`; only its client view
-    // flattens them, and `stateOf` hands out the raw state.
-    expect(contextBreakdown({ breakdown: { systemTokens: 51_200, toolsTokens: 628, messageTokens: 10_900 } }))
+  it('reads the counts from the public flattened projection view', () => {
+    expect(contextBreakdown({ systemTokens: 51_200, toolsTokens: 628, messageTokens: 10_900 }))
       .toEqual({ systemTokens: 51_200, toolsTokens: 628, messageTokens: 10_900 })
   })
 
   it('narrows unusable figures to zero', () => {
     // Absent figures read as zero so the legend never prints NaN, and a
     // negative price (which the fold should never produce) is clamped.
-    expect(contextBreakdown({ breakdown: { systemTokens: -5, toolsTokens: 'x', messageTokens: undefined } }))
+    expect(contextBreakdown({ systemTokens: -5, toolsTokens: 'x', messageTokens: undefined }))
       .toEqual({ systemTokens: 0, toolsTokens: 0, messageTokens: 0 })
     // An initial state has no counts yet; that is an empty surface, not silence.
     expect(contextBreakdown({})).toEqual({ systemTokens: 0, toolsTokens: 0, messageTokens: 0 })

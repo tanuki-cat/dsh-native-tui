@@ -54,7 +54,7 @@ interface ModeEvents {
 const READ_TOOLS = new Set([
   'read', 'read_image', 'glob', 'grep', 'web_search', 'web_fetch', 'skill',
   'ask_user_question', 'exit_plan_mode', 'get_goal', 'job_list', 'job_output',
-  'list_agents', 'list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource',
+  'list_agents', 'list_subagent_models', 'list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource',
 ])
 const FILE_EDITS = new Set(['write', 'edit'])
 function argsOf(exec: ModeExecution): Record<string, unknown> {

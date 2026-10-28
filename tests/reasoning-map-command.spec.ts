@@ -56,7 +56,6 @@ function contextOf(options: {
     showHostSettings: () => undefined,
     modelSelection: {
       current: options.selection === undefined ? undefined : { ...options.selection },
-      assembled: undefined,
     },
     setContextWindow: () => undefined,
     readContext: () => ({ metrics: { turns: 0, steps: 0, totalTokens: 0 }, breakdown: undefined }),

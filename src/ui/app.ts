@@ -10,13 +10,13 @@ import {
   VStack,
 } from '@earendil-works/pi-tui'
 import type { Context } from '@deepseek-ai/cordis'
-import { installModelSelection, type ModelSelectionRef } from '@deepseek-ai/dsh-agent'
+import { bindModelSelection, sameModelSelection } from '../runtime/model-selection.js'
 import type {} from '@deepseek-ai/dsh-commands'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm/types'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { DisplayMode, ResolvedConfig } from '../config.js'
-import { createHostSession, readContextBreakdown, readContextMeter, restartHostSession, resumeHostSession, sessionAgentPreset, sessionModelSelection, type AgentPresetService, type HostSession } from '../runtime/agent.js'
+import { createHostSession, readContextBreakdown, readContextMeter, restartHostSession, resumeHostSession, sessionAgentPreset, type AgentPresetService, type HostSession } from '../runtime/agent.js'
 import { findLauncher, parseProfileArg, resumeHint } from '../runtime/launcher.js'
 import { reloadArgs } from '../runtime/reload.js'
 import { skillRows } from '../runtime/skill-catalog.js'
@@ -260,17 +260,8 @@ export async function startTerminalApp(
   let contextWindow: number | undefined
   /** Output tokens one request reserves, as the compactor deducts them. */
   let contextReserved: number | undefined
-  let modelSelection: ModelSelectionRef = {
-    current: sessionModelSelection(active.agent.session) ?? {
-      provider: active.agent.options.provider ?? 'deepseek-official',
-      model: active.agent.options.model ?? 'deepseek-flash',
-      ...(active.agent.options.reasoningEffort === undefined ? {} : { reasoningEffort: active.agent.options.reasoningEffort }),
-    },
-    assembled: undefined,
-  }
+  let modelSelection = bindModelSelection(active.agent)
   reasoningEffort = modelSelection.current?.reasoningEffort
-  let disposeModelSelection: (() => void) | undefined
-  disposeModelSelection = installModelSelection(active.agent.ctx, modelSelection)
 
   const summaryCwd = (): string | undefined => active.agent.session.header.cwd ?? config.cwd
 
@@ -452,7 +443,7 @@ export async function startTerminalApp(
       // The routed request's own capacity wins, as on the Web meter; the model
       // catalog value only stands in before the first request is routed.
       window: meter.window ?? contextWindow,
-      stats: projections?.stateOf(active.agent.session, 'sessionStats') as SessionStats | undefined,
+      stats: projections?.snapshot(active.agent.session, ['sessionStats']).values.sessionStats as SessionStats | undefined,
       events: active.agent.session.snapshotEvents(),
     }
   }
@@ -520,11 +511,13 @@ export async function startTerminalApp(
   }
 
   const refreshContextWindow = async (): Promise<void> => {
+    const session = active, owner = modelSelection
     const llm = host.get('llm') as LLM | undefined
     const current = modelSelection.current
     if (llm === undefined || current === undefined) return
     try {
       const info = await llm.resolveModelInfo(current.provider, current.model)
+      if (active !== session || modelSelection !== owner || disposed || !sameModelSelection(owner.current, current)) return
       contextWindow = info.context?.contextWindow
       contextReserved = info.defaultMaxTokens
       renderStatus()
@@ -618,8 +611,6 @@ export async function startTerminalApp(
       if (opened === active || disposed) return
       drafts.save(active.agent.session, { text: editor.getExpandedText(), attachments: pendingAttachments }, config.cwd, selectedPreset)
       disposeInteractions()
-      disposeModelSelection?.()
-      disposeModelSelection = undefined
       clearSubscriptions()
       await active.dispose()
       if (disposed) return
@@ -634,15 +625,7 @@ export async function startTerminalApp(
       localNotices = []
       renderer.clear()
       tui.setFocus(editor)
-      modelSelection = {
-        current: sessionModelSelection(active.agent.session) ?? {
-          provider: active.agent.options.provider ?? 'deepseek-official',
-          model: active.agent.options.model ?? 'deepseek-flash',
-          ...(active.agent.options.reasoningEffort === undefined ? {} : { reasoningEffort: active.agent.options.reasoningEffort }),
-        },
-        assembled: undefined,
-      }
-      disposeModelSelection = installModelSelection(active.agent.ctx, modelSelection)
+      modelSelection = bindModelSelection(active.agent)
       contextWindow = undefined
       contextReserved = undefined
       registerInteractions()
@@ -708,17 +691,6 @@ export async function startTerminalApp(
     }
   }
 
-  const persistSelection = async (): Promise<void> => {
-    const service = host.get('agentDefaultModel') as AgentDefaultModelService | undefined
-    const current = modelSelection.current
-    if (service === undefined || current === undefined) return
-    try {
-      await service.saveSelection(current)
-    } catch (error) {
-      pushNotice('warning', 'Selection applies now but could not be saved: ' + errorMessage(error))
-    }
-  }
-
   /**
    * The handler-facing view of this application. It is built per command run so
    * a handler always sees the session that is on screen now, not the one that
@@ -726,6 +698,8 @@ export async function startTerminalApp(
    */
   const commandContext = (): CommandContext => {
     const attachments = pendingAttachments
+    const session = active, owner = modelSelection
+    const isCurrent = (): boolean => active === session && modelSelection === owner && !switching && !disposed && !exiting
     return {
       host,
       config,
@@ -740,6 +714,7 @@ export async function startTerminalApp(
         return active
       },
       signal: interactionAbort.signal,
+      isCurrent,
       notice: pushNotice,
       renderStatus,
       attachments: {
@@ -756,7 +731,19 @@ export async function startTerminalApp(
       },
       readContext: readContextFigures,
       stageSkillInvocation,
-      persistSelection,
+      persistSelection: async selection => {
+        if (!isCurrent()) return
+        const service = host.get('agentDefaultModel') as AgentDefaultModelService | undefined
+        if (service === undefined) return
+        try {
+          await service.saveSelection({
+            provider: selection.provider, model: selection.model,
+            ...(selection.reasoningEffort === undefined ? {} : { reasoningEffort: ReasoningEffortId(selection.reasoningEffort) }),
+          })
+        } catch (error) {
+          if (isCurrent()) pushNotice('warning', 'Selection applies now but could not be saved: ' + errorMessage(error))
+        }
+      },
     }
   }
 
@@ -812,23 +799,7 @@ export async function startTerminalApp(
     exiting = true
     const args = reloadArgs(process.argv.slice(2), active.id)
     const replace = (): void => { replaceProcess(args) }
-    const current = modelSelection.current
-    if (current !== undefined) {
-      try {
-        // The event map augmentation lives in a package this entry point does
-        // not import; the Host accepts the same record from its session API.
-        const session = active.agent.session as unknown as {
-          append(type: string, data: unknown): unknown
-        }
-        session.append('model/selection', current)
-      } catch {
-        // A session that refuses the record still reloads; its model may reset.
-      }
-    }
-    // Persisting the default model here would call the config editor, which
-    // rewrites the profile patch from the running config and can undo a
-    // restart-only setting the user just saved. The session event above is
-    // enough to restore the model after the replacement.
+    // Model selection is already durable; do not rewrite profile settings on reload.
     void dispose(false).then(replace, replace)
   }
 
@@ -840,8 +811,6 @@ export async function startTerminalApp(
     if (disposed) return
     disposed = true
     interactionAbort.abort(new Error('native-tui: terminal disposed'))
-    disposeModelSelection?.()
-    disposeModelSelection = undefined
     disposeInteractions()
     clearSubscriptions()
     process.off('SIGTERM', onSignal)

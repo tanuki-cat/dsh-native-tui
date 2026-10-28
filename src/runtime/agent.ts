@@ -1,5 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
-import type { Agent, AgentHandle, ModelSelection } from '@deepseek-ai/dsh-agent'
+import { installModelSelection, type Agent, type AgentHandle, type ModelSelection } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { Session } from '@deepseek-ai/dsh-session'
 import { randomUUID } from 'node:crypto'
@@ -47,36 +47,6 @@ function presetsOf(ctx: Context): AgentPresetService | undefined {
   return ctx.get('agentPresets') as AgentPresetService | undefined
 }
 
-/** Read the latest durable model selection recorded in a Session. */
-export function sessionModelSelection(session: Session): ModelSelection | undefined {
-  let selection: ModelSelection | undefined
-  for (const event of session.snapshotEvents()) {
-    const type = (event.type as string)
-    const data = event.data as Record<string, unknown>
-    if (type === 'model/selection') {
-      if (typeof data.provider === 'string' && typeof data.model === 'string' && data.provider !== '' && data.model !== '') {
-        selection = {
-          provider: data.provider,
-          model: data.model,
-          ...(typeof data.reasoningEffort === 'string' ? { reasoningEffort: data.reasoningEffort as ModelSelection['reasoningEffort'] } : {}),
-        }
-      }
-    }
-    else if (type === 'request/header') {
-      const header = data.header as { readonly config?: Record<string, unknown> } | undefined
-      const config = header?.config
-      if (config !== undefined && typeof config.provider === 'string' && typeof config.model === 'string' && config.provider !== '' && config.model !== '') {
-        selection = {
-          provider: config.provider,
-          model: config.model,
-          ...(typeof config.reasoningEffort === 'string' ? { reasoningEffort: config.reasoningEffort as ModelSelection['reasoningEffort'] } : {}),
-        }
-      }
-    }
-  }
-  return selection
-}
-
 /** Read the latest persisted Agent preset for a Session. */
 export function sessionAgentPreset(session: Session): string | undefined {
   const selected = session.snapshotEvents()
@@ -88,19 +58,17 @@ export function sessionAgentPreset(session: Session): string | undefined {
 
 /** Projection reads narrowed to the one key the context segment needs. */
 export interface ContextPressureReader {
-  stateOf(session: Session, key: string): unknown
+  snapshot(session: Session, keys?: readonly string[]): { readonly values: Readonly<Record<string, unknown>> }
 }
 
 /**
  * Read the token meter's context state through its projections. The automatic
- * compactor prices the same surface, so the status bar must report this number
- * to stay aligned with it. `projectedContextTokens` anchors the last provider
- * sample and adds the surface movement since it, which is the occupancy the
- * NEXT request will pay.
+ * compactor prices the same surface. The public projectedTokens value includes
+ * surface changes since the last provider sample, so no local delta fold is needed.
  *
  * State presence separates the two silences: an unregistered projection reads
  * as `undefined` and leaves the log's last prompt standing in, while a mounted
- * unit publishes its state from the first fold (`surfaceTokens: 0`) and has no
+ * unit publishes an initially empty view and has no
  * sample to price yet — the reading is then empty, and the status row says so
  * instead of reporting an occupancy nobody measured.
  * @param projections - live Session projections, or undefined when unmounted.
@@ -113,7 +81,7 @@ export function readContextMeter(
   session: Session,
   fallbackReservedTokens: number | undefined,
 ): { readonly window: number | undefined; readonly reading: ContextMeterReading | undefined } {
-  const state = projections?.stateOf(session, 'contextPressure') as ContextPressureState | undefined
+  const state = projections?.snapshot(session, ['contextPressure']).values.contextPressure as ContextPressureState | undefined
   if (state === undefined || state === null || typeof state !== 'object') return { window: undefined, reading: undefined }
   const tokens = projectedContextTokens(state)
   const reserved = sessionReservedCompletionTokens(session) ?? fallbackReservedTokens
@@ -167,7 +135,7 @@ export function unreplayedReasoningTokens(session: Session): number {
  * prices the composition with its fixed estimator, while the occupancy figure is
  * anchored to the provider's own usage, so the two never sum to each other.
  *
- * The projection's raw figures are rebased onto the provider's own prompt count
+ * The projection's composition is rebased onto the provider's own prompt count
  * so no bucket can exceed the total: its estimator prices reasoning the request
  * never carries, which on a real session pushed one bucket past the occupancy.
  * @param projections - live Session projections, or undefined when unmounted.
@@ -180,7 +148,7 @@ export function readContextBreakdown(
   session: Session,
   occupancyTokens?: number,
 ): ContextBreakdown | undefined {
-  const state = projections?.stateOf(session, 'contextBreakdown') as ContextBreakdownState | undefined
+  const state = projections?.snapshot(session, ['contextBreakdown']).values.contextBreakdown as ContextBreakdownState | undefined
   const raw = contextBreakdown(state)
   if (raw === undefined) return undefined
   return rebaseComposition(raw, occupancyTokens, unreplayedReasoningTokens(session)) ?? raw
@@ -235,13 +203,10 @@ export async function createHostSession(ctx: Context, config: ResolvedConfig): P
       ...(preset === undefined ? {} : { agentPreset: preset.id }),
     },
     agentOptions: defaultSelection(ctx),
-    ...(preset === undefined || presets === undefined
-      ? {}
-      : {
-        setup: async (agentCtx: Context) => {
-          await presets.mount(agentCtx, preset.id)
-        },
-      }),
+    setup: async (agentCtx: Context) => {
+      installModelSelection(agentCtx)
+      if (preset !== undefined && presets !== undefined) await presets.mount(agentCtx, preset.id)
+    },
   })
   return wrap(handle)
 }
@@ -263,13 +228,11 @@ export async function resumeHostSession(ctx: Context, id: SessionId): Promise<Ho
   const presets = presetsOf(ctx)
   const handle = await ctx.agents.resume({
     resumeSessionId: id,
-    ...(presets === undefined
-      ? {}
-      : {
-        setup: async (agentCtx: Context, agent: Agent) => {
-          await presets.mount(agentCtx, sessionAgentPreset(agent.session) ?? presets.defaultId)
-        },
-      }),
+    agentOptions: defaultSelection(ctx),
+    setup: async (agentCtx: Context, agent: Agent) => {
+      installModelSelection(agentCtx)
+      if (presets !== undefined) await presets.mount(agentCtx, sessionAgentPreset(agent.session) ?? presets.defaultId)
+    },
   })
   return wrap(handle)
 }

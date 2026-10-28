@@ -60,6 +60,22 @@ function harness() {
 }
 
 describe('interaction modes', () => {
+  it.each(['manual', 'accept-edits', 'plan'] as const)('allows native and PTC model discovery as a read in %s', async mode => {
+    const h = harness()
+    try {
+      await h.modes.set(h.agent, mode)
+      for (const inner of [false, true]) {
+        const execution = h.exec('list_subagent_models', { provider: 'p', model: 'm' }, inner)
+        expect(h.modes.planDenial(execution)).toBeUndefined()
+        expect(await h.gate(execution)).toEqual({ kind: 'allow' })
+      }
+      if (mode === 'plan') {
+        for (const name of ['subagent', 'write', 'edit']) expect(h.modes.planDenial(h.exec(name))).toContain('blocks tool')
+        expect(h.modes.planDenial(h.exec('list_subagent_models', { sandbox_permissions: 'danger-full-access' }))).toContain('does not allow sandbox escalation')
+      }
+    } finally { h.dispose() }
+  })
+
   it('starts in off mode with the native workspace default without changing permissions', async () => {
     const h = harness()
     h.permissions.defaultPreset = 'workspace-write'

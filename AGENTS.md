@@ -1,6 +1,6 @@
 # Repository Guidelines
 
-`dsh-native-tui` is a DeepSeek Harness plugin: a host-native terminal front door built on `@earendil-works/pi-tui`. Host services come from `dsh-base`; this package owns the terminal UI and its bundle patch. Requires Node `^22.19 || >=24` and pnpm (`pnpm-lock.yaml`); do not use npm or yarn.
+`dsh-native-tui` is a DeepSeek Harness plugin: a host-native terminal front door built on `@earendil-works/pi-tui`. Host services come from `dsh-base`; this package owns the terminal UI and its bundle patch. Requires Node `>=24.9.0` and pnpm (`pnpm-lock.yaml`); do not use npm or yarn.
 
 ## Project Structure & Module Organization
 
@@ -18,7 +18,7 @@
 - `pnpm check` — the gate: typecheck + tests + build.
 - `pnpm typecheck` — `tsc -p tsconfig.json --noEmit`; `pnpm test` — Vitest; `pnpm test:watch` while iterating.
 - `pnpm build` — `tsc -p tsconfig.build.json` into `dist/` (gitignored).
-- Run a real profile: `pnpm pack --pack-destination .tmp`, `dsh plugin --profile tui add .tmp/dsh-native-tui-0.2.1-rc.2.tgz`, then `dsh --profile tui`.
+- Run a real profile: `pnpm pack --pack-destination .tmp`, `dsh plugin --profile tui add .tmp/dsh-native-tui-0.2.2-alpha.2.tgz`, then `dsh --profile tui`.
 - `node scripts/fake-tty-approval.mjs` exercises a real Host; see README for per-probe setup.
 
 ## Coding Style & Naming Conventions

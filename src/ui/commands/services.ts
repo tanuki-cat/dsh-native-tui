@@ -212,7 +212,7 @@ export interface McpManagerStatus {
 
 /** Per-session projection reads. */
 export interface SessionProjectionsService {
-  stateOf(session: Session, key: string): unknown
+  snapshot(session: Session, keys?: readonly string[]): { readonly values: Readonly<Record<string, unknown>> }
 }
 
 /** Persists the model the user picked for a session. */

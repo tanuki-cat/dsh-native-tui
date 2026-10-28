@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import type { AgentHandle } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { createHostSession, readContextBreakdown, readContextMeter, restartHostSession, resumeHostSession, sessionAgentPreset, sessionModelSelection, sessionReservedCompletionTokens, unreplayedReasoningTokens } from '../src/runtime/agent.js'
+import { AgentModel, modelSelectionProjectionDefinition, type ModelSelectionProjectionState } from '@deepseek-ai/dsh-agent'
+import { createHostSession, readContextBreakdown, readContextMeter, restartHostSession, resumeHostSession, sessionAgentPreset, sessionReservedCompletionTokens, unreplayedReasoningTokens } from '../src/runtime/agent.js'
 import type { ResolvedConfig } from '../src/config.js'
 import type { HostSession } from '../src/runtime/agent.js'
 
@@ -48,7 +49,7 @@ describe('same-session Agent restart', () => {
     expect(resume).not.toHaveBeenCalled()
     finish()
     const reopened = await restarting
-    expect(resume).toHaveBeenCalledExactlyOnceWith({ resumeSessionId: id })
+    expect(resume).toHaveBeenCalledExactlyOnceWith({ resumeSessionId: id, agentOptions: { provider: 'deepseek-official', model: 'deepseek-flash' }, setup: expect.any(Function) })
     expect(reopened.id).toBe(id)
     expect(reopened.agent).toBe(handle.agent)
     expect(reopened.agent).not.toBe(current.agent)
@@ -66,24 +67,21 @@ describe('same-session Agent restart', () => {
   })
 })
 
-describe('session selection restore', () => {
-  it('reads the latest model/effort and preset from Session events', () => {
+describe('session preset restore', () => {
+  it('reads the last selected preset rather than the creation header', () => {
     const session = {
       header: { cwd: '/tmp', createdAt: 0, agentPreset: 'header-preset' },
       snapshotEvents: () => [
-        { type: 'model/selection', data: { provider: 'p1', model: 'm1', reasoningEffort: 'low' } },
-        { type: 'request/header', data: { header: { config: { provider: 'p2', model: 'm2', reasoningEffort: 'high' } } } },
         { type: 'agent-preset/selected', data: { agentPreset: 'ptc' } },
       ],
     }
-    expect(sessionModelSelection(session as never)).toEqual({ provider: 'p2', model: 'm2', reasoningEffort: 'high' })
     expect(sessionAgentPreset(session as never)).toBe('ptc')
   })
 })
 
 describe('context meter reading', () => {
-  const state = { pressureTokens: 300_000, surfaceTokens: 400_000, sampledSurfaceTokens: 280_000, contextWindow: 1_000_000 }
-  const projections = { stateOf: () => state }
+  const state = { pressureTokens: 300_000, projectedTokens: 420_000, contextWindow: 1_000_000 }
+  const projections = { snapshot: () => ({ values: { contextPressure: state } }) }
 
   it('prefers the request envelope cap over the adapter default', () => {
     const session = { requestHeader: () => ({ config: { provider: 'p', model: 'm', maxTokens: 100_000 } }) }
@@ -99,7 +97,7 @@ describe('context meter reading', () => {
 
   it('leaves the figure to the log when the projection is unregistered', () => {
     const session = { requestHeader: () => undefined }
-    expect(readContextMeter({ stateOf: () => undefined }, session as never, 32_768))
+    expect(readContextMeter({ snapshot: () => ({ values: {} }) }, session as never, 32_768))
       .toEqual({ window: undefined, reading: undefined })
     expect(readContextMeter(undefined, session as never, undefined))
       .toEqual({ window: undefined, reading: undefined })
@@ -107,7 +105,7 @@ describe('context meter reading', () => {
 
   it('keeps the reserved figure while the meter has no sample yet', () => {
     const session = { requestHeader: () => ({ config: { provider: 'p', model: 'm', maxTokens: 100_000 } }) }
-    expect(readContextMeter({ stateOf: () => ({ surfaceTokens: 0 }) }, session as never, undefined).reading)
+    expect(readContextMeter({ snapshot: () => ({ values: { contextPressure: {} } }) }, session as never, undefined).reading)
       .toEqual({ reservedTokens: 100_000 })
   })
 })
@@ -121,9 +119,7 @@ describe('context breakdown reading', () => {
     // this one prices it with the meter's fixed estimator. Without an anchor the
     // projection's own figures are reported unchanged.
     const projections = {
-      stateOf: (target: unknown, key: string) => key === 'contextBreakdown'
-        ? { breakdown: { systemTokens: 51_200, toolsTokens: 628, messageTokens: 10_900 }, surfaceTokens: 62_728, systems: [] }
-        : undefined,
+      snapshot: () => ({ values: { contextBreakdown: { systemTokens: 51_200, toolsTokens: 628, messageTokens: 10_900 } } }),
     }
     expect(readContextBreakdown(projections, session as never))
       .toEqual({ systemTokens: 51_200, toolsTokens: 628, messageTokens: 10_900 })
@@ -131,9 +127,7 @@ describe('context breakdown reading', () => {
 
   it('rebases onto the occupancy so no bucket exceeds it', () => {
     const projections = {
-      stateOf: (target: unknown, key: string) => key === 'contextBreakdown'
-        ? { breakdown: { systemTokens: 50_331, toolsTokens: 628, messageTokens: 373_473 } }
-        : undefined,
+      snapshot: () => ({ values: { contextBreakdown: { systemTokens: 50_331, toolsTokens: 628, messageTokens: 373_473 } } }),
     }
     // The real session: messages alone read larger than the whole context.
     const rebased = readContextBreakdown(projections, session as never, 291_662)
@@ -171,7 +165,7 @@ describe('context breakdown reading', () => {
   })
 
   it('reports an unmounted meter instead of an empty composition', () => {
-    expect(readContextBreakdown({ stateOf: () => undefined }, session as never)).toBeUndefined()
+    expect(readContextBreakdown({ snapshot: () => ({ values: {} }) }, session as never)).toBeUndefined()
     expect(readContextBreakdown(undefined, session as never)).toBeUndefined()
   })
 })
@@ -221,6 +215,9 @@ describe('host runtime', () => {
     })
     expect(session.id).toContain('native-tui-')
     expect(session.agent.id).toBe(session.id)
+    const on = vi.fn(() => () => {})
+    await (captured as { setup(ctx: unknown): Promise<void> }).setup({ on })
+    expect(on).toHaveBeenCalledWith('agent/pre-step', expect.any(Function), { prepend: true })
   })
 
   it('mounts the configured agent preset', async () => {
@@ -247,7 +244,7 @@ describe('host runtime', () => {
             sessionId: ReturnType<typeof SessionId>
             setup?: (agentCtx: unknown, agent: unknown) => Promise<void>
           }
-          await candidate.setup?.({}, {})
+          await candidate.setup?.({ on: vi.fn(() => () => {}) }, {})
           return fakeHandle(candidate.sessionId)
         },
       },
@@ -280,13 +277,31 @@ describe('host runtime', () => {
           const handle = fakeHandle(candidate.resumeSessionId, [
             { type: 'agent-preset/selected', data: { agentPreset: 'minimal' } },
           ])
-          await candidate.setup?.({}, handle.agent)
+          await candidate.setup?.({ on: vi.fn(() => () => {}) }, handle.agent)
           return handle
         },
       },
     })
     await resumeHostSession(ctx, id)
     expect(mounted).toBe('minimal')
+  })
+
+  it.each([false, true])('supplies a blank resume fallback without replacing recorded selection (%s)', async recorded => {
+    const saved = { provider: 'history', model: 'saved', reasoningEffort: 'high' }
+    const events: Array<{ type: string; data: unknown }> = recorded ? [{ type: 'model/selection', data: saved }] : []
+    let state: ModelSelectionProjectionState = { lastUsed: null, pending: null }
+    for (const event of events) state = modelSelectionProjectionDefinition.apply(state, event as never)
+    let model: AgentModel | undefined
+    const ctx = fakeContext({
+      get: (name: string) => name === 'agentDefaultModel'
+        ? { currentSelection: () => ({ provider: 'configured', model: 'fallback' }) } : undefined,
+      agents: { resume: async (options: { agentOptions?: object }) => {
+        model = new AgentModel(() => state, { append: vi.fn() } as never, options.agentOptions ?? {})
+        return fakeHandle(SessionId('blank-resume'))
+      } },
+    })
+    await resumeHostSession(ctx, SessionId('blank-resume'))
+    expect(model?.current()).toEqual(recorded ? saved : { provider: 'configured', model: 'fallback' })
   })
 
   it('resumes an explicit persisted session', async () => {
@@ -302,7 +317,10 @@ describe('host runtime', () => {
       },
     })
     const session = await resumeHostSession(ctx, id)
-    expect(captured).toEqual({ resumeSessionId: id })
+    expect(captured).toEqual({ resumeSessionId: id, agentOptions: { provider: 'deepseek-official', model: 'deepseek-flash' }, setup: expect.any(Function) })
+    const on = vi.fn(() => () => {})
+    await (captured as { setup(ctx: unknown, agent: unknown): Promise<void> }).setup({ on }, session.agent)
+    expect(on).toHaveBeenCalledWith('agent/pre-step', expect.any(Function), { prepend: true })
     expect(session.id).toBe(id)
   })
 })

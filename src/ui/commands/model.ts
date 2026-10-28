@@ -5,12 +5,15 @@
  */
 
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import { sameModelSelection } from '../../runtime/model-selection.js'
 import { showChoice, showSearchChoice } from '../dialogs.js'
-import type { CommandContext } from './context.js'
+import type { CommandContext, ModelSelectionState } from './context.js'
 import { openReasoningMapEditor } from './reasoning-map.js'
 import type { LLM } from './services.js'
 import { errorMessage } from './shared.js'
 import { loadModelCatalog } from '../model-catalog.js'
+
+const modelRequests = new WeakMap<ModelSelectionState, object>()
 
 /**
  * Apply one `provider/model` selection, or a bare model on the current provider.
@@ -19,6 +22,12 @@ import { loadModelCatalog } from '../model-catalog.js'
  * @param target - the text after `/model`.
  */
 export async function selectModel(ctx: CommandContext, llm: LLM, target: string): Promise<void> {
+  if (ctx.signal.aborted || ctx.isCurrent?.() === false) return
+  const owner = ctx.modelSelection
+  const ticket = {}
+  modelRequests.set(owner, ticket)
+  const initial = owner.current
+  const isCurrent = (): boolean => !ctx.signal.aborted && ctx.isCurrent?.() !== false && modelRequests.get(owner) === ticket
   const slash = target.indexOf('/')
   const provider = slash === -1
     ? (ctx.modelSelection.current?.provider ?? ctx.active.agent.options.provider ?? 'deepseek-official')
@@ -30,23 +39,23 @@ export async function selectModel(ctx: CommandContext, llm: LLM, target: string)
   }
   try {
     const info = await llm.resolveModelInfo(provider, model)
+    if (!isCurrent() || !sameModelSelection(owner.current, initial)) return
     ctx.setContextWindow(info.context?.contextWindow, info.defaultMaxTokens)
     const reasoning = info.reasoning
     let effort = ctx.modelSelection.current?.reasoningEffort
     if (effort !== undefined && reasoning?.efforts.some(candidate => candidate.id === effort) !== true)
       effort = undefined
-    if (effort === undefined && reasoning?.defaultEffort !== undefined)
-      effort = ReasoningEffortId(reasoning.defaultEffort)
-    ctx.modelSelection.current = { provider, model, ...(effort === undefined ? {} : { reasoningEffort: effort }) }
+    const next = { provider, model, ...(effort === undefined ? {} : { reasoningEffort: effort }) }
+    owner.current = next
     ctx.notice('info', 'Model selected: ' + provider + '/' + model + ' (applies to the next step)')
     if (reasoning !== undefined && reasoning.efforts.length > 0) {
       ctx.notice('info', 'Reasoning efforts: ' + reasoning.efforts.map(candidate => candidate.id).join(', ') + ' — use /reasoning')
     }
-    await ctx.persistSelection()
-    ctx.renderStatus()
+    await ctx.persistSelection(next)
+    if (isCurrent()) ctx.renderStatus()
   }
   catch (error) {
-    ctx.notice('error', 'Unroutable model ' + provider + '/' + model + ': ' + errorMessage(error))
+    if (isCurrent()) ctx.notice('error', 'Unroutable model ' + provider + '/' + model + ': ' + errorMessage(error))
   }
 }
 
@@ -95,7 +104,8 @@ export async function modelCommand(ctx: CommandContext, args: string): Promise<v
   if (selectedModel !== undefined) await selectModel(ctx, llm, selectedModel)
 }
 
-async function changeReasoningEffort(ctx: CommandContext, args: string, cycle = false, isCurrent = (): boolean => true): Promise<void> {
+async function changeReasoningEffort(ctx: CommandContext, args: string, cycle = false, ownsShortcut = (): boolean => true): Promise<void> {
+  const isCurrent = (): boolean => ctx.isCurrent?.() !== false && ownsShortcut()
   if (ctx.signal.aborted || !isCurrent()) return
   const selected = ctx.modelSelection.current
   if (selected === undefined) {
@@ -114,7 +124,7 @@ async function changeReasoningEffort(ctx: CommandContext, args: string, cycle = 
   }
   try {
     const info = await llm.resolveModelInfo(selected.provider, selected.model)
-    if (ctx.signal.aborted || !isCurrent() || ctx.modelSelection.current !== selected) return
+    if (ctx.signal.aborted || !isCurrent() || !sameModelSelection(ctx.modelSelection.current, selected)) return
     const reasoning = info.reasoning
     if (reasoning === undefined || reasoning.efforts.length === 0) {
       ctx.notice('warning', 'Model ' + selected.provider + '/' + selected.model + ' exposes no reasoning efforts. Use /reasoning map to add levels and wire values, or choose another model.')
@@ -122,15 +132,16 @@ async function changeReasoningEffort(ctx: CommandContext, args: string, cycle = 
     }
     const applyEffort = async (effort: string | undefined): Promise<void> => {
       const current = ctx.modelSelection.current
-      if (current !== selected || ctx.signal.aborted || !isCurrent()) return
-      ctx.modelSelection.current = {
+      if (!sameModelSelection(current, selected) || current === undefined || ctx.signal.aborted || !isCurrent()) return
+      const next = {
         provider: current.provider,
         model: current.model,
         ...(effort === undefined ? {} : { reasoningEffort: ReasoningEffortId(effort) }),
       }
+      ctx.modelSelection.current = next
       ctx.notice('info', 'Reasoning effort: ' + (effort ?? 'provider default'))
       ctx.renderStatus()
-      await ctx.persistSelection()
+      await ctx.persistSelection(next)
     }
     const currentEffort = selected.reasoningEffort
     if (cycle) {

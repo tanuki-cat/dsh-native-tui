@@ -17,15 +17,12 @@ import type { PendingAttachment } from '../../runtime/attachments.js'
 import type { ContextBreakdown, SessionMetrics } from '../../runtime/metrics.js'
 import type { Palette } from '../theme.js'
 import type { LLM } from './services.js'
+import type { ModelSelectionState } from '../../runtime/model-selection.js'
 
 /** One notice line in the transcript. */
 export type NoticeTone = 'info' | 'warning' | 'error'
 
-/** The writable slice of the model selection the handlers persist. */
-export interface ModelSelectionState {
-  current: { provider: string; model: string; reasoningEffort?: string } | undefined
-  assembled: unknown
-}
+export type { ModelSelectionState } from '../../runtime/model-selection.js'
 
 /** Staged attachments, mutated in place so the app keeps one array. */
 export interface AttachmentState {
@@ -51,6 +48,8 @@ export interface CommandContext {
   readonly restartSession?: (expected: HostSession) => Promise<HostSession>
   /** Cancellation for the whole command run. */
   readonly signal: AbortSignal
+  /** False after the owning Session is replaced or the terminal starts closing. */
+  readonly isCurrent?: () => boolean
   /** Render one notice line. */
   readonly notice: (tone: NoticeTone, text: string) => void
   /** Redraw the header and status row. */
@@ -87,7 +86,7 @@ export interface CommandContext {
    */
   readonly stageSkillInvocation: (name: string) => void
   /** Persist the current model selection for future sessions. */
-  readonly persistSelection: () => Promise<void>
+  readonly persistSelection: (selection: NonNullable<ModelSelectionState['current']>) => Promise<void>
 }
 
 /** The overlay surface a handler renders into: the pi-tui instance. */
