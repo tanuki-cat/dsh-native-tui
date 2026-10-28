@@ -86,7 +86,7 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
   - `ptc` 预设的 `run_code` 内嵌子调用由 `tool/ptc-dispatch-start` / `tool/ptc-dispatch` 建卡片。
   - `standard` / `cordis` 等 native 预设直接走 `tool/call` / `tool/result` 顶层卡片；`minimal` 不暴露 `write`/`edit`。
 - `write`/`edit` 渲染 ± diff 行，卡片头显示产生它的工具与文件，如 `⚙ edit · src/file.ts`。
-- 审批与问答 waterfall。所有独立 overlay（Choice / TextInput / Approval、Markdown / Text Pager、Image）统一使用带边框和全宽背景的 opaque dialog frame，长内容自动换行 / 补齐。
+- 审批与问答 waterfall。所有独立 overlay（Choice / TextInput / Approval、Markdown / Text Pager、Image）统一使用带边框和全宽背景的 opaque dialog frame，长内容自动换行 / 补齐。审批按 toolName 与 callId 精确读取本次原生或 PTC 调用的参数，展示实际命令、目标路径或 MCP 方法；无法匹配时明确显示参数不可用，不借用相邻调用。`View full request details` 可查看完整 JSON，按视觉行翻页并随窗口缩放；Esc 返回原审批，查看详情本身不批准请求。长预览会标记截断，为批准、拒绝与取消保留空间。
 - 问答面板支持单选与多选：Space 勾选、Enter 提交，Other 提供自由文本（多选时会与已勾选项一并返回）；每题都有 `Skip this question` 行（无选项文本题为 `Answer… / Skip this question` 菜单），跳过只返回 `{ id, selected: [] }` 并继续批次；Esc 或请求 signal 中止会以 `UserQuestionError(ASK_ABORTED)` 取消整批。
 - 运行中 `Esc` / `Ctrl+C` 取消 turn；输入框有草稿时 `Esc` 先清空草稿，空输入才取消（overlay 聚焦时不触发）。
 
@@ -96,7 +96,7 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 - 流式内容直接跟随 provider：每帧显示已收到的全部 text/reasoning，`block-end` 与 `assistant/message` 立即采用完整内容，没有额外逐字动画、播放队列或 settle grace。reasoning、正文、工具卡片按 provider/event 顺序展示，可以落在同一帧。
 - 执行状态独立于内容渲染：turn 开始后显示 `⟳ working · Ns`；收到文本、reasoning、工具调用或 stream/end 都不清除它，直到 `turn/end` 或切换会话。Host 调度自动重试时显示 `⟳ retry N/M after CODE (automatic) · Ns`，新 attempt 或恢复收流后回到 working。断流检测、超时与重试策略归 Host/provider，TUI 不根据画面是否变化判断网络状态。
 - 显示密度可配置：`thinkingDisplay` 与 `runCodeDisplay` 均为 `hidden | compact | detailed`，见[配置](#配置)。
-- PTC 的 `run_code` 卡片在 `compact` 下列出程序实际派发的子调用：`read src/a.ts`、`bash <description>`、MCP 工具显示服务名 `mcp idea`；同一行只出现一次，超过 10 行折叠为 `├ … N more`，失败时额外显示一行 `├ ✕ <错误首行>`。
+- PTC 的 `run_code` 卡片在 `compact` 下列出实际子调用：`skill` 显示实际技能名，如 `skill daily-log-writer`；文件工具显示路径；bash/pwsh 优先显示实际命令及显式 workdir，多行命令用 `↵` 标记；MCP 显示服务、方法与目标，如 `mcp idea.get_file_problems src/a.ts`；`todo_write` 显示任务数量、进行中/完成数量和当前任务，不虚构文件路径。同一摘要只出现一次，长值标记截断，路径优先保留文件名；超过 10 行折叠为 `├ … N more`，失败时保留错误首行。
 - 上下文压缩：默认 preset 启用 `compaction-basic` 与 tool-result pruner。TUI 渲染 compaction start/summary/end；prune 隐藏对应 tool 卡片并保留 prune notice；session 级 tool memory 会忽略同一 callId 的晚到 / 重复 call/result，即使原始事件已离开 retained window。进程在 compaction 中途崩溃后 resume，卡片尾行显示 `⚠ interrupted` 而不是一直停在 `⟳ compacting…`。`/compact` 作为 Host command 可手动触发。
 - 终端窗口标题：启动后写入 `<产品标题> · <workspace 目录名>`（OSC 0），标签页能直接看出是哪个 checkout 的会话，例如 `DeepSeek Harness · dsh-native-tui`。控制字符会被压平（BEL 会截断 OSC 序列），目录名超过 48 字符截断；只在标题变化时写入。
 - 页面骨架：header 展示产品标题、Session id、cwd；transcript 只保留上下留白。输入框上方将运行状态、model、think、preset 和附件数合为一行，用细分隔符分组，不额外插入空行。transcript、状态区、输入框与边框共用满宽列，窄终端自然换行，不截掉字段。
@@ -524,6 +524,7 @@ node scripts/fake-tty-skills.mjs             # /skill 列表、分页、标签�
 node scripts/fake-tty-reasoning-cycle.mjs    # Shift+Tab 编码、连按、草稿、弹窗及 level → wire 映射（自建临时 profile 与 mock provider）
 node scripts/fake-tty-interaction-modes.mjs native # 四模式、真实文件效果、plan 审核和 Auto 审核（自建临时 profile）
 node scripts/fake-tty-interaction-modes.mjs ptc    # 相同边界的 PTC 内层链路；需要宿主允许创建子进程 sandbox
+node scripts/fake-tty-tool-details.mjs             # 真实 PTC 卡片及审批详情；使用隔离 profile、本地 MCP 命名 fixture 和 mock provider
 ~~~
 
 普通终端环境可运行真实 PTY 冒烟：

@@ -264,6 +264,22 @@ describe('reduceTranscript', () => {
     })
   })
 
+  it('names skills in pending and settled PTC cards without collapsing different skills', () => {
+    const compactOptions = { ...options, runCodeDisplay: 'compact' as const }
+    const entries: TranscriptEntry[] = [
+      durable('tool/call', { turn: 1, step: 1, callId: 'call-outer', name: 'run_code', arguments: '{}' }, 1),
+      ptcStart('skill-1', 'skill', { name: 'daily-log-writer' }, 2),
+      ptcStart('skill-2', 'skill', { name: 'dsh-doc' }, 3),
+    ]
+    for (const input of [entries, [...entries, toolResult('call-outer', 'done', 4)]]) {
+      const parent = reduceTranscript(input, compactOptions).find(block => block.kind === 'tool' && block.callId === 'call-outer')!
+      expect(parent).toMatchObject({ callLines: ['skill daily-log-writer', 'skill dsh-doc'] })
+      const text = renderTranscriptBlock(parent, compactOptions).render(100).join('\n')
+      expect(text).toContain('├ skill daily-log-writer')
+      expect(text).toContain('├ skill dsh-doc')
+    }
+  })
+
   it('lists the tools a compact run_code dispatched', () => {
     const entries: TranscriptEntry[] = [
       durable('tool/call', {
@@ -288,7 +304,7 @@ describe('reduceTranscript', () => {
     expect(parent).toMatchObject({
       kind: 'tool',
       name: 'run_code',
-      callLines: ['read src/a.ts', 'bash ls -la', 'mcp idea'],
+      callLines: ['read src/a.ts', 'bash ls -la', 'mcp idea.get_file_problems src/a.ts'],
     })
     const output = renderTranscriptBlock(parent!, compactOptions).render(100).join('\n')
     expect(output).toContain('⚙ run_code')

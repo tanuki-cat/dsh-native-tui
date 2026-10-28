@@ -72,12 +72,13 @@ type KeepEnd = 'head' | 'tail'
  * row and deduplicate one of them away.
  * @param value - raw argument value.
  * @param keep - end that survives truncation.
- * @returns one row of at most {@link PTC_TARGET_CHARS} characters.
+ * @param limit - maximum characters, including an explicit truncation marker.
+ * @returns a single row bounded by limit.
  */
-function boundedLine(value: string, keep: KeepEnd): string {
+function boundedLine(value: string, keep: KeepEnd, limit = PTC_TARGET_CHARS): string {
   const compact = value.replace(/\s+/gu, ' ').trim()
-  if (compact.length <= PTC_TARGET_CHARS) return compact
-  const budget = PTC_TARGET_CHARS - 1
+  if (compact.length <= limit) return compact
+  const budget = limit - 1
   return keep === 'tail'
     ? '…' + compact.slice(compact.length - budget)
     : compact.slice(0, budget) + '…'
@@ -111,30 +112,69 @@ function firstQuery(record: Record<string, unknown>): string | undefined {
   return lineArgument(record, 'query')
 }
 
+function scriptLine(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key]
+  return typeof value === 'string' && value.trim() !== ''
+    ? boundedLine(value.replace(/\r\n|[\r\n]/gu, ' ↵ '), 'head', 120) : undefined
+}
+
+/** Select an action or target without dumping file contents or edit bodies. */
+function callTarget(record: Record<string, unknown>): string | undefined {
+  const command = scriptLine(record, 'command')
+  if (command !== undefined) return command
+  for (const key of ['file_path', 'filePath', 'pathInProject', 'path', 'directoryPath', 'file_path_relative']) {
+    const path = lineArgument(record, key, 'tail')
+    if (path !== undefined) return path
+  }
+  for (const key of ['files', 'filesToRebuild']) {
+    const paths = record[key]
+    if (Array.isArray(paths) && paths.every(path => typeof path === 'string')) return boundedLine(paths.join(', '), 'tail')
+  }
+  return lineArgument(record, 'symbolFqn') ?? lineArgument(record, 'q') ?? lineArgument(record, 'queryText')
+    ?? lineArgument(record, 'pattern') ?? lineArgument(record, 'url') ?? lineArgument(record, 'uri')
+    ?? firstQuery(record) ?? lineArgument(record, 'description')
+}
+
+function todoTarget(record: Record<string, unknown>): string | undefined {
+  if (!Array.isArray(record.todos)) return undefined
+  const todos = record.todos.filter((todo): todo is Record<string, unknown> => todo !== null && typeof todo === 'object' && !Array.isArray(todo))
+  const active = todos.filter(todo => todo.status === 'in_progress')
+  const done = todos.filter(todo => todo.status === 'completed').length
+  const current = active[0] ?? todos.find(todo => todo.status === 'pending')
+  const summary = record.todos.length === 0 ? '0 tasks · clear list' : String(record.todos.length) + ' tasks · ' + active.length + ' active · ' + done + ' done'
+  const target = current === undefined ? undefined : lineArgument(current, 'content')
+  return summary + (target === undefined ? '' : ' · ' + target)
+}
+
 /**
  * Compact row for one sub-call a `run_code` program dispatched: the tool name
  * followed by what it worked on. File tools name the path (`read src/a.ts`),
- * shells name their description or command, and MCP tools name their server
- * (`mcp idea`) rather than the registered `mcp__server__tool` identifier.
+ * shells show the actual command, MCP tools show server.method and target,
+ * and todo_write shows task counts and the active or next task.
  * @param name - sub-call tool name.
  * @param args - sub-call arguments, a JSON string or already-serialized object.
  * @returns one row; the bare tool name when no target applies.
  */
 export function ptcCallLine(name: string, args: string): string {
   const mcp = MCP_TOOL_NAME.exec(name)
-  if (mcp !== null) return 'mcp ' + boundedLine(mcp[1]!, 'head')
   const record = argumentRecord(args)
+  if (mcp !== null) {
+    const method = 'mcp ' + boundedLine(mcp[1]!, 'head') + '.' + boundedLine(mcp[2]!, 'head')
+    const target = record === undefined ? undefined : callTarget(record)
+    return method + (target === undefined ? '' : ' ' + target)
+  }
   if (record === undefined) return name
-  const target = name === 'bash' || name === 'pwsh'
-    ? lineArgument(record, 'description') ?? lineArgument(record, 'command')
+  const target = name === 'run_code' ? scriptLine(record, 'code') ?? callTarget(record)
+    : name === 'bash' || name === 'pwsh'
+    ? callTarget(record)
     : name === 'grep' || name === 'glob' || name === 'find'
       ? lineArgument(record, 'pattern') ?? lineArgument(record, 'path', 'tail')
       : name === 'web_search'
         ? firstQuery(record) ?? lineArgument(record, 'url')
-        : lineArgument(record, 'file_path', 'tail') ?? lineArgument(record, 'path', 'tail')
-          ?? lineArgument(record, 'pattern') ?? lineArgument(record, 'url') ?? firstQuery(record)
-          ?? lineArgument(record, 'command') ?? lineArgument(record, 'description')
-  return target === undefined ? name : name + ' ' + target
+        : name === 'skill' ? lineArgument(record, 'name')
+          : name === 'todo_write' ? todoTarget(record) ?? callTarget(record) : callTarget(record)
+  const cwd = name === 'bash' || name === 'pwsh' ? lineArgument(record, 'workdir', 'tail') : undefined
+  return (target === undefined ? name : name + ' ' + target) + (cwd === undefined ? '' : ' · cwd ' + cwd)
 }
 
 /** Longest failure message a compact code-execution row keeps. */

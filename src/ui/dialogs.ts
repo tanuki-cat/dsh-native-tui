@@ -13,6 +13,10 @@ import {
   type TUI,
 } from '@earendil-works/pi-tui'
 import type { ApprovalOutcome, ApprovalRequest } from '@deepseek-ai/dsh-user-approval'
+import { approvalArguments, approvalRequestDetails } from './approval-preview.js'
+import { showApprovalDetails } from './approval-details.js'
+import { ptcCallLine } from './tool-preview.js'
+import { literalToolText } from './tool-output.js'
 import {
   UserQuestionError,
   type AskUserQuestionAnswer,
@@ -59,6 +63,7 @@ class ChoiceDialog implements Component {
     items: readonly ChoiceItem[],
     private readonly hint: string,
     private readonly palette: Palette,
+    private readonly maxTitleRows?: () => number,
   ) {
     this.list = new SelectList(
       items.map(item => ({ value: item.value, label: item.label, ...(item.description === undefined ? {} : { description: item.description }) })),
@@ -71,11 +76,16 @@ class ChoiceDialog implements Component {
 
   render(width: number): string[] {
     const inner = Math.max(20, width - 4)
+    const title = new Text(this.title, 0, 0).render(inner)
+    const limit = this.maxTitleRows?.()
+    const shown = limit !== undefined && title.length > limit
+      ? limit === 1 ? [truncateToWidth(title[0] ?? '', inner - 1) + '…']
+        : [...title.slice(0, limit - 1), this.palette.dim('… View full request details')] : title
     return dialogFrame([
-      ...new Text(this.title, 0, 0).render(inner),
-      '',
+      ...shown,
+      ...(limit === 1 ? [] : ['']),
       ...this.list.render(inner),
-      '',
+      ...(limit === undefined ? [''] : []),
       ...new Text(this.palette.dim(this.hint), 0, 0).render(inner),
     ], width, this.palette)
   }
@@ -201,6 +211,7 @@ export function showChoice(
   items: readonly ChoiceItem[],
   hint: string,
   signal?: AbortSignal,
+  maxTitleRows?: () => number,
 ): Promise<string | undefined> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted === true) {
@@ -218,7 +229,7 @@ export function showChoice(
     }
     const onAbort = (): void => { finish(undefined) }
     try {
-      const dialog = new ChoiceDialog(title, items, hint, palette)
+      const dialog = new ChoiceDialog(title, items, hint, palette, maxTitleRows)
       handle = tui.showOverlay(dialog, { width: 76, maxHeight: '80%', anchor: 'center' })
       dialog.selectList.onSelect = item => { finish(item.value) }
       dialog.selectList.onCancel = () => { finish(undefined) }
@@ -227,6 +238,7 @@ export function showChoice(
       return
     }
     signal?.addEventListener('abort', onAbort, { once: true })
+    if (Boolean(signal?.aborted)) onAbort()
   })
 }
 
@@ -554,33 +566,40 @@ export function showImagePreview(
   })
 }
 
-/** Present one approval request and map the terminal choice to an approval outcome. */
+/** Present the exact pending call; inspecting its arguments never grants approval. */
 export async function showApproval(
   tui: TUI,
   palette: Palette,
-  request: Pick<ApprovalRequest, 'toolName' | 'callId' | 'reason' | 'displayReason' | 'signal'>,
+  request: Pick<ApprovalRequest, 'toolName' | 'callId' | 'reason' | 'displayReason' | 'signal'> & Partial<Pick<ApprovalRequest, 'agent'>>,
   signal?: AbortSignal,
 ): Promise<ApprovalOutcome> {
+  const activeSignal = AbortSignal.any([signal, request.signal].filter((value): value is AbortSignal => value !== undefined))
   const reason = localeText(request.displayReason) ?? request.reason
+  const args = approvalArguments(request.agent?.session.snapshotEvents() ?? [], request.toolName, request.callId)
+  const cwd = request.agent?.session.header.cwd
   const title = [
-    `Approval required · ${request.toolName}`,
-    ...(reason === undefined ? [] : [palette.dim(clip(reason, 800))]),
-    ...(request.callId === undefined ? [] : [palette.dim(`call ${request.callId}`)]),
+    'Approval required · ' + literalToolText(request.toolName),
+    args === undefined ? 'Arguments unavailable for this request' : literalToolText(ptcCallLine(request.toolName, args)),
+    ...(typeof cwd === 'string' ? [palette.dim('session cwd ' + literalToolText(cwd))] : []),
+    ...(reason === undefined ? [] : [palette.dim(literalToolText(clip(reason, 800)))]),
+    ...(request.callId === undefined ? [] : [palette.dim('call ' + literalToolText(request.callId))]),
   ].join('\n')
-  const choice = await showChoice(
-    tui,
-    palette,
-    title,
-    [
+  while (!activeSignal.aborted) {
+    const choice = await showChoice(tui, palette, title, [
       { value: 'allow', label: 'Allow once', description: 'Approve this exact request only' },
       { value: 'reject', label: 'Reject', description: 'Fail the request closed' },
       { value: 'cancel', label: 'Cancel', description: 'Withdraw the request without a decision' },
-    ],
-    'Enter selects · Esc cancels',
-    signal,
-  )
-  if (choice === 'allow') return 'allowed-once'
-  if (choice === 'reject') return 'rejected'
+      { value: 'details', label: 'View full request details', description: 'Inspect arguments without approving' },
+    ], 'Enter selects · Esc cancels', activeSignal,
+    () => Math.max(1, Math.min(10, Math.floor((tui.terminal?.rows ?? 30) * 0.8) - 8)))
+    if (choice === 'details') {
+      await showApprovalDetails(tui, palette, approvalRequestDetails(request.toolName, request.callId, reason, args, typeof cwd === 'string' ? cwd : undefined), dialogFrame, activeSignal)
+      continue
+    }
+    if (choice === 'allow') return 'allowed-once'
+    if (choice === 'reject') return 'rejected'
+    return 'cancelled'
+  }
   return 'cancelled'
 }
 

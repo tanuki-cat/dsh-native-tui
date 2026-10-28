@@ -2,14 +2,26 @@ import { describe, expect, it } from 'vitest'
 import { compactErrorPreview, ptcCallLine } from '../src/ui/tool-preview.js'
 
 describe('ptcCallLine', () => {
+  it('names the loaded skill and keeps distinct skills distinguishable', () => {
+    expect(ptcCallLine('skill', JSON.stringify({ name: 'daily-log-writer' }))).toBe('skill daily-log-writer')
+    expect(ptcCallLine('skill', JSON.stringify({ name: 'dsh-doc' }))).toBe('skill dsh-doc')
+  })
+
+  it('does not invent skill names for missing, blank or malformed arguments', () => {
+    for (const args of ['{}', '{\"name\":\" \"}', '{\"name\":123}', 'not JSON']) expect(ptcCallLine('skill', args)).toBe('skill')
+    const label = ptcCallLine('skill', JSON.stringify({ name: 'a'.repeat(200) }))
+    expect(label.length).toBeLessThanOrEqual('skill '.length + 64)
+    expect(label.endsWith('…')).toBe(true)
+  })
+
   it('names the file a file tool read', () => {
     expect(ptcCallLine('read', JSON.stringify({ file_path: 'src/ui/transcript.ts' }))).toBe('read src/ui/transcript.ts')
     expect(ptcCallLine('write', JSON.stringify({ file_path: 'a.ts', content: 'x' }))).toBe('write a.ts')
   })
 
   it('names the MCP server instead of the registered tool id', () => {
-    expect(ptcCallLine('mcp__idea__get_file_problems', JSON.stringify({ file_path: 'a.ts' }))).toBe('mcp idea')
-    expect(ptcCallLine('mcp__my_server__read_file', '{}')).toBe('mcp my_server')
+    expect(ptcCallLine('mcp__idea__get_file_problems', JSON.stringify({ file_path: 'a.ts' }))).toBe('mcp idea.get_file_problems a.ts')
+    expect(ptcCallLine('mcp__my_server__read_file', '{}')).toBe('mcp my_server.read_file')
   })
 
   it('prefers the pattern for search tools', () => {
@@ -18,12 +30,12 @@ describe('ptcCallLine', () => {
   })
 
   it('names the description or command of a shell call', () => {
-    expect(ptcCallLine('bash', JSON.stringify({ description: 'List files', command: 'ls -la' }))).toBe('bash List files')
+    expect(ptcCallLine('bash', JSON.stringify({ description: 'List files', command: 'ls -la' }))).toBe('bash ls -la')
     expect(ptcCallLine('pwsh', JSON.stringify({ command: 'Get-ChildItem' }))).toBe('pwsh Get-ChildItem')
   })
 
   it('falls back to the tool name when no target applies', () => {
-    expect(ptcCallLine('todo_write', '{"todos":[]}')).toBe('todo_write')
+    expect(ptcCallLine('todo_write', '{"todos":[]}')).toBe('todo_write 0 tasks · clear list')
     expect(ptcCallLine('read', 'not json')).toBe('read')
   })
 
@@ -47,7 +59,7 @@ describe('ptcCallLine', () => {
 
   it('keeps the head of prose-like values', () => {
     const description = 'List every TypeScript file under the nested directory structure for review'
-    const line = ptcCallLine('bash', JSON.stringify({ description, command: 'ls' }))
+    const line = ptcCallLine('bash', JSON.stringify({ description }))
     expect(line.startsWith('bash List every TypeScript')).toBe(true)
     expect(line.endsWith('…')).toBe(true)
   })
