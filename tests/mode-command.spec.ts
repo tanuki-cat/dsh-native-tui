@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { CommandContext } from '../src/ui/commands/context.js'
 import { modeCommand } from '../src/ui/commands/mode.js'
 import { permissionsCommand } from '../src/ui/commands/runtime-status.js'
+import { runCommandLine, type CommandRouterDeps } from '../src/ui/commands/router.js'
 import { createPalette } from '../src/ui/theme.js'
 import { INTERACTION_MODES, type InteractionMode } from '../src/interaction-modes.js'
 
@@ -14,10 +15,14 @@ function harness() {
     available: vi.fn((): readonly InteractionMode[] => INTERACTION_MODES),
     set: vi.fn((_agent: unknown, mode: InteractionMode) => { current = mode }),
   }
-  const raw = { set: vi.fn(), current: () => 'plan', names: ['danger-full-access'] }
+  const raw = {
+    set: vi.fn(), current: () => 'workspace-write',
+    names: ['read-only', 'workspace-write', 'danger-full-access', 'manual', 'accept-edits', 'plan', 'auto', 'custom'],
+    resolve: (name: string) => ({ sandbox: name === 'read-only' ? 'read-only' : name === 'workspace-write' ? 'workspace-write' : 'danger-full-access', approval: name === 'danger-full-access' ? 'never' : 'ask' }),
+  }
   const ctx = {
     host: { get: (name: string) => name === 'interactionModes' ? modes : raw },
-    active: { agent: { status: 'idle' } }, signal: controller.signal,
+    active: { agent: { status: 'idle', session: {} } }, signal: controller.signal,
     palette: createPalette('plain'),
     tui: { showOverlay: (dialog: typeof overlays[number]) => { overlays.push(dialog); return { hide() {} } } },
     notice: vi.fn(), renderStatus: vi.fn(),
@@ -27,7 +32,7 @@ function harness() {
 const flush = async () => { await Promise.resolve(); await Promise.resolve() }
 
 describe('mode command', () => {
-  it.each(['manual', 'plan', 'accept edits'] as const)('selects %s without sending a prompt', async target => {
+  it.each(['manual', 'plan', 'accept edits', 'off'] as const)('selects %s without sending a prompt', async target => {
     const h = harness()
     if (target === 'accept edits') h.modes.current = () => 'manual'
     await modeCommand(h.ctx, target)
@@ -35,10 +40,11 @@ describe('mode command', () => {
     expect(h.ctx.renderStatus).toHaveBeenCalledOnce()
   })
 
-  it('opens a picker with the four available modes and marks the current one', async () => {
+  it('opens a picker with the available modes and marks the current one', async () => {
     const h = harness()
     const running = modeCommand(h.ctx, '')
     expect(h.overlays[0]?.render(100).join(' ')).toContain('* accept edits')
+    expect(h.overlays[0]?.render(100).join(' ')).toContain('off')
     h.overlays[0]!.handleInput('\x1b[B')
     h.overlays[0]!.handleInput('\x1b[B')
     h.overlays[0]!.handleInput('\r')
@@ -105,6 +111,75 @@ describe('mode command', () => {
     await modeCommand(h.ctx, 'bypassPermissions')
     expect(h.modes.set).not.toHaveBeenCalled()
     expect(h.ctx.notice.mock.calls[0]?.[1]).toContain('Usage:')
+  })
+
+  it.each(['/permissions', '/permission'])('opens the native picker through %s and applies the selection', async command => {
+    const h = harness()
+    h.modes.current = () => 'off'
+    const running = runCommandLine(command, { context: () => h.ctx } as unknown as CommandRouterDeps)
+    const text = h.overlays[0]!.render(76).join(' ')
+    expect(text).toContain('Permission preset (current: workspace-write)')
+    expect(text).toContain('* workspace-write')
+    expect(text).toContain('read-only')
+    expect(text).toContain('danger-full-access')
+    expect(text).toContain('custom')
+    expect(text).toContain('read-only · approval: ask')
+    expect(text).toContain('danger-full-access · approval: never')
+    expect(text).not.toContain('accept-edits')
+    expect(text).not.toContain('auto')
+    h.overlays[0]!.handleInput('\r')
+    await running
+    expect(h.raw.set).toHaveBeenCalledWith(h.ctx.active.agent.session, 'read-only')
+    expect(h.modes.set).not.toHaveBeenCalled()
+    expect(h.ctx.renderStatus).toHaveBeenCalledOnce()
+  })
+
+  it.each(['read-only', 'workspace-write', 'danger-full-access', 'custom'])('selects native %s directly', async preset => {
+    const h = harness()
+    await permissionsCommand(h.ctx, preset)
+    expect(h.raw.set).toHaveBeenCalledWith(h.ctx.active.agent.session, preset)
+    expect(h.overlays).toHaveLength(0)
+    expect(h.modes.set).not.toHaveBeenCalled()
+  })
+
+  it('cancels the native picker without changing permissions', async () => {
+    const h = harness()
+    const running = permissionsCommand(h.ctx, '')
+    h.overlays[0]!.handleInput('\x1b')
+    await running
+    expect(h.raw.set).not.toHaveBeenCalled()
+  })
+
+  it.each(['running', 'plan', 'aborted', 'removed'] as const)('revalidates %s state after the native picker opens', async state => {
+    const h = harness()
+    const running = permissionsCommand(h.ctx, '')
+    if (state === 'running') Object.assign(h.ctx.active.agent, { status: 'running' })
+    if (state === 'plan') h.modes.current = () => 'plan'
+    if (state === 'aborted') h.controller.abort()
+    if (state === 'removed') h.raw.names = ['workspace-write']
+    h.overlays[0]!.handleInput('\r')
+    await running
+    expect(h.raw.set).not.toHaveBeenCalled()
+    expect(h.ctx.renderStatus).not.toHaveBeenCalled()
+  })
+
+  it('does not open the native picker while in plan mode or running', async () => {
+    for (const state of ['plan', 'running']) {
+      const h = harness()
+      if (state === 'plan') h.modes.current = () => 'plan'
+      else Object.assign(h.ctx.active.agent, { status: 'running' })
+      await permissionsCommand(h.ctx, '')
+      expect(h.overlays).toHaveLength(0)
+      expect(h.raw.set).not.toHaveBeenCalled()
+    }
+  })
+
+  it('reports a failed native permission change without success', async () => {
+    const h = harness()
+    h.raw.set.mockImplementationOnce(() => { throw new Error('preset unavailable') })
+    await permissionsCommand(h.ctx, 'read-only')
+    expect(h.ctx.notice).toHaveBeenCalledWith('error', 'Could not change permissions: preset unavailable')
+    expect(h.ctx.renderStatus).not.toHaveBeenCalled()
   })
 
   it('keeps advanced /permissions from widening a live plan sandbox', async () => {

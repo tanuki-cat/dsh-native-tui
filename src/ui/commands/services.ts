@@ -73,6 +73,7 @@ export interface SettingsService {
 /** The permission-preset service. */
 export interface PermissionPresets {
   readonly names: readonly string[]
+  resolve(name: string): { sandbox: string; approval: string }
   current(session: Session): string
   set(session: Session, name: string): void
 }

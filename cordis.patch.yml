@@ -70,8 +70,17 @@
 # only by the reviewer above, never by an unrestricted configured preset.
 - id: permission
   config:
-    defaultPreset: !!js process.env.DSH_PERMISSION_MODE ?? 'accept-edits'
+    defaultPreset: !!js process.env.DSH_PERMISSION_MODE ?? 'workspace-write'
     presets:
+      read-only:
+        sandbox: read-only
+        approval: ask
+      workspace-write:
+        sandbox: workspace-write
+        approval: ask
+      danger-full-access:
+        sandbox: danger-full-access
+        approval: never
       manual:
         sandbox: read-only
         approval: ask

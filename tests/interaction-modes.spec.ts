@@ -15,6 +15,7 @@ function harness() {
   let planState: { active: boolean; pending?: boolean } = { active: false }
   const permissions = {
     get names() { return ['read-only', 'workspace-write', 'danger-full-access', 'manual', 'accept-edits', 'plan', ...(auto ? ['auto'] : [])] },
+    defaultPreset: 'accept-edits',
     current: () => preset,
     resolve: vi.fn((mode: string) => ({ sandbox: mode === 'auto' ? 'danger-full-access' : mode === 'accept-edits' ? 'workspace-write' : 'read-only', approval: 'ask' })),
     set: vi.fn((_session: Session, next: string) => {
@@ -59,6 +60,16 @@ function harness() {
 }
 
 describe('interaction modes', () => {
+  it('starts in off mode with the native workspace default without changing permissions', async () => {
+    const h = harness()
+    h.permissions.defaultPreset = 'workspace-write'
+    h.preset = h.permissions.defaultPreset
+    expect(h.modes.current(h.agent)).toBe('off')
+    await h.step()
+    expect(await h.gate(h.exec('bash'))).toEqual({ kind: 'allow' })
+    expect(h.permissions.set).not.toHaveBeenCalled()
+  })
+
   it('uses the Host accept-edits identity without creating a parallel mode log', () => {
     const h = harness()
     expect(h.modes.current(h.agent)).toBe('accept-edits')
@@ -71,6 +82,82 @@ describe('interaction modes', () => {
     expect(h.preset).toBe(mode)
     expect(h.plan.set).toHaveBeenCalledWith(h.agent, mode === 'plan')
     expect(h.modes.current(h.agent)).toBe(mode)
+  })
+
+  it.each(['manual', 'accept-edits', 'plan', 'auto'] as const)('turns %s off with the native workspace default', async mode => {
+    const h = harness()
+    await h.modes.set(h.agent, mode)
+    await h.modes.set(h.agent, 'off')
+    expect(h.preset).toBe('workspace-write')
+    expect(h.modes.current(h.agent)).toBe('off')
+    expect(h.plan.set).toHaveBeenLastCalledWith(h.agent, false)
+    await h.step()
+    expect(h.preset).toBe('workspace-write')
+  })
+
+  it.each(['read-only', 'workspace-write', 'danger-full-access', 'custom'])('keeps native %s permissions untouched in off mode', async preset => {
+    const h = harness()
+    h.preset = preset
+    h.planState = { active: true }
+    expect(h.modes.current(h.agent)).toBe('off')
+    await h.step()
+    expect(h.permissions.set).not.toHaveBeenCalled()
+    for (const name of ['write', 'bash', 'subagent', 'mcp__server__write', 'run_code']) {
+      for (const inner of [false, true]) {
+        const exec = h.exec(name, { sandbox_permissions: 'danger-full-access' }, inner)
+        expect(h.modes.planDenial(exec)).toBeUndefined()
+        for (const kind of ['allow', 'ask', 'deny', 'cancel']) {
+          const decision = { kind, reason: 'native permission' }
+          expect(await h.gate(exec, decision)).toBe(decision)
+        }
+      }
+    }
+    await h.modes.set(h.agent, 'off')
+    expect(h.permissions.set).not.toHaveBeenCalled()
+  })
+
+  it('restores the latest native preset from the durable history across mode switches', async () => {
+    const h = harness()
+    h.permissions.set(h.agent.session, 'read-only')
+    await h.modes.set(h.agent, 'manual')
+    h.permissions.set(h.agent.session, 'danger-full-access')
+    await h.modes.set(h.agent, 'accept-edits')
+    await h.modes.set(h.agent, 'plan')
+    await h.modes.set(h.agent, 'off')
+    expect(h.preset).toBe('danger-full-access')
+    expect(h.modes.current(h.agent)).toBe('off')
+  })
+
+  it('does not replace an unavailable native preset with broader fallback access', () => {
+    const h = harness()
+    h.events.push({ type: 'permission/preset', data: { preset: 'removed-native-preset' } })
+    expect(() => h.modes.set(h.agent, 'off')).toThrow('preset unavailable')
+    expect(h.preset).toBe('accept-edits')
+  })
+
+  it('restores off after accepted plan exit', async () => {
+    const h = harness()
+    await h.modes.set(h.agent, 'off')
+    await h.modes.set(h.agent, 'plan')
+    h.planState = { active: true, pending: false }
+    await h.step()
+    expect(h.preset).toBe('workspace-write')
+    expect(h.modes.current(h.agent)).toBe('off')
+  })
+
+  it('uses a native profile default when no native selection has been logged', async () => {
+    const h = harness()
+    h.permissions.defaultPreset = 'read-only'
+    await h.modes.set(h.agent, 'off')
+    expect(h.preset).toBe('read-only')
+  })
+
+  it('rolls back permissions if leaving plan for off fails', async () => {
+    const h = harness()
+    await h.modes.set(h.agent, 'plan')
+    h.plan.set.mockImplementationOnce(() => { throw new Error('plan exit failed') })
+    expect(() => h.modes.set(h.agent, 'off')).toThrow('plan exit failed')
+    expect(h.preset).toBe('plan')
   })
 
   it('uses the Host command when a planning group isolates planMode from agent.ctx', async () => {
@@ -103,14 +190,14 @@ describe('interaction modes', () => {
     const h = harness()
     h.permissions.resolve.mockReturnValue({ sandbox: 'danger-full-access', approval: 'never' })
     expect(h.modes.current(h.agent)).toBe('custom')
-    expect(h.modes.available(h.agent)).toEqual([])
+    expect(h.modes.available(h.agent)).toEqual(['off'])
     expect(() => h.modes.set(h.agent, 'plan')).toThrow('unavailable')
   })
 
   it('does not label unrestricted access as Auto', () => {
     const h = harness()
     h.preset = 'danger-full-access'
-    expect(h.modes.current(h.agent)).toBe('custom')
+    expect(h.modes.current(h.agent)).toBe('off')
   })
 
   it('refuses unavailable Auto and plan modes without changing permissions', () => {
@@ -181,7 +268,7 @@ describe('interaction modes', () => {
     expect(h.modes.planDenial(h.exec('exit_plan_mode'))).toBeUndefined()
     expect(h.modes.planDenial(h.exec('working_directory'))).toBeUndefined()
     expect(h.modes.planDenial(h.exec('run_code', { sandbox_permissions: 'danger-full-access' }))).toContain('escalation')
-    h.preset = 'danger-full-access'
+    h.permissions.resolve.mockReturnValue({ sandbox: 'danger-full-access', approval: 'ask' })
     expect(h.modes.planDenial(h.exec('run_code'))).toContain('read-only sandbox')
   })
 

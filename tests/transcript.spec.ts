@@ -280,6 +280,28 @@ describe('reduceTranscript', () => {
     }
   })
 
+  it('distinguishes background jobs and wait options in pending and settled run_code cards', () => {
+    const compactOptions = { ...options, runCodeDisplay: 'compact' as const }
+    const entries: TranscriptEntry[] = [
+      durable('tool/call', { turn: 1, step: 1, callId: 'call-outer', name: 'run_code', arguments: '{}' }, 1),
+      ptcStart('job-1', 'job_output', { job_id: 'bash-build' }, 2),
+      ptcStart('job-2', 'job_output', { job_id: 'bash-test', wait: true, timeout_ms: 90000 }, 3),
+      ptcStart('job-3', 'job_output', { job_id: 'bash-build', wait: true }, 4),
+    ]
+    for (const input of [entries, [...entries, toolResult('call-outer', 'done', 5)]]) {
+      const parent = reduceTranscript(input, compactOptions).find(block => block.kind === 'tool' && block.callId === 'call-outer')!
+      expect(parent).toMatchObject({ callLines: [
+        'job_output bash-build · poll',
+        'job_output bash-test · wait · timeout 90s',
+        'job_output bash-build · wait',
+      ] })
+      const text = renderTranscriptBlock(parent, compactOptions).render(100).join('\n')
+      expect(text).toContain('├ job_output bash-build · poll')
+      expect(text).toContain('├ job_output bash-test · wait · timeout 90s')
+      expect(text).toContain('├ job_output bash-build · wait')
+    }
+  })
+
   it('lists the tools a compact run_code dispatched', () => {
     const entries: TranscriptEntry[] = [
       durable('tool/call', {

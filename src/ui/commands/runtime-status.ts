@@ -15,9 +15,15 @@ import { modeCommand } from './mode.js'
 
 /** The `/permissions` command. */
 export async function permissionsCommand(ctx: CommandContext, args: string): Promise<void> {
+  if (ctx.signal.aborted) return
+  if (ctx.active.agent.status === 'running') {
+    ctx.notice('warning', 'Wait for the running turn to finish or cancel it before changing permissions.')
+    return
+  }
+  args = args.trim()
   const modes = ctx.host.get('interactionModes') as ModeService | undefined
   if (modes !== undefined) {
-    if (args === '' || isInteractionMode(args)) { await modeCommand(ctx, args); return }
+    if (isInteractionMode(args)) { await modeCommand(ctx, args); return }
     if (modes.current(ctx.active.agent) === 'plan') {
       ctx.notice('warning', 'Leave plan mode through /mode before selecting an advanced permission preset.')
       return
@@ -33,9 +39,17 @@ export async function permissionsCommand(ctx: CommandContext, args: string): Pro
       ctx.notice('warning', 'Unknown preset "' + args + '". Available: ' + presets.names.join(', '))
       return
     }
-    presets.set(ctx.active.agent.session, args)
-    ctx.notice('info', 'Permission preset: ' + args)
-    ctx.renderStatus()
+    try {
+      presets.set(ctx.active.agent.session, args)
+      ctx.notice('info', 'Permission preset: ' + args)
+      ctx.renderStatus()
+    }
+    catch (error) { ctx.notice('error', 'Could not change permissions: ' + errorMessage(error)) }
+    return
+  }
+  const names = presets.names.filter(name => !isInteractionMode(name))
+  if (names.length === 0) {
+    ctx.notice('warning', 'No native permission presets are available in this profile.')
     return
   }
   const currentPreset = presets.current(ctx.active.agent.session)
@@ -43,19 +57,18 @@ export async function permissionsCommand(ctx: CommandContext, args: string): Pro
     ctx.tui,
     ctx.palette,
     'Permission preset (current: ' + currentPreset + ')',
-    presets.names.map(name => ({
-      value: name,
-      label: (name === currentPreset ? '* ' : '  ') + name,
-      description: name === 'workspace-write' ? 'Workspace writes only' : 'Full host access',
-    })),
+    names.map(name => {
+      const spec = presets.resolve(name)
+      return {
+        value: name,
+        label: (name === currentPreset ? '* ' : '  ') + name,
+        description: spec.sandbox + ' · approval: ' + spec.approval,
+      }
+    }),
     'Enter selects · Esc cancels',
     ctx.signal,
   )
-  if (presetChoice !== undefined) {
-    presets.set(ctx.active.agent.session, presetChoice)
-    ctx.notice('info', 'Permission preset: ' + presetChoice)
-    ctx.renderStatus()
-  }
+  if (presetChoice !== undefined) await permissionsCommand(ctx, presetChoice)
 }
 
 /** The `/jobs` command. */

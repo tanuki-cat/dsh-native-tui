@@ -21,7 +21,7 @@ export const HELP_LINES: readonly string[] = [
   '/exit · /quit (or bare exit/quit) · /reload',
   '/cancel · /model [provider/model] · /reasoning [effort|default|map] · /provider [add|list|edit|models|remove <route>]',
   '/mcp [add|list|remove <name>]',
-  '/mode [manual|accept-edits|plan|auto] · /permissions [preset]',
+  '/mode [manual|accept-edits|plan|auto|off] · /permissions [preset]',
   '/jobs [kill <id>] · /agents · /preset [id]',
   '/plugins [list|market [q]|inspect <spec>|install <spec>|remove <bundle>|enable <id>|disable <id>] · /exit',
   '/workspaces [new|use|pin|unpin|archive|unarchive] · /schedule [add|delete]',
@@ -54,13 +54,14 @@ export const LOCAL_COMMANDS: readonly CommandSuggestion[] = [
   { name: 'reasoning', description: 'select the reasoning effort or edit its mapping', input: { hint: '[effort|default|map]' }, keepExactSubmit: true, subcommands: [
     { name: 'map', description: 'guide an edit of the current model reasoning map' },
   ] },
-  { name: 'mode', description: 'select manual, accept edits, plan, or experimental Auto review', keepExactSubmit: true, input: { hint: '[manual|accept-edits|plan|auto]' }, subcommands: [
+  { name: 'mode', description: 'select manual, accept edits, plan, experimental Auto, or native permissions', keepExactSubmit: true, input: { hint: '[manual|accept-edits|plan|auto|off]' }, subcommands: [
     { name: 'manual', description: 'read-only files; changes require approval' },
     { name: 'accept-edits', description: 'allow workspace edits; ask for other actions' },
     { name: 'plan', description: 'explore read-only and submit a plan for review' },
     { name: 'auto', description: 'experimental model review with Full access; requires consent' },
+    { name: 'off', description: 'use native DSH permissions without TUI mode policies' },
   ] },
-  { name: 'permissions', description: 'select a permission preset', input: { hint: 'preset' } },
+  { name: 'permissions', description: 'select native DSH permissions (sandbox and approval)', keepExactSubmit: true, input: { hint: '[preset]' } },
   { name: 'preset', description: 'select the preset for the current or next session', input: { hint: 'id' } },
   { name: 'workspaces', description: 'list/create/use/pin/archive workspaces', subcommands: [
     { name: 'new', description: 'create a workspace session', hint: '<path>' },

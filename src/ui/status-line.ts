@@ -31,6 +31,7 @@ export interface StatusInput {
   readonly model: string
   readonly reasoningEffort: string | undefined
   readonly interactionMode?: InteractionMode | 'custom'
+  readonly permissionPreset?: string
   readonly preset: string | undefined
   readonly attachmentCount: number
   readonly contextWindow: number | undefined
@@ -116,7 +117,10 @@ export function renderStatusRows(
   const footerHead: string[] = []
   if (mode !== undefined) footerHead.push((mode === 'custom'
     ? palette.warning('custom mode')
-    : (mode === 'accept-edits' ? palette.success : palette.warning)(MODE_LABELS[mode] + (mode === 'auto' ? ' · EXP' : ''))) + palette.dim(' · /mode'))
+    : (mode === 'off' ? palette.dim : mode === 'accept-edits' ? palette.success : palette.warning)(MODE_LABELS[mode] + (mode === 'auto' ? ' · EXP' : ''))) + palette.dim(' · /mode'))
+  if ((mode === 'off' || mode === undefined) && input.permissionPreset !== undefined) footerHead.push(
+    palette.dim('permission ') + (input.permissionPreset === 'danger-full-access' ? palette.warning : palette.accent)(input.permissionPreset),
+  )
   if (context !== undefined) footerHead.push(
     palette.context(metrics.contextPercent, metrics.contextCompactPercent)(context.head)
       + (context.detail === '' ? '' : palette.dim(context.detail)),

@@ -78,11 +78,42 @@ describe('renderStatusRows', () => {
     expect(state.footer.split('\n').at(-1)).toBe('enter send · shift+tab think · /help · ctrl+d exit')
   })
 
-  it.each([['manual', 'manual mode'], ['accept-edits', 'accept edits'], ['plan', 'plan mode'], ['auto', 'auto mode · EXP'], ['custom', 'custom mode']] as const)('shows %s below the editor without confusing Full access with Auto', (interactionMode, label) => {
+  it.each([['manual', 'manual mode'], ['accept-edits', 'accept edits'], ['plan', 'plan mode'], ['auto', 'auto mode · EXP'], ['custom', 'custom mode'], ['off', 'off']] as const)('shows %s below the editor without confusing Full access with Auto', (interactionMode, label) => {
     const { state, rows: target } = rows()
     renderStatusRows(target, palette, inputOf({ interactionMode }))
     expect(state.footer.startsWith(label + ' · /mode')).toBe(true)
     expect(state.footer).toContain('2 turns')
+  })
+
+  it.each(['read-only', 'workspace-write', 'danger-full-access', 'custom', 'profile-native'])('shows the selected native %s permission beside off', permissionPreset => {
+    const { state, rows: target } = rows()
+    renderStatusRows(target, palette, inputOf({ interactionMode: 'off', permissionPreset }))
+    expect(state.footer.split('\n')[0]).toBe('off · /mode  │  permission ' + permissionPreset + '  │  ctx 40%  (~400K / 1M · compact at 80%)')
+    expect(state.status).toContain('preset ptc')
+  })
+
+  it('refreshes native permissions without retaining the previous selection', () => {
+    const { state, rows: target } = rows()
+    renderStatusRows(target, palette, inputOf({ interactionMode: 'off', permissionPreset: 'workspace-write' }))
+    renderStatusRows(target, palette, inputOf({ interactionMode: 'off', permissionPreset: 'read-only' }))
+    expect(state.footer).toContain('permission read-only')
+    expect(state.footer).not.toContain('workspace-write')
+  })
+
+  it('shows native permissions when the mode service is absent without guessing missing values', () => {
+    const { state, rows: target } = rows()
+    renderStatusRows(target, palette, inputOf({ permissionPreset: 'workspace-write' }))
+    expect(state.footer).toContain('permission workspace-write')
+    renderStatusRows(target, palette, inputOf({ interactionMode: 'off' }))
+    expect(state.footer).not.toContain('permission ')
+    expect(state.footer).not.toContain('undefined')
+  })
+
+  it('does not repeat a TUI mode as a native permission', () => {
+    const { state, rows: target } = rows()
+    renderStatusRows(target, palette, inputOf({ interactionMode: 'manual', permissionPreset: 'manual' }))
+    expect(state.footer).toContain('manual mode · /mode')
+    expect(state.footer).not.toContain('permission ')
   })
 
   it('uses the running vocabulary and hides the default thinking label', () => {
@@ -163,17 +194,19 @@ describe('status layout', () => {
 
   it.each([32, 60, 100, 160])('preserves every field when the terminal resizes to %i columns', width => {
     for (const theme of ['plain', 'dark'] as const) {
-      const { state, rows: target } = rows()
-      renderStatusRows(target, createPalette(theme), inputOf({
-        interactionMode: 'auto', provider: '路由', model: 'long-model-' + 'x'.repeat(70), attachmentCount: 2,
-      }))
-      const compact = (text: string) => stripVTControlCharacters(text).replaceAll(' ', '').replaceAll('\n', '')
-      for (const text of [state.status, state.footer]) {
-        const block = new Text(text, 0, 0)
-        block.render(160)
-        const rendered = block.render(width)
-        expect(rendered.every(line => visibleWidth(line) <= width)).toBe(true)
-        expect(compact(rendered.join('\n'))).toBe(compact(text))
+      for (const interactionMode of ['auto', 'off'] as const) {
+        const { state, rows: target } = rows()
+        renderStatusRows(target, createPalette(theme), inputOf({
+          interactionMode, permissionPreset: 'danger-full-access', provider: '路由', model: 'long-model-' + 'x'.repeat(70), attachmentCount: 2,
+        }))
+        const compact = (text: string) => stripVTControlCharacters(text).replaceAll(' ', '').replaceAll('\n', '')
+        for (const text of [state.status, state.footer]) {
+          const block = new Text(text, 0, 0)
+          block.render(160)
+          const rendered = block.render(width)
+          expect(rendered.every(line => visibleWidth(line) <= width)).toBe(true)
+          expect(compact(rendered.join('\n'))).toBe(compact(text))
+        }
       }
     }
   })

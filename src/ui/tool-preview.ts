@@ -135,6 +135,17 @@ function callTarget(record: Record<string, unknown>): string | undefined {
     ?? firstQuery(record) ?? lineArgument(record, 'description')
 }
 
+function jobOutputTarget(record: Record<string, unknown>): string | undefined {
+  const id = lineArgument(record, 'job_id', 'tail')
+  if (id === undefined) return undefined
+  if (record.wait === undefined || record.wait === false) return id + ' · poll'
+  if (record.wait !== true) return id
+  const timeout = record.timeout_ms
+  const limit = typeof timeout === 'number' && Number.isFinite(timeout) && timeout >= 0
+    ? ' · timeout ' + (timeout % 1000 === 0 ? timeout / 1000 + 's' : timeout + 'ms') : ''
+  return id + ' · wait' + limit
+}
+
 function todoTarget(record: Record<string, unknown>): string | undefined {
   if (!Array.isArray(record.todos)) return undefined
   const todos = record.todos.filter((todo): todo is Record<string, unknown> => todo !== null && typeof todo === 'object' && !Array.isArray(todo))
@@ -164,6 +175,10 @@ export function ptcCallLine(name: string, args: string): string {
     return method + (target === undefined ? '' : ' ' + target)
   }
   if (record === undefined) return name
+  if (name === 'job_output') {
+    const target = jobOutputTarget(record)
+    return target === undefined ? name : name + ' ' + target
+  }
   const target = name === 'run_code' ? scriptLine(record, 'code') ?? callTarget(record)
     : name === 'bash' || name === 'pwsh'
     ? callTarget(record)

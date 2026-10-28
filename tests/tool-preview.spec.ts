@@ -14,6 +14,30 @@ describe('ptcCallLine', () => {
     expect(label.endsWith('…')).toBe(true)
   })
 
+  it.each([
+    [{ job_id: 'bash-build' }, 'job_output bash-build · poll'],
+    [{ job_id: 'bash-test', wait: false, timeout_ms: 90000 }, 'job_output bash-test · poll'],
+    [{ job_id: 'bash-build', wait: true }, 'job_output bash-build · wait'],
+    [{ job_id: 'bash-build', wait: true, timeout_ms: 90000 }, 'job_output bash-build · wait · timeout 90s'],
+    [{ job_id: 'bash-build', wait: true, timeout_ms: 1500 }, 'job_output bash-build · wait · timeout 1500ms'],
+  ])('summarizes job_output %j', (args, expected) => {
+    expect(ptcCallLine('job_output', JSON.stringify(args))).toBe(expected)
+  })
+
+  it('does not invent a job identity or timeout for invalid arguments', () => {
+    for (const args of ['{}', '{"job_id":" "}', '{"job_id":123}', 'not JSON']) {
+      expect(ptcCallLine('job_output', args)).toBe('job_output')
+    }
+    for (const timeout_ms of [-1, '90000', null]) {
+      expect(ptcCallLine('job_output', JSON.stringify({ job_id: 'bash-build', wait: true, timeout_ms })))
+        .toBe('job_output bash-build · wait')
+    }
+    const line = ptcCallLine('job_output', JSON.stringify({ job_id: 'prefix'.repeat(100) + '-distinct-job', wait: true }))
+    expect(line).toContain('…')
+    expect(line.endsWith('-distinct-job · wait')).toBe(true)
+    expect(line.length).toBeLessThanOrEqual('job_output '.length + 64 + ' · wait'.length)
+  })
+
   it('names the file a file tool read', () => {
     expect(ptcCallLine('read', JSON.stringify({ file_path: 'src/ui/transcript.ts' }))).toBe('read src/ui/transcript.ts')
     expect(ptcCallLine('write', JSON.stringify({ file_path: 'a.ts', content: 'x' }))).toBe('write a.ts')

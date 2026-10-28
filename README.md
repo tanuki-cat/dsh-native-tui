@@ -183,21 +183,24 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 | `/provider [add\|list\|edit [route]\|models <route>\|input [provider/model]\|remove <route>]` | 配置或查看 provider；刷新模型目录；编辑输入模态；删除 route |
 | `/codex [status\|setup\|login [browser\|device]\|logout\|models\|help]` | ChatGPT Codex 登录、路由与额度 |
 | `/codebuddy [status\|login [cn\|en\|all]\|logout [cn\|en\|all]\|models [refresh]\|quota\|checkin\|prompt [show\|reset]\|doctor]` | CodeBuddy / WorkBuddy 账号与模型 |
-| `/mode [manual\|accept-edits\|plan\|auto]` | 打开模式选择器或切换当前会话模式 |
-| `/permissions [preset]` | 无参数使用模式选择器；保留高级 Host preset 的直接选择 |
+| `/mode [manual\|accept-edits\|plan\|auto\|off]` | 打开模式选择器或切换当前会话模式 |
+| `/permissions [preset]`、`/permission [preset]` | 打开原生 DSH 权限选择器或直接切换 permission preset；`/mode` 单独选择交互模式 |
 
 ### 交互模式
 
-新会话默认 **accept edits**；显式的 `DSH_PERMISSION_MODE` 或 profile 默认权限配置优先，恢复会话沿用 Host 中已保存的权限和规划状态。输入框下方显示当前模式，`/mode` 打开选择器。Shift+Tab 仍切换思考强度，不用于切换权限。
+新会话默认 **off**（原生 `workspace-write` 权限）；显式的 `DSH_PERMISSION_MODE` 或 profile 默认权限配置优先，恢复会话沿用 Host 中已保存的权限和规划状态。输入框下方显示当前模式，`/mode` 打开选择器。Shift+Tab 仍切换思考强度，不用于切换权限。
 
 | 模式 | 行为 |
 |---|---|
+| `off` | 完全使用 DSH 原生 permission，不叠加 TUI 的工具审批、Plan guard 或 Auto 审核 |
 | `manual` | 文件 sandbox 为 read-only；写操作通过 Host 的一次性扩大范围请求审批，其他非只读工具逐次询问 |
 | `accept-edits` | 文件 sandbox 为 workspace-write；工作区 `write`/`edit` 自动执行，超出文件范围仍需审批；shell、未知 MCP 等非只读工具逐次询问 |
 | `plan` | 启用 Host 规划提示词和 read-only 文件 sandbox；guard 拒绝写入、shell、委派和未知 MCP 调用，只开放已知读取、搜索、提问和计划审核工具 |
 | `auto` | EXP：使用当前 Agent 模型逐次审核受控工具调用，并以 Full access 执行获准调用；拒绝时询问用户，审核失败则不执行 |
 
-使用 `/mode manual`、`/mode accept-edits`、`/mode plan` 或 `/mode auto` 直接选择。模式切换仅允许在当前 turn 空闲时进行。选择 Auto 必须额外确认风险，不会把 Auto 保存为新会话默认值；原始 `danger-full-access` preset 不显示为 Auto。
+使用 `/mode manual`、`/mode accept-edits`、`/mode plan`、`/mode auto` 或 `/mode off` 直接选择。模式切换仅允许在当前 turn 空闲时进行。选择 Auto 必须额外确认风险，不会把 Auto 保存为新会话默认值；原始 `danger-full-access` preset 不显示为 Auto。
+
+`/mode off` 退出 TUI 规划状态，恢复最近一次原生 permission preset；没有原生选择记录时使用 profile 的原生默认 preset，若默认值也是 TUI 模式则使用 `workspace-write`。原生 preset（包括高级 `/permissions <preset>` 选择）显示为 `off`，其 sandbox 和 approval 仍由 DSH 执行；`off` 不代表无限权限。状态栏在 `off` 旁显示 `permission <preset>`，随权限切换和会话恢复更新。原生 preset 已不可用时切换失败，不会自动扩大权限。
 
 Plan 保留工具目录，用策略和最终 guard 限制受控调用；`exit_plan_mode` 展示完整计划，用户选择继续规划时保持限制，批准后从下一 step 恢复进入 Plan 前的权限。若原 reviewer/preset 已不可用，保留 Plan 限制，用户需要显式选择可用模式。Plan 中不能用高级 `/permissions` 绕过限制。
 
@@ -531,7 +534,7 @@ node scripts/fake-tty-model-picker.mjs       # /model 选择器与冷/热路径�
 node scripts/fake-tty-context.mjs            # /context 占用、占比图与三个分项（自建 mock provider）
 node scripts/fake-tty-skills.mjs             # /skill 列表、分页、标签、选择过滤与真实调用链路（自建临时 workspace 与技能）
 node scripts/fake-tty-reasoning-cycle.mjs    # Shift+Tab 编码、连按、草稿、弹窗及 level → wire 映射（自建临时 profile 与 mock provider）
-node scripts/fake-tty-interaction-modes.mjs native # 四模式、真实文件效果、plan 审核和 Auto 审核（自建临时 profile）
+node scripts/fake-tty-interaction-modes.mjs native # 五模式、真实文件效果、原生 permission、plan 审核和 Auto 审核（自建临时 profile）
 node scripts/fake-tty-interaction-modes.mjs ptc    # 相同边界的 PTC 内层链路；需要宿主允许创建子进程 sandbox
 node scripts/fake-tty-tool-details.mjs             # 真实 PTC 卡片及审批详情；使用隔离 profile、本地 MCP 命名 fixture 和 mock provider
 ~~~

@@ -15,6 +15,7 @@ let reviews = 0, out = '', err = '', child, closed, tick, hard, timedOut = false
 const strip = text => text.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '')
 const file = stage => join(workspace, stage + '.txt')
 function action(stage, step) {
+  if (stage === 'off-shell') return { name: 'bash', args: { description: 'Create a native permission fixture', command: 'printf %s native > ' + JSON.stringify(file(stage)) } }
   if (stage === 'plan-keep' || (stage === 'plan-accept' && step === 0))
     return { name: 'exit_plan_mode', args: { plan: '# Temporary fixture plan\n\nCreate one regression fixture after approval.' } }
   const target = stage === 'plan-accept' ? 'after-plan' : stage
@@ -62,10 +63,13 @@ const server = createServer((req, res) => {
     res.end('data: [DONE]\n\n')
   })
 })
-let index = 0, started = false, answered = false, baseline = 0
+let index = 0, started = false, answered = false, baseline = 0, reviewsBeforeOff = 0
 const tasks = [
   { input: 'MODEPROBE:edit-default', done: 'DONE edit-default', check: text => {
-    checks.default = text.includes('accept edits') && existsSync(file('edit-default')) && !text.includes('Approval required')
+    checks.default = text.includes('off · /mode') && text.includes('permission workspace-write') && existsSync(file('edit-default')) && !text.includes('Approval required')
+  } },
+  { input: 'MODEPROBE:off-default', done: 'DONE off-default', check: text => {
+    checks.offDefault = text.includes('off · /mode') && text.includes('permission workspace-write') && existsSync(file('off-default')) && !text.includes('Approval required')
   } },
   { input: '/mode manual', done: 'Mode: manual mode' },
   { input: 'MODEPROBE:manual-edit', done: 'DONE manual-edit', approval: 'reject', check: () => {
@@ -91,6 +95,21 @@ const tasks = [
   } },
   { input: 'MODEPROBE:auto-malformed', done: 'DONE auto-malformed', check: () => {
     checks.autoFailure = !existsSync(file('auto-malformed')) && /review.*failed/i.test(results.get('auto-malformed') ?? '')
+  } },
+  { input: '/mode off', done: 'Mode: off', check: () => { reviewsBeforeOff = reviews } },
+  { input: 'MODEPROBE:off-shell', done: 'DONE off-shell', check: text => {
+    checks.offShell = existsSync(file('off-shell')) && reviews === reviewsBeforeOff && !text.includes('Approval required')
+  } },
+  { input: '/permissions', done: 'Permission preset: danger-full-access', permissionKeys: '\x1b[B\x1b[B\r', check: text => {
+    checks.permissionsPicker = answered && text.includes('read-only') && text.includes('workspace-write') && text.includes('danger-full-access')
+      && text.includes('danger-full-access · approval: never') && !text.includes('accept-edits')
+  } },
+  { input: '/permission', done: 'Permission preset: read-only', permissionKeys: '\r', check: text => {
+    checks.permissionPicker = answered && text.includes('Permission preset (current: danger-full-access)')
+  } },
+  { input: 'MODEPROBE:off-native-denied', done: 'DONE off-native-denied', check: text => {
+    checks.offNativeDenial = text.includes('permission read-only') && !existsSync(file('off-native-denied')) && /sandbox/i.test(results.get('off-native-denied') ?? '')
+      && !text.includes('Approval required') && reviews === reviewsBeforeOff
   } },
 ]
 try {
@@ -130,6 +149,10 @@ try {
       return
     }
     const fresh = text.slice(baseline)
+    if (fresh.includes('Could not change mode:')) { clearInterval(tick); child.stdin.write('\x04'); return }
+    if (!answered && task.permissionKeys && fresh.includes('Permission preset (current:')) {
+      answered = true; child.stdin.write(task.permissionKeys); return
+    }
     if (!answered && task.consent && fresh.includes('Auto mode · experimental')) {
       answered = true; child.stdin.write('\x1b[B\r'); return
     }
@@ -144,7 +167,7 @@ try {
   }, 100)
   hard = setTimeout(() => { timedOut = true; child.kill('SIGTERM') }, 60000)
   const [code, signal] = await closed
-  let pass = !timedOut && code === 0 && signal === null && index > tasks.length && Object.keys(checks).length === 8 && Object.values(checks).every(Boolean)
+  let pass = !timedOut && code === 0 && signal === null && index > tasks.length && Object.keys(checks).length === 13 && Object.values(checks).every(Boolean)
   clearInterval(tick); clearTimeout(hard)
   if (pass && presentation === 'native') {
     const id = /Session: ([a-z0-9-]+)/.exec(strip(out))?.[1]
@@ -157,7 +180,7 @@ try {
       child.stderr.on('data', chunk => { err += chunk })
       tick = setInterval(() => {
         const text = strip(resumed)
-        if (text.includes('auto mode · EXP') && text.includes('enter send')) {
+        if (text.includes('off · /mode') && text.includes('permission read-only') && text.includes('enter send')) {
           checks.resume = true
           clearInterval(tick)
           child.stdin.write(String.fromCharCode(4))

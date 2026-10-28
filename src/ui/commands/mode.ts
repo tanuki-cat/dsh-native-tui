@@ -17,7 +17,7 @@ export async function modeCommand(ctx: CommandContext, args: string): Promise<vo
   if (args.trim() !== '') {
     const name = args.trim().toLowerCase().replace(/\s+/g, '-')
     if (!isInteractionMode(name)) {
-      ctx.notice('warning', 'Usage: /mode [manual|accept-edits|plan|auto]')
+      ctx.notice('warning', 'Usage: /mode [manual|accept-edits|plan|auto|off]')
       return
     }
     target = name

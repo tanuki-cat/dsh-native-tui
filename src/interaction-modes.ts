@@ -10,12 +10,13 @@ import type { Session } from '@deepseek-ai/dsh-session'
 
 export const name = 'interaction-modes'
 export const inject = ['permissionPresets', 'tools', 'commands']
-export const INTERACTION_MODES = ['manual', 'accept-edits', 'plan', 'auto'] as const
+export const INTERACTION_MODES = ['manual', 'accept-edits', 'plan', 'auto', 'off'] as const
 export type InteractionMode = typeof INTERACTION_MODES[number]
 export const MODE_LABELS: Record<InteractionMode, string> = {
-  manual: 'manual mode', 'accept-edits': 'accept edits', plan: 'plan mode', auto: 'auto mode',
+  manual: 'manual mode', 'accept-edits': 'accept edits', plan: 'plan mode', auto: 'auto mode', off: 'off',
 }
 export const MODE_DESCRIPTIONS: Record<InteractionMode, string> = {
+  off: 'Use native DSH permissions without TUI mode restrictions or Auto review',
   manual: 'Read-only files; edits require a one-shot sandbox approval; other actions ask',
   'accept-edits': 'Workspace edits run without prompts; other non-read tools ask',
   plan: 'Read-only planning; review the plan before implementation',
@@ -24,6 +25,7 @@ export const MODE_DESCRIPTIONS: Record<InteractionMode, string> = {
 
 interface Permissions {
   readonly names: readonly string[]
+  readonly defaultPreset: string
   current(session: Session): string
   resolve(name: string): { sandbox: string; approval: string }
   set(session: Session, name: string): void
@@ -129,16 +131,15 @@ export class InteractionModeService {
   }
 
   current(agent: Agent): InteractionMode | 'custom' {
+    const preset = this.permissions.current(agent.session)
+    if (!isInteractionMode(preset) || preset === 'off') return 'off'
     const plan = this.plan(agent)?.get(agent)
     if (plan?.pending ?? plan?.active ?? false) return 'plan'
-    const preset = this.permissions.current(agent.session)
-    if (isInteractionMode(preset)) return this.configured(preset) ? preset : 'custom'
-    if (preset === 'read-only') return 'manual'
-    if (preset === 'workspace-write') return 'accept-edits'
-    return 'custom'
+    return this.configured(preset) ? preset : 'custom'
   }
 
   private configured(mode: InteractionMode): boolean {
+    if (mode === 'off') return true
     if (!this.permissions.names.includes(mode)) return false
     const spec = this.permissions.resolve(mode)
     const sandbox = mode === 'auto' ? 'danger-full-access' : mode === 'accept-edits' ? 'workspace-write' : 'read-only'
@@ -156,9 +157,10 @@ export class InteractionModeService {
     if (!this.available(agent).includes(mode)) throw new Error('Mode "' + mode + '" is unavailable in this profile.')
     const plan = this.plan(agent)
     const previous = this.permissions.current(agent.session)
-    this.permissions.set(agent.session, mode)
+    const target = mode === 'off' ? this.nativePreset(agent) : mode
+    if (target !== previous) this.permissions.set(agent.session, target)
     const rollback = (error: unknown): never => {
-      this.permissions.set(agent.session, previous)
+      if (target !== previous) this.permissions.set(agent.session, previous)
       throw error
     }
     try {
@@ -166,6 +168,20 @@ export class InteractionModeService {
       if (changed instanceof Promise) return changed.catch(rollback)
     }
     catch (error) { rollback(error) }
+  }
+
+  private nativePreset(agent: Agent): string {
+    const current = this.permissions.current(agent.session)
+    if (!isInteractionMode(current)) return current
+    const events = agent.session.snapshotEvents()
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      const event = events[index]!
+      if ((event.type as string) !== 'permission/preset') continue
+      const preset = (event.data as { preset?: unknown }).preset
+      if (typeof preset === 'string' && !isInteractionMode(preset)) return preset
+    }
+    const fallback = this.permissions.defaultPreset
+    return isInteractionMode(fallback) ? 'workspace-write' : fallback
   }
 
   private beforePlan(agent: Agent): string {
@@ -183,6 +199,7 @@ export class InteractionModeService {
 
   /** Called at an accepted pre-step, not from the non-reentrant append feed. */
   reconcilePlan(agent: Agent): void {
+    if (this.current(agent) === 'off') return
     const plan = this.plan(agent)?.get(agent)
     if (plan === undefined) return
     const wanted = plan.pending ?? plan.active
