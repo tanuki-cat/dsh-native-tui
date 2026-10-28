@@ -158,12 +158,12 @@ export class InteractionModeService {
     const plan = this.plan(agent)
     const previous = this.permissions.current(agent.session)
     const target = mode === 'off' ? this.nativePreset(agent) : mode
-    if (target !== previous) this.permissions.set(agent.session, target)
     const rollback = (error: unknown): never => {
       if (target !== previous) this.permissions.set(agent.session, previous)
       throw error
     }
     try {
+      if (target !== previous) this.permissions.set(agent.session, target)
       const changed = plan?.set(agent, mode === 'plan')
       if (changed instanceof Promise) return changed.catch(rollback)
     }

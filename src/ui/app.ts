@@ -16,7 +16,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm/types'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { DisplayMode, ResolvedConfig } from '../config.js'
-import { createHostSession, readContextBreakdown, readContextMeter, resumeHostSession, sessionAgentPreset, sessionModelSelection, type AgentPresetService, type HostSession } from '../runtime/agent.js'
+import { createHostSession, readContextBreakdown, readContextMeter, restartHostSession, resumeHostSession, sessionAgentPreset, sessionModelSelection, type AgentPresetService, type HostSession } from '../runtime/agent.js'
 import { findLauncher, parseProfileArg, resumeHint } from '../runtime/launcher.js'
 import { reloadArgs } from '../runtime/reload.js'
 import { skillRows } from '../runtime/skill-catalog.js'
@@ -732,6 +732,13 @@ export async function startTerminalApp(
       palette,
       tui,
       active,
+      restartSession: async expected => {
+        if (expected !== active || switching || disposed) throw new Error('The active Session changed; choose permissions again.')
+        let reopened: HostSession | undefined
+        await switchTo(async () => { reopened = await restartHostSession(host, expected); return reopened })
+        if (reopened === undefined || active !== reopened) throw new Error('Could not restore the Session after closing persistent shells; use /reload to retry.')
+        return active
+      },
       signal: interactionAbort.signal,
       notice: pushNotice,
       renderStatus,

@@ -246,6 +246,13 @@ export async function createHostSession(ctx: Context, config: ResolvedConfig): P
   return wrap(handle)
 }
 
+/** Release the idle Agent and its owned resources before restoring the same Session; failed disposal never starts a replacement. */
+export async function restartHostSession(ctx: Context, current: HostSession): Promise<HostSession> {
+  if (current.agent.status === 'running') throw new Error('Wait for the running turn to finish or cancel it before resetting shells.')
+  await current.dispose()
+  return resumeHostSession(ctx, current.id)
+}
+
 /**
  * Resume one persisted Session as the active root Agent.
  * @param ctx - Host context carrying persistence, the agent factory, and presets.

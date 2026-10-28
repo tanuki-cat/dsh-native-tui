@@ -81,7 +81,8 @@ try {
   child.stdout.on('data', chunk => { out += chunk }); child.stderr.on('data', chunk => { err += chunk })
   tick = setInterval(() => {
     const text = strip(out), fresh = text.slice(baseline)
-    if (phase === 'ready' && text.includes('enter send')) { baseline = text.length; input('DETAILSPROBE:reject\r'); phase = 'mcp'; return }
+    if (phase === 'ready' && text.includes('enter send')) { baseline = text.length; input('/mode accept-edits\r'); phase = 'mode'; return }
+    if (phase === 'mode' && fresh.includes('Mode: accept edits')) { baseline = text.length; input('DETAILSPROBE:reject\r'); phase = 'mcp'; return }
     if (phase === 'mcp' && fresh.includes('Approval required')) {
       checks.mcpPreview = fresh.includes('mcp fixture.lookup src/mcp-target.ts')
       input('\r'); baseline = text.length; phase = 'todo'; return

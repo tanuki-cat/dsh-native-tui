@@ -200,6 +200,8 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 
 使用 `/mode manual`、`/mode accept-edits`、`/mode plan`、`/mode auto` 或 `/mode off` 直接选择。模式切换仅允许在当前 turn 空闲时进行。选择 Auto 必须额外确认风险，不会把 Auto 保存为新会话默认值；原始 `danger-full-access` preset 不显示为 Auto。
 
+`minimal` 使用持久 shell，不提供 Plan。若活动终端阻止 `/mode` 或 `/permissions` 改变 sandbox，TUI 会先询问是否重建当前 Agent：默认取消；确认后等待旧 Agent 清理，再恢复同一 Session 并重试切换。会话历史保留，但 shell 的当前目录、环境变量等状态会丢失，Agent 所属后台工作也可能停止。取消时保留原权限，清理或恢复失败时不报告切换成功。
+
 `/mode off` 退出 TUI 规划状态，恢复最近一次原生 permission preset；没有原生选择记录时使用 profile 的原生默认 preset，若默认值也是 TUI 模式则使用 `workspace-write`。原生 preset（包括高级 `/permissions <preset>` 选择）显示为 `off`，其 sandbox 和 approval 仍由 DSH 执行；`off` 不代表无限权限。状态栏在 `off` 旁显示 `permission <preset>`，随权限切换和会话恢复更新。原生 preset 已不可用时切换失败，不会自动扩大权限。
 
 Plan 保留工具目录，用策略和最终 guard 限制受控调用；`exit_plan_mode` 展示完整计划，用户选择继续规划时保持限制，批准后从下一 step 恢复进入 Plan 前的权限。若原 reviewer/preset 已不可用，保留 Plan 限制，用户需要显式选择可用模式。Plan 中不能用高级 `/permissions` 绕过限制。
@@ -536,7 +538,8 @@ node scripts/fake-tty-skills.mjs             # /skill 列表、分页、标签�
 node scripts/fake-tty-reasoning-cycle.mjs    # Shift+Tab 编码、连按、草稿、弹窗及 level → wire 映射（自建临时 profile 与 mock provider）
 node scripts/fake-tty-interaction-modes.mjs native # 五模式、真实文件效果、原生 permission、plan 审核和 Auto 审核（自建临时 profile）
 node scripts/fake-tty-interaction-modes.mjs ptc    # 相同边界的 PTC 内层链路；需要宿主允许创建子进程 sandbox
-node scripts/fake-tty-tool-details.mjs             # 真实 PTC 卡片及审批详情；使用隔离 profile、本地 MCP 命名 fixture 和 mock provider
+node scripts/fake-tty-tool-details.mjs             # 显式 accept-edits 下的真实 PTC 卡片及审批详情；使用隔离 profile、本地 MCP 命名 fixture 和 mock provider
+node scripts/fake-tty-permission-restart.mjs       # minimal 同会话 Agent 重建、取消及权限恢复；使用终端 fence fixture，不依赖物理 PTY
 ~~~
 
 普通终端环境可运行真实 PTY 冒烟：

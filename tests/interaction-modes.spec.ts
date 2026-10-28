@@ -152,6 +152,14 @@ describe('interaction modes', () => {
     expect(h.preset).toBe('read-only')
   })
 
+  it('restores the durable preset identity when the Host rejects a sandbox change', () => {
+    const h = harness()
+    h.permissions.set.mockImplementationOnce(() => { h.preset = 'manual'; throw new Error('terminal fence') })
+    expect(() => h.modes.set(h.agent, 'manual')).toThrow('terminal fence')
+    expect(h.preset).toBe('accept-edits')
+    expect(h.permissions.set).toHaveBeenLastCalledWith(h.agent.session, 'accept-edits')
+  })
+
   it('rolls back permissions if leaving plan for off fails', async () => {
     const h = harness()
     await h.modes.set(h.agent, 'plan')

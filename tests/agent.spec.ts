@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import type { AgentHandle } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { createHostSession, readContextBreakdown, readContextMeter, resumeHostSession, sessionAgentPreset, sessionModelSelection, sessionReservedCompletionTokens, unreplayedReasoningTokens } from '../src/runtime/agent.js'
+import { createHostSession, readContextBreakdown, readContextMeter, restartHostSession, resumeHostSession, sessionAgentPreset, sessionModelSelection, sessionReservedCompletionTokens, unreplayedReasoningTokens } from '../src/runtime/agent.js'
 import type { ResolvedConfig } from '../src/config.js'
+import type { HostSession } from '../src/runtime/agent.js'
 
 const config: ResolvedConfig = {
   sessionId: undefined,
@@ -33,6 +34,37 @@ function fakeHandle(sessionId: ReturnType<typeof SessionId>, events: readonly un
 function fakeContext(overrides: Record<string, unknown>): Context {
   return overrides as unknown as Context
 }
+
+describe('same-session Agent restart', () => {
+  it('awaits owned resource cleanup before resuming the same persisted Session', async () => {
+    const id = SessionId('session-restart')
+    let finish!: () => void
+    const handle = fakeHandle(id)
+    const resume = vi.fn(async () => handle)
+    const ctx = fakeContext({ get: () => undefined, agents: { resume } })
+    const current = { id, agent: { status: 'idle' }, dispose: vi.fn(() => new Promise<void>(resolve => { finish = resolve })) } as unknown as HostSession
+    const restarting = restartHostSession(ctx, current)
+    expect(current.dispose).toHaveBeenCalledOnce()
+    expect(resume).not.toHaveBeenCalled()
+    finish()
+    const reopened = await restarting
+    expect(resume).toHaveBeenCalledExactlyOnceWith({ resumeSessionId: id })
+    expect(reopened.id).toBe(id)
+    expect(reopened.agent).toBe(handle.agent)
+    expect(reopened.agent).not.toBe(current.agent)
+  })
+
+  it('does not resume after disposal fails or while the Agent is running', async () => {
+    const resume = vi.fn(), dispose = vi.fn(async () => { throw new Error('cleanup failed') })
+    const ctx = fakeContext({ get: () => undefined, agents: { resume } })
+    const current = { id: SessionId('session-restart'), agent: { status: 'idle' }, dispose } as unknown as HostSession
+    await expect(restartHostSession(ctx, current)).rejects.toThrow('cleanup failed')
+    expect(resume).not.toHaveBeenCalled()
+    Object.assign(current.agent, { status: 'running' })
+    await expect(restartHostSession(ctx, current)).rejects.toThrow('running turn')
+    expect(dispose).toHaveBeenCalledOnce()
+  })
+})
 
 describe('session selection restore', () => {
   it('reads the latest model/effort and preset from Session events', () => {

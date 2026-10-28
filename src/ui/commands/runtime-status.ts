@@ -12,6 +12,7 @@ import { NL, errorMessage } from './shared.js'
 import { isInteractionMode } from '../../interaction-modes.js'
 import type { InteractionModeService as ModeService } from '../../interaction-modes.js'
 import { modeCommand } from './mode.js'
+import { changePermissions } from './permission-change.js'
 
 /** The `/permissions` command. */
 export async function permissionsCommand(ctx: CommandContext, args: string): Promise<void> {
@@ -40,7 +41,14 @@ export async function permissionsCommand(ctx: CommandContext, args: string): Pro
       return
     }
     try {
-      presets.set(ctx.active.agent.session, args)
+      if (!await changePermissions(ctx, agent => {
+        const previous = presets.current(agent.session)
+        try { presets.set(agent.session, args) }
+        catch (error) {
+          if (args !== previous) presets.set(agent.session, previous)
+          throw error
+        }
+      })) return
       ctx.notice('info', 'Permission preset: ' + args)
       ctx.renderStatus()
     }

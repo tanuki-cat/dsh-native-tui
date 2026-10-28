@@ -182,6 +182,28 @@ describe('mode command', () => {
     expect(h.ctx.renderStatus).not.toHaveBeenCalled()
   })
 
+  it.each(['mode', 'permissions'])('recovers %s on the new Agent only after resetting shells', async command => {
+    const h = harness()
+    Object.assign(h.ctx.active, { id: 'session-1' })
+    const reopened = { ...h.ctx.active, agent: { ...h.ctx.active.agent, session: {} } }
+    const restart = vi.fn(async () => reopened)
+    Object.assign(h.ctx, { restartSession: restart })
+    const setter = command === 'mode' ? h.modes.set : h.raw.set
+    setter.mockImplementationOnce(() => { throw new Error('cannot change sandbox mode from "workspace-write" to "read-only" while persistent terminal sessions are open or being created; wait for creation to settle and close them first') })
+    const running = command === 'mode' ? modeCommand(h.ctx, 'manual') : permissionsCommand(h.ctx, 'read-only')
+    await flush()
+    expect(restart).not.toHaveBeenCalled()
+    h.overlays[0]!.handleInput('\x1b[B'); h.overlays[0]!.handleInput('\r')
+    await running
+    expect(restart).toHaveBeenCalledExactlyOnceWith(h.ctx.active)
+    if (command === 'mode') expect(h.modes.set).toHaveBeenLastCalledWith(reopened.agent, 'manual')
+    else {
+      expect(h.raw.set).toHaveBeenNthCalledWith(2, h.ctx.active.agent.session, 'workspace-write')
+      expect(h.raw.set).toHaveBeenLastCalledWith(reopened.agent.session, 'read-only')
+    }
+    expect(h.ctx.renderStatus).toHaveBeenCalledOnce()
+  })
+
   it('keeps advanced /permissions from widening a live plan sandbox', async () => {
     const h = harness()
     h.modes.current = () => 'plan'

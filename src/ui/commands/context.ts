@@ -47,6 +47,8 @@ export interface CommandContext {
   readonly tui: CommandSurface
   /** The session currently on screen. */
   readonly active: HostSession
+  /** Dispose the expected idle Agent and restore its Session; rejects a stale selection or failed restart. */
+  readonly restartSession?: (expected: HostSession) => Promise<HostSession>
   /** Cancellation for the whole command run. */
   readonly signal: AbortSignal
   /** Render one notice line. */

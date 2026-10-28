@@ -4,6 +4,7 @@ import { isInteractionMode, MODE_DESCRIPTIONS, MODE_LABELS, type InteractionMode
 import { showChoice } from '../dialogs.js'
 import type { CommandContext } from './context.js'
 import { errorMessage } from './shared.js'
+import { changePermissions } from './permission-change.js'
 
 export async function modeCommand(ctx: CommandContext, args: string): Promise<void> {
   const modes = ctx.host.get('interactionModes') as ModeService | undefined
@@ -42,7 +43,8 @@ export async function modeCommand(ctx: CommandContext, args: string): Promise<vo
     if (consent !== 'confirm' || ctx.signal.aborted) return
   }
   try {
-    await modes.set(ctx.active.agent, target)
+    const selected = target
+    if (!await changePermissions(ctx, agent => modes.set(agent, selected))) return
     ctx.notice('info', 'Mode: ' + MODE_LABELS[target])
     ctx.renderStatus()
   }
