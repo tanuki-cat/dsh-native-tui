@@ -4,6 +4,13 @@
  * @module dsh-native-tui/ui/commands/shared
  */
 
+import type { CommandContext } from './context.js'
+
+/** Workspace owned by the captured Session, with the startup directory as fallback. */
+export function sessionCwd(ctx: Pick<CommandContext, 'active' | 'config'>): string {
+  return ctx.active.agent.session.header.cwd ?? ctx.config.cwd
+}
+
 /** The platform newline, used by every multi-line notice. */
 export const NL = String.fromCharCode(10)
 

@@ -1,5 +1,8 @@
-import { readdir, readFile, stat } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { open, readdir } from 'node:fs/promises'
 import { extname, join } from 'node:path'
+import { sanitizeTerminalText } from './terminal-text.js'
+export { sanitizeTerminalText } from './terminal-text.js'
 
 /** One directory entry shown by the terminal file browser. */
 export interface DirectoryEntry {
@@ -43,11 +46,6 @@ export interface TextPreview {
   readonly truncated: boolean
 }
 
-/** Remove terminal control characters while preserving tabs and newlines. */
-export function sanitizeTerminalText(text: string): string {
-  return text.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/gu, '')
-}
-
 /**
  * Read a bounded UTF-8 preview of one regular file.
  * @param path - absolute or already-resolved file path.
@@ -56,10 +54,21 @@ export function sanitizeTerminalText(text: string): string {
  */
 export async function readTextPreview(path: string, maxBytes = 16_384): Promise<TextPreview> {
   if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new Error('preview maxBytes must be a positive safe integer')
-  const info = await stat(path)
-  if (!info.isFile()) throw new Error('not a regular file')
-  const raw = await readFile(path)
-  const truncated = raw.byteLength > maxBytes
-  const text = sanitizeTerminalText(new TextDecoder().decode(raw.subarray(0, maxBytes)))
-  return { path, text, bytes: raw.byteLength, truncated }
+  // Special files must reach fstat without waiting for a FIFO writer.
+  const file = await open(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0))
+  try {
+    const info = await file.stat()
+    if (!info.isFile()) throw new Error('not a regular file')
+    const raw = Buffer.alloc(maxBytes)
+    let total = 0
+    while (total < maxBytes) {
+      const { bytesRead } = await file.read(raw, total, maxBytes - total, total)
+      if (bytesRead === 0) break
+      total += bytesRead
+    }
+    const text = sanitizeTerminalText(new TextDecoder().decode(raw.subarray(0, total)))
+    return { path, text, bytes: info.size, truncated: info.size > maxBytes }
+  } finally {
+    await file.close()
+  }
 }

@@ -48,21 +48,19 @@ export async function exportSessionHtml(agent: Agent, target: string, cwd: strin
   const chunks: string[] = []
   for (const event of events) {
     if (event.type === 'user/message') {
-      const source = (event.data as { readonly source?: { readonly kind?: unknown } }).source
-      const text = contentText(event.data as { readonly content?: readonly unknown[] })
+      const source = event.data.source
+      const text = contentText(event.data)
       if (text.trim() === '') continue
       chunks.push(section(source?.kind === 'user' ? 'user' : 'context', source?.kind === 'user' ? 'You' : 'Context', text))
     } else if (event.type === 'assistant/message') {
-      const text = contentText(event.data as { readonly content?: readonly unknown[] })
+      const text = contentText(event.data.message)
       if (text.trim() === '') continue
       chunks.push(section('assistant', 'Assistant', text))
     } else if (event.type === 'tool/call') {
-      const data = event.data as { readonly name?: unknown; readonly arguments?: unknown }
+      const data = event.data
       chunks.push(section('tool', 'Tool · ' + String(data.name ?? 'tool'), String(data.arguments ?? '')))
     } else if (event.type === 'tool/result') {
-      const data = event.data as {
-        readonly message?: { readonly isError?: unknown; readonly content?: readonly unknown[] }
-      }
+      const data = event.data
       const text = contentText(data.message ?? {})
       chunks.push(section(data.message?.isError === true ? 'tool error' : 'tool-result', data.message?.isError === true ? 'Tool error' : 'Tool result', text))
     } else if ((event.type as string) === 'deliverables/presented') {

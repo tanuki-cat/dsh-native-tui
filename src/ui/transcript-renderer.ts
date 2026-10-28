@@ -215,6 +215,7 @@ export class TranscriptRenderer {
         pruned: new Set(),
         prunedSeqs: new Set(),
         callBySeq: new Map(),
+        knownCalls: new Set(),
       },
     }
     this.reducer = createTranscriptReducer(this.options)
@@ -288,6 +289,7 @@ export class TranscriptRenderer {
     this.options.toolMemory?.pruned.clear()
     this.options.toolMemory?.prunedSeqs.clear()
     this.options.toolMemory?.callBySeq.clear()
+    this.options.toolMemory?.knownCalls.clear()
     this.cached.clear()
     this.resetReduction()
     this.paintedBlocks = undefined

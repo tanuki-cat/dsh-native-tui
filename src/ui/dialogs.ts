@@ -28,6 +28,7 @@ import type { Palette } from './theme.js'
 import { markdownTheme, selectTheme } from './theme.js'
 import { clip } from './tool-preview.js'
 import type { ImagePreview } from '../runtime/images.js'
+import { sanitizeTerminalText } from '../runtime/terminal-text.js'
 
 /** One selectable row in a terminal dialog. */
 export interface ChoiceItem {
@@ -67,7 +68,7 @@ class ChoiceDialog implements Component {
     private readonly maxTitleRows?: () => number,
   ) {
     this.list = new SelectList(
-      items.map(item => ({ value: item.value, label: item.label, ...(item.description === undefined ? {} : { description: item.description }) })),
+      items.map(item => ({ value: item.value, label: sanitizeTerminalText(item.label), ...(item.description === undefined ? {} : { description: sanitizeTerminalText(item.description) }) })),
       Math.min(12, Math.max(1, items.length)),
       selectTheme(palette),
     )
@@ -77,7 +78,7 @@ class ChoiceDialog implements Component {
 
   render(width: number): string[] {
     const inner = Math.max(20, width - 4)
-    const title = new Text(this.title, 0, 0).render(inner)
+    const title = new Text(sanitizeTerminalText(this.title), 0, 0).render(inner)
     const limit = this.maxTitleRows?.()
     const shown = limit !== undefined && title.length > limit
       ? limit === 1 ? [truncateToWidth(title[0] ?? '', inner - 1) + '…']
@@ -127,7 +128,7 @@ class SearchChoiceDialog implements Component {
       || item.label.toLowerCase().includes(query)
       || (item.description ?? '').toLowerCase().includes(query))
     const list = new SelectList(
-      matches.map(item => ({ value: item.value, label: item.label, ...(item.description === undefined ? {} : { description: item.description }) })),
+      matches.map(item => ({ value: item.value, label: sanitizeTerminalText(item.label), ...(item.description === undefined ? {} : { description: sanitizeTerminalText(item.description) }) })),
       12,
       selectTheme(this.palette),
     )
@@ -141,7 +142,7 @@ class SearchChoiceDialog implements Component {
   render(width: number): string[] {
     const inner = Math.max(20, width - 4)
     return dialogFrame([
-      ...new Text(this.title, 0, 0).render(inner),
+      ...new Text(sanitizeTerminalText(this.title), 0, 0).render(inner),
       ...this.input.render(inner),
       '',
       ...this.list.render(inner),
@@ -188,7 +189,7 @@ class TextInputDialog implements Component {
   render(width: number): string[] {
     const inner = Math.max(20, width - 4)
     return dialogFrame([
-      ...new Text(this.title, 0, 0).render(inner),
+      ...new Text(sanitizeTerminalText(this.title), 0, 0).render(inner),
       '',
       ...this.input.render(inner),
       '',
@@ -369,7 +370,7 @@ class MultilineInputDialog implements Component {
   render(width: number): string[] {
     const inner = Math.max(20, width - 4)
     return dialogFrame([
-      ...new Text(this.title, 0, 0).render(inner),
+      ...new Text(sanitizeTerminalText(this.title), 0, 0).render(inner),
       '',
       ...this.editor.render(inner),
       '',
@@ -447,8 +448,8 @@ export function showMarkdownPreview(
   markdown: string,
   signal?: AbortSignal,
 ): Promise<void> {
-  const rendered = new Markdown(markdown, 0, 0, markdownTheme(palette)).render(96).join('\n')
-  return showTextPager(tui, palette, 'Markdown · ' + title, rendered, signal)
+  const rendered = new Markdown(sanitizeTerminalText(markdown), 0, 0, markdownTheme(palette)).render(96).join('\n')
+  return showStyledTextPager(tui, palette, 'Markdown · ' + title, rendered, signal)
 }
 
 /** Show a paged read-only text overlay; Escape closes it. */
@@ -459,6 +460,13 @@ export function showTextPager(
   text: string,
   signal?: AbortSignal,
   pageSize = 22,
+): Promise<void> {
+  return showStyledTextPager(tui, palette, title, sanitizeTerminalText(text), signal, pageSize)
+}
+
+/** Accept only UI-rendered lines; external text goes through showTextPager. */
+function showStyledTextPager(
+  tui: TUI, palette: Palette, title: string, text: string, signal?: AbortSignal, pageSize = 22,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted === true) {
@@ -492,7 +500,7 @@ export function showTextPager(
     const onAbort = (): void => { finish() }
     try {
       const container = new Container()
-      container.addChild(new Text(palette.bold(title), 0, 0))
+      container.addChild(new Text(palette.bold(sanitizeTerminalText(title)), 0, 0))
       container.addChild(body)
       container.addChild(hint)
       off = tui.addInputListener((data) => {
@@ -561,14 +569,14 @@ export function showImagePreview(
     try {
       const container = new Container()
       container.addChild(new Text(
-        palette.bold('Image · ' + image.name + ' · ' + image.mediaType + ' · ' + String(image.bytes) + ' bytes'),
+        palette.bold('Image · ' + sanitizeTerminalText(image.name) + ' · ' + sanitizeTerminalText(image.mediaType) + ' · ' + String(image.bytes) + ' bytes'),
         0,
         0,
       ))
       container.addChild(new Image(image.base64, image.mediaType, {
         fallbackColor: text => palette.dim(text),
       }, {
-        filename: image.name,
+        filename: sanitizeTerminalText(image.name),
         maxWidthCells: 76,
         maxHeightCells: 30,
       }))
@@ -695,9 +703,9 @@ class MultiChoiceDialog implements Component {
       this.items.map(item => ({
         value: item.value,
         label: isAnswerAction(item.value)
-          ? '  ' + item.label
-          : (this.checked.has(item.value) ? '[x] ' : '[ ] ') + item.label,
-        ...(item.description === undefined ? {} : { description: item.description }),
+          ? '  ' + sanitizeTerminalText(item.label)
+          : (this.checked.has(item.value) ? '[x] ' : '[ ] ') + sanitizeTerminalText(item.label),
+        ...(item.description === undefined ? {} : { description: sanitizeTerminalText(item.description) }),
       })),
       Math.min(12, Math.max(1, this.items.length)),
       selectTheme(this.palette),
@@ -743,7 +751,7 @@ class MultiChoiceDialog implements Component {
   render(width: number): string[] {
     const inner = Math.max(20, width - 4)
     return dialogFrame([
-      ...new Text(this.title, 0, 0).render(inner),
+      ...new Text(sanitizeTerminalText(this.title), 0, 0).render(inner),
       '',
       ...this.list.render(inner),
       '',

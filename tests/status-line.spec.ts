@@ -59,6 +59,18 @@ function inputOf(overrides: Partial<StatusInput> = {}): StatusInput {
 }
 
 describe('renderStatusRows', () => {
+  it('cleans untrusted labels before adding status styling', () => {
+    const escape = String.fromCharCode(27)
+    const label = 'safe' + escape + ']52;c;UFJPT0Y=' + String.fromCharCode(7) + escape + '[2Jend'
+    const { state, rows: target } = rows()
+    renderStatusRows(target, palette, inputOf({ title: label, sessionId: label, cwd: label, provider: label,
+      model: label, preset: label, reasoningEffort: label, permissionPreset: label }))
+    for (const text of Object.values(state)) {
+      expect(text).not.toContain(escape)
+      expect(text).toContain('safeend')
+    }
+  })
+
   it('puts the title, session, and cwd on separate spaced header lines', () => {
     const { state, rows: target } = rows()
     renderStatusRows(target, palette, inputOf())
@@ -232,6 +244,7 @@ describe('terminalWindowTitle', () => {
     // BEL terminates OSC 0, so a raw one would cut the title short.
     expect(terminalWindowTitle('dsh', '/tmp/a\u0007b')).toBe('dsh · a b')
     expect(terminalWindowTitle('d\nsh', '/tmp/repo')).toBe('d sh · repo')
+    expect(terminalWindowTitle('dsh', '/tmp/a' + String.fromCharCode(0x9c) + 'b')).toBe('dsh · a b')
   })
 
   it('bounds the workspace label', () => {

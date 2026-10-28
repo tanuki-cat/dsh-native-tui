@@ -3,6 +3,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import { createAssistantMessage, createToolResultMessage, createUserMessage, ToolCallId } from '@deepseek-ai/dsh-llm'
+import { SessionSeq } from '@deepseek-ai/dsh-session'
+import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import { exportSessionHtml } from '../src/runtime/html.js'
 
 const cleanup: string[] = []
@@ -11,17 +14,20 @@ afterEach(async () => {
 })
 
 function fakeAgent(cwd: string): Agent {
-  return {
-    session: {
-      header: { id: 'session-html', cwd, createdAt: 1 },
-      snapshotEvents: () => [
-        { type: 'user/message', seq: 0, time: 1, data: { source: { kind: 'user' }, content: [{ type: 'text', text: '<script>alert(1)</script>' }] } },
-        { type: 'assistant/message', seq: 1, time: 2, data: { content: [{ type: 'text', text: 'hello & goodbye' }] } },
-        { type: 'tool/call', seq: 2, time: 3, data: { callId: 'c1', name: 'read', arguments: '{"path":"a.ts"}' } },
-        { type: 'tool/result', seq: 3, time: 4, data: { message: { source: { callId: 'c1' }, content: [{ type: 'text', text: 'file body' }], isError: false } } },
-      ],
-    },
-  } as unknown as Agent
+  const callId = ToolCallId('c1')
+  const events: SessionEvent[] = [
+    { type: 'user/message', seq: SessionSeq(0), time: 1, surfaceOp: 'append',
+      data: createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: '<script>alert(1)</script>' }] }) },
+    { type: 'assistant/message', seq: SessionSeq(1), time: 2, surfaceOp: 'append', data: {
+      turn: 1, step: 1, stream: [], message: createAssistantMessage({ source: { provider: 'test', model: 'test' },
+        content: [{ type: 'text', text: 'hello & goodbye' }] }),
+    } },
+    { type: 'tool/call', seq: SessionSeq(2), time: 3, data: { turn: 1, step: 1, callId, name: 'read', arguments: '{"path":"a.ts"}' } },
+    { type: 'tool/result', seq: SessionSeq(3), time: 4, surfaceOp: 'append', data: {
+      turn: 1, step: 1, message: createToolResultMessage({ callId, content: [{ type: 'text', text: 'file body' }], isError: false }),
+    } },
+  ]
+  return { session: { header: { id: 'session-html', cwd, createdAt: 1 }, snapshotEvents: () => events } } as unknown as Agent
 }
 
 describe('exportSessionHtml', () => {

@@ -12,11 +12,11 @@ import { revealWithSystemApp, systemRevealCommand } from '../../runtime/open.js'
 import { showChoice } from '../dialogs.js'
 import type { CommandContext } from './context.js'
 import type { WorkspaceChangesService } from './services.js'
-import { NL, errorMessage } from './shared.js'
+import { NL, errorMessage, sessionCwd } from './shared.js'
 
 /** The `/files` browser. */
 export async function filesCommand(ctx: CommandContext, args: string): Promise<void> {
-  let current = resolve(ctx.config.cwd, args === '' ? '.' : args)
+  let current = resolve(sessionCwd(ctx), args === '' ? '.' : args)
   for (;;) {
     let entries: Awaited<ReturnType<typeof listDirectory>>
     try {
@@ -153,7 +153,7 @@ export async function deliverablesCommand(ctx: CommandContext, args: string): Pr
       ctx.notice('warning', 'No presented deliverable at index ' + String(index) + '.')
       return
     }
-    if (systemRevealCommand(process.platform, target.path) === undefined) {
+    if (systemRevealCommand(process.platform, resolve(sessionCwd(ctx), target.path)) === undefined) {
       ctx.notice('warning', 'Revealing files is unsupported on this platform.')
       return
     }
@@ -163,7 +163,7 @@ export async function deliverablesCommand(ctx: CommandContext, args: string): Pr
     ], 'Enter selects · Esc cancels', ctx.signal)
     if (confirmed !== 'yes')
       return
-    if (revealWithSystemApp(target.path))
+    if (revealWithSystemApp(resolve(sessionCwd(ctx), target.path)))
       ctx.notice('info', 'Revealed ' + target.path + ' in the system file manager.')
     else
       ctx.notice('error', 'Could not launch the system file manager for ' + target.path + '.')
@@ -181,7 +181,7 @@ export async function deliverablesCommand(ctx: CommandContext, args: string): Pr
       return
     }
     try {
-      const preview = await readTextPreview(target.path)
+      const preview = await readTextPreview(resolve(sessionCwd(ctx), target.path))
       ctx.notice('info', 'File: ' + preview.path + ' (' + String(preview.bytes) + ' bytes'
         + (preview.truncated ? ', truncated' : '') + ')' + NL + preview.text)
     }

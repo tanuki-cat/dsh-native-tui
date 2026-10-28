@@ -16,7 +16,7 @@ import { sanitizeTerminalText } from '../../runtime/files.js'
 import { showImagePreview } from '../dialogs.js'
 import type { CommandContext } from './context.js'
 import type { LLM } from './services.js'
-import { NL, errorMessage } from './shared.js'
+import { NL, errorMessage, sessionCwd } from './shared.js'
 
 /**
  * Warn when the current model declares no image input.
@@ -181,7 +181,7 @@ export async function attachCommand(ctx: CommandContext, args: string): Promise<
     return
   }
   try {
-    const pending = await loadAttachment(args, ctx.config.cwd, attachments)
+    const pending = await loadAttachment(args, sessionCwd(ctx), attachments)
     ctx.attachments.pending.push(pending)
     ctx.notice('info', 'Attached ' + pending.kind + ': ' + pending.label + ' (sent with the next prompt)')
     if (pending.kind === 'image') await warnIfModelTextOnly(ctx)

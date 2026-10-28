@@ -168,7 +168,7 @@ describe('reduceTranscript', () => {
       settled: new Set<string>(),
       pruned: new Set<string>(),
       prunedSeqs: new Set<number>(),
-      callBySeq: new Map<number, string>(),
+      knownCalls: new Set<string>(), callBySeq: new Map<number, string>(),
     }
     const tracked = { ...options, toolMemory }
     const entries: TranscriptEntry[] = [
@@ -187,7 +187,7 @@ describe('reduceTranscript', () => {
       settled: new Set<string>(),
       pruned: new Set<string>(),
       prunedSeqs: new Set<number>(),
-      callBySeq: new Map<number, string>(),
+      knownCalls: new Set<string>(), callBySeq: new Map<number, string>(),
     }
     const tracked = { ...options, toolMemory }
     const first = reduceTranscriptWindow([
@@ -434,7 +434,7 @@ describe('reduceTranscript', () => {
       settled: new Set<string>(),
       pruned: new Set<string>(),
       prunedSeqs: new Set<number>(),
-      callBySeq: new Map<number, string>(),
+      knownCalls: new Set<string>(), callBySeq: new Map<number, string>(),
     }
     const tracked = { ...options, toolMemory }
     const entries: TranscriptEntry[] = [
@@ -486,7 +486,7 @@ describe('reduceTranscript', () => {
       settled: new Set<string>(),
       pruned: new Set<string>(),
       prunedSeqs: new Set<number>(),
-      callBySeq: new Map<number, string>(),
+      knownCalls: new Set<string>(), callBySeq: new Map<number, string>(),
     }
     const tracked = { ...options, toolMemory }
     reduceTranscriptWindow([

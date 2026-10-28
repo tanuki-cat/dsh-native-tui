@@ -114,6 +114,8 @@ export interface ToolCallMemory {
   readonly prunedSeqs: Set<number>
   /** Event sequence to call identity for calls and results. */
   readonly callBySeq: Map<number, string>
+  /** Membership index for calls and results, retained across window rebuilds. */
+  readonly knownCalls: Set<string>
 }
 
 /** Options controlling transcript reduction. */
@@ -281,6 +283,7 @@ export function createTranscriptReducer(options: TranscriptOptions) {
   /** Event sequence -> call identity, for both tool calls and tool results. */
   const settledCalls = options.toolMemory?.settled ?? new Set<string>()
   const callIdBySeq = options.toolMemory?.callBySeq ?? new Map<number, string>()
+  const knownCalls = options.toolMemory?.knownCalls ?? new Set<string>()
   const prunedSeqs = options.toolMemory?.prunedSeqs ?? new Set<number>()
   const prunedCalls = options.toolMemory?.pruned ?? new Set<string>()
   const runCodeDisplay = options.runCodeDisplay ?? 'detailed'
@@ -478,6 +481,7 @@ export function createTranscriptReducer(options: TranscriptOptions) {
             if (index === undefined) {
               toolByCall.set(subCallId, blocks.length)
               callIdBySeq.set(seq, subCallId)
+              knownCalls.add(subCallId)
               blocks.push({ kind: 'tool', callId: subCallId, name, args, pending: true, seq })
             }
           }
@@ -496,6 +500,7 @@ export function createTranscriptReducer(options: TranscriptOptions) {
             if (index === undefined) {
               toolByCall.set(subCallId, blocks.length)
               callIdBySeq.set(seq, subCallId)
+              knownCalls.add(subCallId)
               blocks.push(settled)
             }
             else if (prior?.kind === 'tool') {
@@ -566,8 +571,9 @@ export function createTranscriptReducer(options: TranscriptOptions) {
         case 'tool/call': {
           const callId = event.data.callId
           const seenSeq = callIdBySeq.get(seq) === callId
-          const knownCall = seenSeq ? false : [...callIdBySeq.values()].some(value => value === callId)
+          const knownCall = !seenSeq && knownCalls.has(callId)
           callIdBySeq.set(seq, callId)
+          knownCalls.add(callId)
           // A resumed/replayed call must not add a second card or overwrite the
           // result mapping of the card that already exists. A normal rebuild sees
           // its original seq, so persistent settlement must not suppress it.
@@ -593,6 +599,7 @@ export function createTranscriptReducer(options: TranscriptOptions) {
           const callId = event.data.message.source.callId
           const seenSeq = callIdBySeq.get(seq) === callId
           callIdBySeq.set(seq, callId)
+          knownCalls.add(callId)
           // A duplicate result after a session resume/replay must not revive a
           // call that was already settled or whose output was pruned.
           if (hiddenCodeExecutionCalls.has(callId)) {

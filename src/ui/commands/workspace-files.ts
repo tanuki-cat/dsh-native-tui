@@ -15,7 +15,7 @@ import type { AgentPresetService } from '../../runtime/agent.js'
 import { showChoice, showImagePreview, showMarkdownPreview } from '../dialogs.js'
 import type { CommandContext } from './context.js'
 import type { SettingsService } from './services.js'
-import { NL, errorMessage } from './shared.js'
+import { NL, errorMessage, sessionCwd } from './shared.js'
 
 /**
  * The `/preset` command.
@@ -97,7 +97,7 @@ export async function exportCommand(ctx: CommandContext, args: string): Promise<
       return
     }
     try {
-      const result = await exportSessionHtml(ctx.active.agent, target, ctx.config.cwd)
+      const result = await exportSessionHtml(ctx.active.agent, target, sessionCwd(ctx))
       ctx.notice('info', 'Exported HTML: ' + result.path + ' (' + String(result.bytes) + ' bytes, ' + String(result.eventCount) + ' events)')
     }
     catch (error) {
@@ -119,7 +119,7 @@ export async function exportCommand(ctx: CommandContext, args: string): Promise<
       return
     }
     try {
-      const result = await exportSessionBundle(ctx.active.agent, target, ctx.config.cwd, attachments, ctx.signal)
+      const result = await exportSessionBundle(ctx.active.agent, target, sessionCwd(ctx), attachments, ctx.signal)
       ctx.notice('info', 'Exported ZIP bundle: ' + result.path + ' (' + String(result.bytes) + ' bytes, '
         + String(result.attachments.length) + ' attachment(s), '
         + String(result.deliverables.length) + ' deliverable(s)'
@@ -132,7 +132,7 @@ export async function exportCommand(ctx: CommandContext, args: string): Promise<
   }
   const target = args === '' ? 'dsh-session-' + ctx.active.id + '.jsonl' : args
   try {
-    const result = await exportSessionLog(ctx.active.agent, target, ctx.config.cwd)
+    const result = await exportSessionLog(ctx.active.agent, target, sessionCwd(ctx))
     ctx.notice('info', 'Exported ' + String(result.eventCount) + ' events to ' + result.path)
   }
   catch (error) {
@@ -147,7 +147,7 @@ export async function openCommand(ctx: CommandContext, args: string): Promise<vo
     return
   }
   try {
-    const target = resolve(ctx.config.cwd, args)
+    const target = resolve(sessionCwd(ctx), args)
     const preview = await readTextPreview(target)
     if (isMarkdownPath(target)) {
       await showMarkdownPreview(ctx.tui, ctx.palette, preview.path, preview.text, ctx.signal)
@@ -168,7 +168,7 @@ export async function previewCommand(ctx: CommandContext, args: string): Promise
     return
   }
   try {
-    const image = await readImagePreview(resolve(ctx.config.cwd, args))
+    const image = await readImagePreview(resolve(sessionCwd(ctx), args))
     await showImagePreview(ctx.tui, ctx.palette, image, ctx.signal)
   }
   catch (error) {

@@ -1,6 +1,7 @@
 import { readFile, stat, writeFile } from 'node:fs/promises'
 import { basename, resolve } from 'node:path'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import { strToU8, zipSync } from 'fflate'
 
 /** Maximum attachment bytes included in one terminal ZIP bundle. */
@@ -68,14 +69,18 @@ function imageExtension(mediaType: string): string {
   }
 }
 
-function collectRefs(events: readonly { readonly type: string; readonly data?: unknown }[]): {
+function collectRefs(events: readonly SessionEvent[]): {
   images: ImageRefLike[]
   files: FileRefLike[]
 } {
   const images = new Map<string, ImageRefLike>()
   const files = new Map<string, FileRefLike>()
   for (const event of events) {
-    const content = (event.data as { readonly content?: unknown } | undefined)?.content
+    const content = event.type === 'assistant/message' || event.type === 'tool/result'
+      || event.type === 'system/message' || event.type === 'developer/message'
+      ? event.data.message.content
+      : event.type === 'user/message' ? event.data.content
+        : (event.data as { readonly content?: unknown } | undefined)?.content
     if (!Array.isArray(content)) continue
     for (const block of content) {
       if (block === null || typeof block !== 'object') continue
@@ -159,7 +164,7 @@ export async function exportSessionBundle(
   }
   files['session.jsonl'] = strToU8([JSON.stringify(header), ...events.map(event => JSON.stringify(event))].join('\n') + '\n')
 
-  const refs = collectRefs(events as readonly { readonly type: string; readonly data?: unknown }[])
+  const refs = collectRefs(events)
   for (const image of refs.images) {
     signal?.throwIfAborted()
     if (image.bytes !== undefined && attachmentBytes + image.bytes > MAX_BUNDLE_ATTACHMENT_BYTES) {

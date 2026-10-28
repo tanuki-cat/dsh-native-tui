@@ -48,6 +48,15 @@ describe('readTextPreview', () => {
     expect(preview.text).not.toContain('\u001B')
   })
 
+  it.each(['', '中文🙂', 'abcde'])('preserves bounded file content %j', async content => {
+    const dir = await mkdtemp(join(tmpdir(), 'native-tui-files-'))
+    cleanup.push(dir)
+    const path = join(dir, 'utf8.txt')
+    await writeFile(path, content)
+    const bytes = Buffer.byteLength(content)
+    expect(await readTextPreview(path, Math.max(1, bytes))).toEqual({ path, text: content, bytes, truncated: false })
+  })
+
   it('rejects missing files and directories', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'native-tui-files-'))
     cleanup.push(dir)
@@ -56,6 +65,6 @@ describe('readTextPreview', () => {
   })
 
   it('sanitizes controls but preserves tabs and newlines', () => {
-    expect(sanitizeTerminalText('a\tb\nc\u0007d\u001B[31m')).toBe('a\tb\ncd[31m')
+    expect(sanitizeTerminalText('a\tb\nc\u0007d\u001B[31m')).toBe('a\tb\ncd')
   })
 })

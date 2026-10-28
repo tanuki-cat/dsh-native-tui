@@ -3,8 +3,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import { createAssistantMessage, createToolResultMessage, createUserMessage, ToolCallId, type ContentBlock } from '@deepseek-ai/dsh-llm'
+import { SessionSeq } from '@deepseek-ai/dsh-session'
+import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import { unzipSync } from 'fflate'
 import { exportSessionBundle, type BundleAttachmentsService } from '../src/runtime/bundle.js'
+
+type AttachmentId = Extract<ContentBlock, { type: 'image' }>['attachment']['attachmentId']
 
 const cleanup: string[] = []
 afterEach(async () => {
@@ -39,6 +44,36 @@ const attachments: BundleAttachmentsService = {
 }
 
 describe('exportSessionBundle', () => {
+  it.each(['assistant/message', 'tool/result'] as const)('includes and deduplicates attachments in %s message.content', async type => {
+    const dir = await mkdtemp(join(tmpdir(), 'native-tui-bundle-'))
+    cleanup.push(dir)
+    const content: ContentBlock[] = [
+      { type: 'image', attachment: { attachmentId: 'nested-image' as AttachmentId, mediaType: 'image/png', name: 'nested.png', bytes: 3, width: 1, height: 1 } },
+      { type: 'file', attachment: { attachmentId: 'nested-file' as AttachmentId, name: 'nested.txt', bytes: 5 } },
+    ]
+    const nested: SessionEvent = type === 'assistant/message'
+      ? { type, seq: SessionSeq(0), time: 1, surfaceOp: 'append', data: { turn: 1, step: 1, stream: [],
+        message: createAssistantMessage({ source: { provider: 'test', model: 'test' }, content }) } }
+      : { type, seq: SessionSeq(0), time: 1, surfaceOp: 'append', data: { turn: 1, step: 1,
+        message: createToolResultMessage({ callId: ToolCallId('c1'), content, isError: false }) } }
+    const duplicate: SessionEvent = { type: 'user/message', seq: SessionSeq(1), time: 2, surfaceOp: 'append',
+      data: createUserMessage({ source: { kind: 'user' }, content: [content[0]!] }) }
+    const events: SessionEvent[] = [nested, duplicate]
+    const agent = { session: { header: { id: 'nested', cwd: dir, createdAt: 1 }, snapshotEvents: () => events } } as unknown as Agent
+    const reads: string[] = []
+    const service: BundleAttachmentsService = {
+      readImage: async ref => { reads.push(ref.attachmentId); return { data: Uint8Array.of(1, 2, 3) } },
+      readFileStream: async function* (ref) { reads.push(ref.attachmentId); yield new TextEncoder().encode('hello') },
+    }
+    const result = await exportSessionBundle(agent, 'bundle.zip', dir, service)
+    expect(result.attachments).toHaveLength(2)
+    expect(reads.sort()).toEqual(['nested-file', 'nested-image'])
+    const zip = unzipSync(await readFile(result.path))
+    expect(zip['attachments/nested-image-nested.png']).toEqual(Uint8Array.of(1, 2, 3))
+    expect(new TextDecoder().decode(zip['attachments/nested-file-nested.txt'])).toBe('hello')
+    expect(JSON.parse(new TextDecoder().decode(zip['manifest.json'])).attachments).toEqual(result.attachments)
+  })
+
   it('writes session, manifest, attachments, and deliverables', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'native-tui-bundle-'))
     cleanup.push(dir)

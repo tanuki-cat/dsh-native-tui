@@ -101,7 +101,7 @@ describe('model-context pruning in the transcript', () => {
       }, 2),
       prune(2, 3), replacement('edit', 2, 4),
     ]
-    const toolMemory = { settled: new Set<string>(), pruned: new Set<string>(), prunedSeqs: new Set<number>(), callBySeq: new Map<number, string>() }
+    const toolMemory = { settled: new Set<string>(), pruned: new Set<string>(), prunedSeqs: new Set<number>(), knownCalls: new Set<string>(), callBySeq: new Map<number, string>() }
     for (let pass = 0; pass < 2; pass += 1) {
       expect(reduceTranscript(entries, { ...options, toolMemory })[0]).toMatchObject({
         kind: 'tool', name: 'edit', isError: true, result: 'ORIGINAL ERROR',
@@ -111,7 +111,7 @@ describe('model-context pruning in the transcript', () => {
   })
 
   it('ignores replacements after the original entries leave the window', () => {
-    const toolMemory = { settled: new Set<string>(), pruned: new Set<string>(), prunedSeqs: new Set<number>(), callBySeq: new Map<number, string>() }
+    const toolMemory = { settled: new Set<string>(), pruned: new Set<string>(), prunedSeqs: new Set<number>(), knownCalls: new Set<string>(), callBySeq: new Map<number, string>() }
     const tracked = { ...options, toolMemory }
     reduceTranscript([...original, ...batch], tracked)
     expect(reduceTranscript(batch.slice(1, 2), tracked)).toEqual([])

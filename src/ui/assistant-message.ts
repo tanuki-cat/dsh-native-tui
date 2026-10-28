@@ -1,5 +1,6 @@
 import { Box, Container, Markdown, Spacer, Text, type Component } from '@earendil-works/pi-tui'
 import { clipGraphemes } from './grapheme-preview.js'
+import { sanitizeTerminalText } from '../runtime/terminal-text.js'
 import type { TranscriptBlock, TranscriptOptions } from './transcript.js'
 import type { AssistantPart } from './transcript-stream.js'
 
@@ -36,9 +37,9 @@ export class AssistantMessage extends Container {
       if (part.text.trim() === '' || part.type === 'reasoning' && mode === 'hidden') continue
       const before = this.parts[visible.length]
       const text = before?.type === part.type && before.raw === part.text ? before.text
-        : part.type === 'text' ? part.text : mode === 'compact'
-          ? 'thinking · ' + clipGraphemes(part.text.split('\n').map(line => line.trim()).find(Boolean) ?? '', 240)
-          : part.text
+        : part.type === 'text' ? sanitizeTerminalText(part.text) : mode === 'compact'
+          ? 'thinking · ' + clipGraphemes(sanitizeTerminalText(part.text).split('\n').map(line => line.trim()).find(Boolean) ?? '', 240)
+          : sanitizeTerminalText(part.text)
       visible.push({ type: part.type, text, raw: part.text })
     }
     const next = visible.map((part, index): PartComponent => {

@@ -12,6 +12,7 @@ import type { AgentPresetService } from '../runtime/agent.js'
 import type { ContextMeterReading, SessionMetrics, SessionStats } from '../runtime/metrics.js'
 import { collectSessionMetrics, formatSessionMetrics } from '../runtime/metrics.js'
 import type { Palette } from './theme.js'
+import { sanitizeTerminalText } from '../runtime/terminal-text.js'
 import { MODE_LABELS, type InteractionMode } from '../interaction-modes.js'
 
 /** The pi-tui text components the status rows write into. */
@@ -86,18 +87,18 @@ export function renderStatusRows(
   fold?: MetricsFold,
 ): void {
   rows.header.setText(
-    palette.bold(palette.brand('◆ ' + input.title)) + '\n'
-    + palette.dim(input.sessionId) + '\n'
-    + palette.dim(input.cwd),
+    palette.bold(palette.brand('◆ ' + sanitizeTerminalText(input.title))) + '\n'
+    + palette.dim(sanitizeTerminalText(input.sessionId)) + '\n'
+    + palette.dim(sanitizeTerminalText(input.cwd)),
   )
   const state = input.running
     ? palette.warning('● working')
     : palette.success('● idle')
   const thinking = palette.reasoning(input.reasoningEffort)(
-    input.reasoningEffort === undefined ? 'think default' : 'think ' + String(input.reasoningEffort),
+    input.reasoningEffort === undefined ? 'think default' : 'think ' + sanitizeTerminalText(String(input.reasoningEffort)),
   )
   const metaBits: string[] = []
-  if (input.preset !== undefined) metaBits.push(palette.dim('preset ') + palette.preset(input.preset))
+  if (input.preset !== undefined) metaBits.push(palette.dim('preset ') + palette.preset(sanitizeTerminalText(input.preset)))
   if (input.attachmentCount > 0) metaBits.push(palette.dim('attached ') + palette.accent(String(input.attachmentCount)))
   const hint = input.running
     ? 'enter steer · esc cancel · ctrl+c cancel · ctrl+d exit'
@@ -107,9 +108,9 @@ export function renderStatusRows(
     : fold(input.events as never, input.stats, input.contextWindow, input.contextMeter)
   const split = splitSessionMetrics(formatSessionMetrics(metrics))
   const model = palette.dim('model ')
-    + palette.bold(palette.brand(input.provider))
+    + palette.bold(palette.brand(sanitizeTerminalText(input.provider)))
     + palette.dim('/')
-    + palette.bold(palette.accent(input.model))
+    + palette.bold(palette.accent(sanitizeTerminalText(input.model)))
   const context = split.context === undefined ? undefined : splitContextLine(split.context)
   const divider = palette.dim('  │  ')
   rows.status.setText([state, model, thinking, ...metaBits].join(divider))
@@ -119,7 +120,7 @@ export function renderStatusRows(
     ? palette.warning('custom mode')
     : (mode === 'off' ? palette.dim : mode === 'accept-edits' ? palette.success : palette.warning)(MODE_LABELS[mode] + (mode === 'auto' ? ' · EXP' : ''))) + palette.dim(' · /mode'))
   if ((mode === 'off' || mode === undefined) && input.permissionPreset !== undefined) footerHead.push(
-    palette.dim('permission ') + (input.permissionPreset === 'danger-full-access' ? palette.warning : palette.accent)(input.permissionPreset),
+    palette.dim('permission ') + (input.permissionPreset === 'danger-full-access' ? palette.warning : palette.accent)(sanitizeTerminalText(input.permissionPreset)),
   )
   if (context !== undefined) footerHead.push(
     palette.context(metrics.contextPercent, metrics.contextCompactPercent)(context.head)
@@ -149,7 +150,7 @@ const WINDOW_TITLE_WORKSPACE_CHARS = 48
 export function terminalWindowTitle(title: string, cwd: string): string {
   // OSC 0 is terminated by BEL, so control characters would truncate the title
   // or inject a second sequence; the label is flattened to visible text.
-  const clean = (text: string): string => text.replace(/[\x00-\x1f\x7f]/g, ' ').trim()
+  const clean = (text: string): string => text.replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').trim()
   const product = clean(title)
   const workspace = clean(cwd).replace(/[\\/]+$/u, '').split(/[\\/]/u).at(-1) ?? ''
   const label = workspace.length <= WINDOW_TITLE_WORKSPACE_CHARS
