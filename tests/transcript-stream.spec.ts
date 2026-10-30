@@ -212,3 +212,60 @@ describe('Unicode content', () => {
     expect(clipGraphemes(text, 8)).toBe('abcdef👩‍💻g\n… [5 chars omitted]')
   })
 })
+describe('reasoning display normalization', () => {
+  const detailed = { ...options, thinkingDisplay: 'detailed' as const }
+  const compact = { ...options, thinkingDisplay: 'compact' as const }
+
+  it('drops a reasoning block that is only a signature', () => {
+    const component = new AssistantMessage({
+      kind: 'assistant', text: 'answer', reasoning: '<signature>abc</signature>', live: false,
+    }, detailed)
+    const painted = component.render(80).join('\n')
+    expect(painted).toContain('answer')
+    expect(painted).not.toContain('thinking')
+    expect(painted).not.toContain('<signature>')
+  })
+
+  it('shows only the text behind a signature in detailed mode', () => {
+    const component = new AssistantMessage({
+      kind: 'assistant', text: 'answer', reasoning: '<signature>abc</signature>\nREAL THOUGHT', live: false,
+    }, detailed)
+    const painted = component.render(80).join('\n')
+    expect(painted).toContain('REAL THOUGHT')
+    expect(painted).not.toContain('<signature>')
+  })
+
+  it('keeps a signature out of the compact preview', () => {
+    const component = new AssistantMessage({
+      kind: 'assistant', text: 'answer', reasoning: '<signature>abc</signature>\nREAL THOUGHT', live: false,
+    }, compact)
+    const painted = component.render(80).join('\n')
+    expect(painted).toContain('thinking · REAL THOUGHT')
+    expect(painted).not.toContain('<signature>')
+  })
+
+  it('advances the compact preview with the newest completed paragraph', () => {
+    const component = new AssistantMessage({
+      kind: 'assistant', text: '', reasoning: 'FIRST LINE\nbody\n\nSECOND LINE\n', live: true,
+    }, compact)
+    expect(component.render(80).join('\n')).toContain('thinking · SECOND LINE')
+    component.update({ kind: 'assistant', text: '', reasoning: 'FIRST LINE\nbody\n\nSECOND LINE\nmore', live: false })
+    expect(component.render(80).join('\n')).toContain('thinking · FIRST LINE')
+  })
+
+  it('keeps a signature out of the rendered transcript', () => {
+    const renderer = new TranscriptRenderer(detailed)
+    renderer.set([message([{ type: 'reasoning', text: '<signature>abc</signature>THOUGHT' }, { type: 'text', text: 'ANSWER' }])], [])
+    const painted = output(renderer)
+    expect(painted).toContain('THOUGHT')
+    expect(painted).toContain('ANSWER')
+    expect(painted).not.toContain('<signature>')
+  })
+
+  it('leaves hidden mode unchanged', () => {
+    const component = new AssistantMessage({
+      kind: 'assistant', text: 'answer', reasoning: '<signature>abc</signature>thought', live: false,
+    }, { ...options, thinkingDisplay: 'hidden' as const })
+    expect(component.render(80).join('\n')).not.toContain('thinking')
+  })
+})

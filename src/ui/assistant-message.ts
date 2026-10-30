@@ -1,5 +1,6 @@
 import { Box, Container, Markdown, Spacer, Text, type Component } from '@earendil-works/pi-tui'
 import { clipGraphemes } from './grapheme-preview.js'
+import { reasoningPreview, reasoningText } from './reasoning-text.js'
 import { sanitizeTerminalText } from '../runtime/terminal-text.js'
 import type { TranscriptBlock, TranscriptOptions } from './transcript.js'
 import type { AssistantPart } from './transcript-stream.js'
@@ -34,12 +35,16 @@ export class AssistantMessage extends Container {
     ]
     const visible: Array<Pick<PartComponent, 'type' | 'text' | 'raw'>> = []
     for (const part of content) {
-      if (part.text.trim() === '' || part.type === 'reasoning' && mode === 'hidden') continue
+      // A signature-only block has nothing to show; it must not add a card.
+      const display = part.type === 'reasoning' ? reasoningText(part.text) : part.text
+      if (display.trim() === '' || part.type === 'reasoning' && mode === 'hidden') continue
       const before = this.parts[visible.length]
       const text = before?.type === part.type && before.raw === part.text ? before.text
-        : part.type === 'text' ? sanitizeTerminalText(part.text) : mode === 'compact'
-          ? 'thinking · ' + clipGraphemes(sanitizeTerminalText(part.text).split('\n').map(line => line.trim()).find(Boolean) ?? '', 240)
-          : sanitizeTerminalText(part.text)
+        : part.type === 'text'
+          ? sanitizeTerminalText(display)
+          : mode === 'compact'
+            ? 'thinking · ' + clipGraphemes(sanitizeTerminalText(reasoningPreview(display, block.live)), 240)
+            : sanitizeTerminalText(display)
       visible.push({ type: part.type, text, raw: part.text })
     }
     const next = visible.map((part, index): PartComponent => {

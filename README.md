@@ -96,7 +96,7 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 - Transcript 层次：全宽背景带（用户消息、reasoning、tool 输出）、assistant/context 标签、notice 图标、turn 分隔线；本地命令输出按 durable event sequence 插入。
 - 流式内容直接跟随 provider：每帧显示已收到的全部 text/reasoning，`block-end` 与 `assistant/message` 立即采用完整内容，没有额外逐字动画、播放队列或 settle grace。reasoning、正文、工具卡片按 provider/event 顺序展示，可以落在同一帧。
 - 执行状态独立于内容渲染：turn 开始后显示 `⟳ working · Ns`；收到文本、reasoning、工具调用或 stream/end 都不清除它，直到 `turn/end` 或切换会话。Host 调度自动重试时显示 `⟳ retry N/M after CODE (automatic) · Ns`，新 attempt 或恢复收流后回到 working。断流检测、超时与重试策略归 Host/provider，TUI 不根据画面是否变化判断网络状态。
-- 显示密度可配置：`thinkingDisplay` 与 `runCodeDisplay` 均为 `hidden | compact | detailed`，见[配置](#配置)。
+- 显示密度可配置：`thinkingDisplay` 与 `runCodeDisplay` 均为 `hidden | compact | detailed`，见[配置](#配置)。reasoning 若以 provider 的 `<signature>` 块开头，显示层会剥掉签名与随后的换行，纯签名块不渲染 thinking 卡片；`compact` 的预览在流式时取最后一个已完成段落的首行，结束后取首行，并去掉 `**` 标记。
 - PTC 的 `run_code` 卡片在 `compact` 下列出实际子调用：`skill` 显示实际技能名，如 `skill daily-log-writer`；文件工具显示路径；bash/pwsh 优先显示实际命令及显式 workdir，多行命令用 `↵` 标记；MCP 显示服务、方法与目标，如 `mcp idea.get_file_problems src/a.ts`；`todo_write` 显示任务数量、进行中/完成数量和当前任务，不虚构文件路径。同一摘要只出现一次，长值标记截断，路径优先保留文件名；超过 10 行折叠为 `├ … N more`，失败时保留错误首行。
 - 上下文压缩：默认 preset 启用 `compaction-basic` 与 tool-result pruner。TUI 渲染 compaction start/summary/end；prune 隐藏对应 tool 卡片并保留 prune notice；session 级 tool memory 会忽略同一 callId 的晚到 / 重复 call/result，即使原始事件已离开 retained window。进程在 compaction 中途崩溃后 resume，卡片尾行显示 `⚠ interrupted` 而不是一直停在 `⟳ compacting…`。`/compact` 作为 Host command 可手动触发。
 - 终端窗口标题：启动后写入 `<产品标题> · <workspace 目录名>`（OSC 0），标签页能直接看出是哪个 checkout 的会话，例如 `DeepSeek Harness · dsh-native-tui`。控制字符会被压平（BEL 会截断 OSC 序列），目录名超过 48 字符截断；只在标题变化时写入。
