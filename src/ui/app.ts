@@ -18,7 +18,7 @@ import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { DisplayMode, ResolvedConfig } from '../config.js'
 import { createHostSession, readContextBreakdown, readContextMeter, restartHostSession, resumeHostSession, sessionAgentPreset, type AgentPresetService, type HostSession } from '../runtime/agent.js'
 import { findLauncher, parseProfileArg, resumeHint } from '../runtime/launcher.js'
-import { reloadArgs } from '../runtime/reload.js'
+import { assertResumed, reloadArgs, RESUME_ENV } from '../runtime/reload.js'
 import { skillRows } from '../runtime/skill-catalog.js'
 import { createSessionMetricsMemo, type SessionMetrics, type SessionStats } from '../runtime/metrics.js'
 import { showApproval, showQuestionBatch } from './dialogs.js'
@@ -67,7 +67,7 @@ const MAX_NOTICES = 12
  * that owns the same stdio.
  * @param args - launcher arguments after the entry script.
  */
-function replaceProcess(args: readonly string[]): void {
+function replaceProcess(args: readonly string[], sessionId: string): void {
   const entry = process.argv[1]
   if (entry === undefined) {
     process.stderr.write('native-tui: reload failed: cannot locate the dsh entry script\n')
@@ -78,13 +78,16 @@ function replaceProcess(args: readonly string[]): void {
   } catch {
     // A closed stdout must not prevent the replacement.
   }
+  // The flag is the documented surface; the variable survives a launcher that
+  // re-parses its own arguments, so a lost flag cannot start a fresh session.
+  const env = { ...process.env, [RESUME_ENV]: sessionId }
   try {
     if (process.execve !== undefined) {
-      process.execve(process.execPath, [process.execPath, entry, ...args], process.env)
+      process.execve(process.execPath, [process.execPath, entry, ...args], env)
     }
     const child = spawn(process.execPath, [entry, ...args], {
       cwd: process.cwd(),
-      env: process.env,
+      env,
       stdio: 'inherit',
     })
     child.once('error', error => {
@@ -186,6 +189,13 @@ export async function startTerminalApp(
       : await resumeHostSession(host, config.sessionId as SessionId)
   } catch (error) {
     throw new Error('native-tui: failed to open a session: ' + errorMessage(error), { cause: error })
+  }
+  // A resume that lands elsewhere would silently look like a fresh session.
+  try {
+    assertResumed(config.sessionId, active.id)
+  } catch (error) {
+    await active.dispose()
+    throw error
   }
 
   /** Agent-preset-scoped skill registry, falling back to the host composition. */
@@ -798,7 +808,7 @@ export async function startTerminalApp(
     if (exiting || disposed) return
     exiting = true
     const args = reloadArgs(process.argv.slice(2), active.id)
-    const replace = (): void => { replaceProcess(args) }
+    const replace = (): void => { replaceProcess(args, active.id) }
     // Model selection is already durable; do not rewrite profile settings on reload.
     void dispose(false).then(replace, replace)
   }

@@ -1,6 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { Config, parseResumeArg, resolveConfig, resolveDisplayMode, resolveVolatileValue, type Config as TuiConfig } from './config.js'
 import { startTerminalApp, type TerminalApp } from './ui/app.js'
+import { RESUME_ENV, resumeIdFromEnv } from './runtime/reload.js'
 import { ensureLauncher, parseProfileArg } from './runtime/launcher.js'
 import { debug } from './debug.js'
 
@@ -48,7 +49,17 @@ export async function apply(ctx: Context, config: TuiConfig): Promise<void> {
     debug(`launcher: ${error instanceof Error ? error.message : String(error)}`)
   }
 
-  const resume = parseResumeArg(process.argv.slice(2))
+  // The flag wins; the environment is the handoff a reload exports so a
+  // launcher that drops the flag cannot turn a reload into a fresh session.
+  const flagged = parseResumeArg(process.argv.slice(2))
+  const inherited = resumeIdFromEnv(process.env[RESUME_ENV])
+  // Consume the handoff so a shell or dsh started inside this Session does not
+  // inherit a resume request that belongs to this process image.
+  if (inherited !== undefined) delete process.env[RESUME_ENV]
+  const resume = flagged ?? inherited
+  debug('resume: ' + (resume === undefined
+    ? 'new session'
+    : resume + ' (' + (flagged === undefined ? 'env' : 'flag') + ')'))
   const resolved = resolveConfig(resume === undefined ? config : { ...config, sessionId: resume })
   let app: TerminalApp | undefined
   let exiting = false

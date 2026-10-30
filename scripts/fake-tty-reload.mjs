@@ -96,14 +96,18 @@ child.on('exit', (code, signal) => {
   clearTimeout(hard)
   server.close()
   const clean = strip(out)
-  const models = [...clean.matchAll(/● idle   model ([^ ]+)/g)].map(match => match[1])
+  // The status row is `● idle  │  model <route/model>  │  …`; only the frames
+  // after the reload matter, because an earlier one cannot prove resumption.
+  const marker = clean.lastIndexOf('Reloading dsh')
+  const after = marker === -1 ? '' : clean.slice(marker)
+  const models = [...after.matchAll(/model ([^ │]+)/g)].map(match => match[1])
   const lines = clean.split('\n').filter(line => line.startsWith('Session:') || line.startsWith('Resume:'))
   const lastSession = [...lines].reverse().find(line => line.startsWith('Session:'))
   const pass = code === 0
     && phase === 2
     && sessionId !== undefined
     && lastSession === 'Session: ' + sessionId
-    && models.length >= 2
+    && models.length >= 1
     && models.every(model => model === 'mock/mock-model')
   console.log('EXIT', code, signal, 'phase', phase, 'session', sessionId, 'models', models.join(' -> '), 'pass', pass, 'reloadedIn', reloadedAt === 0 ? '-' : Date.now() - reloadedAt)
   console.log(lines.join('\n'))

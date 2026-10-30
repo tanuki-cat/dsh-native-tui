@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { reloadArgs } from '../src/runtime/reload.js'
+import { assertResumed, reloadArgs, resumeIdFromEnv } from '../src/runtime/reload.js'
 
 describe('reload arguments', () => {
   it('keeps launcher flags and appends the current session', () => {
@@ -21,5 +21,26 @@ describe('reload arguments', () => {
       .toEqual(['tui', '--resume', 'new'])
     expect(reloadArgs(['tui', '--resume', '--patch', 'x'], 'new'))
       .toEqual(['tui', '--patch', 'x', '--resume', 'new'])
+  })
+})
+describe('resume handoff', () => {
+  it('accepts a session id exported by a reload', () => {
+    expect(resumeIdFromEnv('native-tui-1bc15e8c-6d89-46b6-802c-0157f1cfb59b'))
+      .toBe('native-tui-1bc15e8c-6d89-46b6-802c-0157f1cfb59b')
+    expect(resumeIdFromEnv('  session_2  ')).toBe('session_2')
+  })
+
+  it('ignores an unusable value instead of trusting the environment', () => {
+    expect(resumeIdFromEnv(undefined)).toBeUndefined()
+    expect(resumeIdFromEnv('')).toBeUndefined()
+    expect(resumeIdFromEnv('   ')).toBeUndefined()
+    expect(resumeIdFromEnv('bad id with spaces')).toBeUndefined()
+    expect(resumeIdFromEnv('x'.repeat(129))).toBeUndefined()
+  })
+
+  it('refuses a resume that landed on another session', () => {
+    expect(() => assertResumed(undefined, 'fresh')).not.toThrow()
+    expect(() => assertResumed('session-1', 'session-1')).not.toThrow()
+    expect(() => assertResumed('session-1', 'session-2')).toThrow('instead of the requested')
   })
 })
