@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { CommandContext } from '../src/ui/commands/context.js'
 import { mcpCommand } from '../src/ui/commands/mcp.js'
 import { providerCommand } from '../src/ui/commands/provider.js'
@@ -258,5 +258,32 @@ describe('settings command routing', () => {
     const ctx = contextOf({ settings: { describe: () => [descriptor], update: async () => undefined, mutate: async () => undefined } })
     await settingsCommand(ctx, 'nonsense')
     expect(allText(ctx)).toContain('Usage: /settings')
+  })
+})
+
+describe('codex provider discovery guard', () => {
+  it('refuses to discover openai-codex models and points at the account catalogue', async () => {
+    const discoverModels = vi.fn()
+    const mutate = vi.fn(async () => undefined)
+    const ctx = contextOf({
+      settings: {
+        describe: () => [{
+          ns: 'llm-pi-ai',
+          value: { providers: { 'openai-codex': { models: [] } } },
+          revision: 1,
+        }],
+        mutate,
+      },
+      llm: {
+        listProviders: () => [{ id: 'openai-codex' }],
+        listConfigurableProviders: () => [],
+        listModels: async () => [],
+        discoverModels,
+      },
+    })
+    await providerCommand(ctx, 'models openai-codex')
+    expect(discoverModels).not.toHaveBeenCalled()
+    expect(mutate).not.toHaveBeenCalled()
+    expect(allText(ctx)).toContain('/codex models refresh')
   })
 })

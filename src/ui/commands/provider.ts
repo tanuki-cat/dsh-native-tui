@@ -8,6 +8,7 @@
  * @module dsh-native-tui/ui/commands/provider
  */
 
+import { CODEX_PROVIDER } from '../../codex/types.js'
 import { showChoice, showSearchChoice, showTextInput } from '../dialogs.js'
 import {
   buildCatalogProvider,
@@ -249,6 +250,14 @@ async function listProviders(
 
 /** Discover the route's models and merge them into the profile. */
 async function fetchProviderModels(ctx: CommandContext, settings: SettingsService, llm: LLM, route: string): Promise<void> {
+  // Host discovery replays the installed catalogue for a known provider, so for
+  // Codex it would write those static ids as an explicit list and drop the
+  // levels the merge does not know. The account listing is the real source.
+  if (route === CODEX_PROVIDER) {
+    ctx.notice('warning', 'openai-codex models come from the account catalogue — use /codex models refresh.'
+      + ' Discovery here only replays the installed catalogue and would drop xhigh/max efforts.')
+    return
+  }
   const latest = settings.describe({ redactSecrets: true }).find(row => row.ns === 'llm-pi-ai')
   const providers = latest?.value.providers
   const raw = providers !== null && typeof providers === 'object' && !Array.isArray(providers)
