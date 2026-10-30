@@ -3,6 +3,7 @@ import type { CodexCommandDeps } from '../src/runtime/codex-command.js'
 import type { SettingsPathOp } from '../src/runtime/settings.js'
 import type { SettingsAccess, SettingsNamespace } from '../src/runtime/settings-write.js'
 import type { CodexGrant, CredentialRecordLike, ModelCatalog } from '../src/codex/types.js'
+import type { ClientVersion, ClientVersionSource } from '../src/codex/catalog.js'
 
 /** Encode one JWT with the given claims. */
 export function jwt(claims: Record<string, unknown>): string {
@@ -50,7 +51,10 @@ function unsetPath(root: Record<string, unknown>, path: readonly string[]): void
 }
 
 /** A settings double whose writes can fail once with a revision conflict. */
-export function settingsOf(initial: Record<string, unknown> = {}) {
+export function settingsOf(
+  initial: Record<string, unknown> = {},
+  options: { readonly writable?: boolean } = {},
+) {
   let value = structuredClone(initial)
   let revision = 1
   let conflict = false
@@ -72,6 +76,7 @@ export function settingsOf(initial: Record<string, unknown> = {}) {
   const service: SettingsAccess = {
     describe: (): readonly SettingsNamespace[] => [{ ns: 'llm-pi-ai', value, revision }],
     mutate,
+    ...(options.writable === undefined ? {} : { writable: options.writable }),
   }
   return { service, value: () => value, mutate, failNext: () => { conflict = true } }
 }
@@ -117,6 +122,48 @@ export function usageBody(overrides: {
       },
     },
   }
+}
+
+/** One remote catalogue entry carrying the fields the reader validates. */
+export function catalogModel(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    slug: 'gpt-6.1-sol',
+    display_name: 'GPT-6.1-Sol',
+    visibility: 'list',
+    supported_in_api: true,
+    context_window: 500_000,
+    max_context_window: 872_000,
+    input_modalities: ['text', 'image'],
+    supported_reasoning_levels: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].map(effort => ({ effort })),
+    ...overrides,
+  }
+}
+
+/** A `codex/models` body. */
+export function catalogBody(models: readonly unknown[] = [catalogModel()]): unknown {
+  return { models }
+}
+
+/** A resolved catalogue request version. */
+export function versionOf(value = '0.165.0', source: ClientVersionSource = 'builtin'): ClientVersion {
+  return { value, source }
+}
+
+/** A fetch double that serves one catalogue body and records every call. */
+export function catalogFetcher(
+  body: unknown = catalogBody(),
+  status = 200,
+  headers: Record<string, string> = {},
+) {
+  const calls: Array<{ readonly url: string; readonly init?: RequestInit }> = []
+  const fetcher = async (url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    calls.push({ url: String(url), ...(init === undefined ? {} : { init }) })
+    return new Response(typeof body === 'string' ? body : JSON.stringify(body), {
+      status,
+      headers: { 'content-type': 'application/json', ...headers },
+    })
+  }
+  return { fetcher: fetcher as typeof fetch, calls }
 }
 
 /** A fetch double that serves one usage body and records every call. */

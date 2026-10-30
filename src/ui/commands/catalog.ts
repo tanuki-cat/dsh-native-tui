@@ -32,7 +32,7 @@ export const HELP_LINES: readonly string[] = [
   '/attach <path>|paste|preview <i>|list|clear · /attachments · /exit',
   '/login · 引导选择登录平台（CodeBuddy / Codex / DeepSeek 官方，DeepSeek 官方待实现）',
   '/codebuddy [status|login|logout|models [refresh]|quota|checkin|prompt [show|reset]|doctor]',
-  '/codex [status|setup|login [browser|device]|logout|models]',
+  '/codex [status|setup|login [browser|device]|logout|models [refresh]]',
   '@@<query> references another session · /exit',
 ]
 
@@ -110,12 +110,12 @@ export const LOCAL_COMMANDS: readonly CommandSuggestion[] = [
     { name: 'prompt', description: 'guided system-prompt setup or show/reset', hint: '[show|reset]' },
     { name: 'doctor', description: 'endpoint and catalogue probe' },
   ] },
-  { name: 'codex', description: 'ChatGPT Codex sign-in, route setup and models', input: { hint: '[status|setup|login [browser|device]|logout|models]' }, keepExactSubmit: true, subcommands: [
+  { name: 'codex', description: 'ChatGPT Codex sign-in, route setup and models', input: { hint: '[status|setup|login [browser|device]|logout|models [refresh]]' }, keepExactSubmit: true, subcommands: [
     { name: 'status', description: 'sign-in state, credential expiry, route and usage' },
     { name: 'setup', description: 'ensure the openai-codex route without signing in' },
     { name: 'login', description: 'sign in with ChatGPT', hint: '[browser|device]' },
     { name: 'logout', description: 'remove the shared credential after confirmation' },
-    { name: 'models', description: 'list openai-codex models' },
+    { name: 'models', description: 'list openai-codex models, or refresh them from the account catalogue', hint: '[refresh]' },
   ] },
   { name: 'provider', description: 'guided third-party model provider setup', input: { hint: '[add|list|edit|models|input|remove <route>]' }, subcommands: [
     { name: 'add', description: 'guide a new provider route' },

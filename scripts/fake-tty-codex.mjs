@@ -63,8 +63,10 @@ const steps = [
   [1600, '/codex status\r'],
   [3600, '/codex setup\r'],
   [9000, '/codex models\r'],
-  [11200, '/codex logout\r'],
-  [13600, '\x04'],
+  // Signed out: refresh must refuse before the network and write nothing.
+  [10400, '/codex models refresh\r'],
+  [12000, '/codex logout\r'],
+  [14400, '\x04'],
 ]
 for (const [delay, data] of steps) setTimeout(() => { try { child.stdin.write(data) } catch {} }, delay)
 const hard = setTimeout(() => { try { child.kill('SIGTERM') } catch {} }, 20000)
@@ -81,6 +83,8 @@ child.on('exit', (code, signal) => {
   check('status reports signed out', clean.includes('not signed in'))
   check('setup reports the route ready', clean.includes('Route openai-codex is ready'))
   check('models lists openai-codex', clean.includes('openai-codex:') && /gpt-[0-9]/.test(clean))
+  check('refresh refuses while signed out', clean.includes('openai-codex: not signed in — run /codex login'))
+  check('refresh made no catalogue request', !clean.includes('remote catalogue'))
   check('logout reports the signed-out state', clean.includes('Codex: not signed in.'))
   check('no credential material printed', !/refresh-token|access-token/.test(clean))
   console.log('--- STDOUT (tail) ---')

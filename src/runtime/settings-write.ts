@@ -22,6 +22,8 @@ export interface SettingsNamespace {
 export interface SettingsAccess {
   describe(options?: { readonly redactSecrets?: boolean }): readonly SettingsNamespace[]
   mutate(ns: string, ops: readonly SettingsPathOp[], expectedRevision?: number): Promise<void>
+  /** Whether the Host accepts writes; absent on a Host that does not report it. */
+  readonly writable?: boolean
 }
 
 /** Read one namespace descriptor, or undefined when it is not active. */

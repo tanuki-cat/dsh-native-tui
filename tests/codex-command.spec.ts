@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { runCodexCommand } from '../src/runtime/codex-command.js'
 import { routeProfile } from '../src/codex/route.js'
 import type { AuthorizationLike, CredentialStoreLike } from '../src/codex/types.js'
-import { commandDeps, grant, llmOf, settingsOf, usageFetcher } from './codex-fixtures.js'
+import { catalogBody, catalogFetcher, catalogModel, commandDeps, grant, llmOf, settingsOf, usageFetcher, versionOf } from './codex-fixtures.js'
 
 /** A credential store double over one mutable record. */
 function storeOf(initial: Awaited<ReturnType<CredentialStoreLike['readRecord']>> = undefined) {
@@ -290,5 +290,219 @@ describe('Codex command', () => {
     await runCodexCommand('login', h.deps)
     expect(h.text()).toContain('sign-in failed')
     expect(h.text()).not.toContain('SECRETVALUE')
+  })
+})
+
+describe('Codex catalogue refresh', () => {
+  /** The two-model account listing used by the cases below. */
+  const listing = catalogBody([
+    catalogModel({ slug: 'gpt-6.1-sol' }),
+    catalogModel({ slug: 'gpt-6.1-terra' }),
+  ])
+
+  /** A signed-in store whose route is present and empty. */
+  function signedIn() {
+    const { store } = storeOf(grant())
+    return { store, settings: settingsOf({ providers: { 'openai-codex': { models: [] } } }) }
+  }
+
+  it('refuses before the network when nothing is signed in', async () => {
+    const catalogue = catalogFetcher(listing)
+    const h = commandDeps({
+      credentials: storeOf().store,
+      settings: settingsOf({ providers: { 'openai-codex': { models: [] } } }).service,
+      llm: llmOf(),
+      fetcher: catalogue.fetcher,
+    })
+    await runCodexCommand('models refresh', h.deps)
+    expect(h.text()).toContain('not signed in')
+    expect(catalogue.calls).toHaveLength(0)
+  })
+
+  it('refuses while the credential is expired', async () => {
+    const catalogue = catalogFetcher(listing)
+    const h = commandDeps({
+      credentials: storeOf(grant({ expires: 500 })).store,
+      settings: settingsOf({ providers: { 'openai-codex': { models: [] } } }).service,
+      llm: llmOf(),
+      fetcher: catalogue.fetcher,
+    })
+    await runCodexCommand('models refresh', h.deps)
+    expect(h.text()).toContain('credential expired')
+    expect(catalogue.calls).toHaveLength(0)
+  })
+
+  it('refuses a route that bypasses OAuth', async () => {
+    const catalogue = catalogFetcher(listing)
+    const h = commandDeps({
+      credentials: storeOf(grant()).store,
+      settings: settingsOf({ providers: { 'openai-codex': { apiKeyEnv: 'CODEX_KEY', models: [] } } }).service,
+      llm: llmOf(),
+      fetcher: catalogue.fetcher,
+    })
+    await runCodexCommand('models refresh', h.deps)
+    expect(h.text()).toContain('OAuth is not used')
+    expect(catalogue.calls).toHaveLength(0)
+  })
+
+  it('refuses read-only model settings', async () => {
+    const catalogue = catalogFetcher(listing)
+    const settings = settingsOf({ providers: { 'openai-codex': { models: [] } } }, { writable: false })
+    const h = commandDeps({
+      credentials: storeOf(grant()).store,
+      settings: settings.service,
+      llm: llmOf(),
+      fetcher: catalogue.fetcher,
+    })
+    await runCodexCommand('models refresh', h.deps)
+    expect(h.text()).toContain('read-only')
+    expect(catalogue.calls).toHaveLength(0)
+  })
+
+  it('reports a refused credential request', async () => {
+    const h = commandDeps({
+      credentials: storeOf(grant()).store,
+      settings: settingsOf({ providers: { 'openai-codex': { models: [] } } }).service,
+      llm: llmOf(),
+      fetcher: catalogFetcher(listing, 401).fetcher,
+      clientVersion: async () => versionOf(),
+    })
+    await runCodexCommand('models refresh', h.deps)
+    expect(h.text()).toContain('credential was rejected (401)')
+  })
+
+  it('names an unusable request-version override instead of falling back', async () => {
+    const catalogue = catalogFetcher(listing)
+    const h = commandDeps({
+      credentials: storeOf(grant()).store,
+      settings: settingsOf({ providers: { 'openai-codex': { models: [] } } }).service,
+      llm: llmOf(),
+      fetcher: catalogue.fetcher,
+      clientVersion: async () => ({ error: 'version-invalid' }),
+    })
+    await runCodexCommand('models refresh', h.deps)
+    expect(h.text()).toContain('DSH_CODEX_CLIENT_VERSION')
+    expect(catalogue.calls).toHaveLength(0)
+  })
+
+  it('previews the patch and writes nothing when it is declined', async () => {
+    const { store, settings } = signedIn()
+    const h = commandDeps({
+      credentials: store,
+      settings: settings.service,
+      llm: llmOf({ models: ['gpt-6.1-sol'] }),
+      fetcher: catalogFetcher(listing).fetcher,
+      clientVersion: async () => versionOf(),
+      choose: async () => 'no',
+      wait: async () => undefined,
+    })
+    await runCodexCommand('models refresh', h.deps)
+    expect(h.text()).toContain('remote catalogue 2 models')
+    expect(h.text()).toContain('add       gpt-6.1-terra')
+    expect(h.text()).toContain('omitted   ultra')
+    expect(h.text()).toContain('left unchanged')
+    expect(settings.mutate).not.toHaveBeenCalled()
+  })
+
+  it('writes the explicit list after confirmation and reports the new model', async () => {
+    const { store, settings } = signedIn()
+    let applied = false
+    const mutate = settings.service.mutate
+    settings.service.mutate = async (ns, ops, revision) => {
+      await mutate(ns, ops, revision)
+      applied = true
+    }
+    const llm = {
+      listProviders: () => [{ id: 'openai-codex' }],
+      listModels: async () => (applied ? ['gpt-6.1-sol', 'gpt-6.1-terra'] : ['gpt-6.1-sol'])
+        .map(id => ({ id, name: id })),
+    }
+    const h = commandDeps({
+      credentials: store,
+      settings: settings.service,
+      llm,
+      fetcher: catalogFetcher(listing).fetcher,
+      clientVersion: async () => versionOf(),
+      choose: async () => 'yes',
+      wait: async () => undefined,
+    })
+    await runCodexCommand('models refresh', h.deps)
+    const saved = settings.value().providers as Record<string, Record<string, unknown>>
+    expect((saved['openai-codex']?.models as Array<{ id: string }>).map(model => model.id))
+      .toEqual(['gpt-6.1-sol', 'gpt-6.1-terra'])
+    expect(h.text()).toContain('2 models registered')
+    expect(h.text()).toContain('Added gpt-6.1-terra')
+  })
+
+  it('writes the list when no model is new to the runtime', async () => {
+    const { store, settings } = signedIn()
+    const h = commandDeps({
+      credentials: store,
+      settings: settings.service,
+      llm: llmOf({ models: ['gpt-6.1-sol', 'gpt-6.1-terra'] }),
+      fetcher: catalogFetcher(listing).fetcher,
+      clientVersion: async () => versionOf(),
+      choose: async () => 'yes',
+      wait: async () => undefined,
+    })
+    await runCodexCommand('models refresh', h.deps)
+    expect(settings.mutate).toHaveBeenCalled()
+    expect(h.text()).toContain('No new model was available')
+  })
+
+  it('reports that nothing is missing without writing', async () => {
+    const settings = settingsOf({ providers: { 'openai-codex': { models: [{ id: 'gpt-6.1-sol' }, { id: 'gpt-6.1-terra' }] } } })
+    const h = commandDeps({
+      credentials: storeOf(grant()).store,
+      settings: settings.service,
+      llm: llmOf({ models: ['gpt-6.1-sol', 'gpt-6.1-terra'] }),
+      fetcher: catalogFetcher(listing).fetcher,
+      clientVersion: async () => versionOf(),
+      choose: async () => 'yes',
+      wait: async () => undefined,
+    })
+    await runCodexCommand('models refresh', h.deps)
+    expect(h.text()).toContain('no models to add')
+    expect(settings.mutate).not.toHaveBeenCalled()
+  })
+
+  it('refuses to merge a list it cannot read', async () => {
+    const settings = settingsOf({ providers: { 'openai-codex': { models: { id: 'gpt-6.1-sol' } } } })
+    const h = commandDeps({
+      credentials: storeOf(grant()).store,
+      settings: settings.service,
+      llm: llmOf(),
+      fetcher: catalogFetcher(listing).fetcher,
+      clientVersion: async () => versionOf(),
+      choose: async () => 'yes',
+      wait: async () => undefined,
+    })
+    await runCodexCommand('models refresh', h.deps)
+    expect(h.text()).toContain('cannot be safely merged')
+    expect(settings.mutate).not.toHaveBeenCalled()
+  })
+
+  it('reports a saved list whose registration never confirmed', async () => {
+    const { store, settings } = signedIn()
+    const h = commandDeps({
+      credentials: store,
+      settings: settings.service,
+      llm: llmOf({ models: ['gpt-6.1-sol'] }),
+      fetcher: catalogFetcher(listing).fetcher,
+      clientVersion: async () => versionOf(),
+      choose: async () => 'yes',
+      wait: async () => undefined,
+    })
+    await runCodexCommand('models refresh', h.deps)
+    expect(settings.mutate).toHaveBeenCalled()
+    expect(h.text()).toContain('not confirmed')
+  })
+
+  it('prints usage for an unknown models argument without fetching', async () => {
+    const catalogue = catalogFetcher(listing)
+    const h = commandDeps({ credentials: storeOf(grant()).store, fetcher: catalogue.fetcher })
+    await runCodexCommand('models help', h.deps)
+    expect(h.text()).toContain('Usage: /codex')
+    expect(catalogue.calls).toHaveLength(0)
   })
 })

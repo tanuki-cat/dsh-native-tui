@@ -17,7 +17,19 @@ import {
   removeApiKeyEnvReference,
   removeCodexRoute,
   routeProfile,
+  waitForModels,
 } from '../codex/route.js'
+import {
+  DEFAULT_CODEX_MAX_OUTPUT_TOKENS,
+  fetchCodexCatalog,
+  planCatalogPatch,
+  resolveClientVersion,
+  type CatalogEntry,
+  type CatalogListing,
+  type CatalogPlan,
+  type CatalogReason,
+  type ClientVersion,
+} from '../codex/catalog.js'
 import {
   CODEX_KEY,
   CODEX_PROVIDER,
@@ -36,7 +48,7 @@ import {
   type UsageWindow,
   type UsageWindowReason,
 } from '../codex/usage.js'
-import type { SettingsAccess } from './settings-write.js'
+import { findSettingsNamespace, writeSettingsOps, type SettingsAccess } from './settings-write.js'
 import { redact } from '../codebuddy/errors.js'
 
 /** Everything the command needs from the terminal and the Host. */
@@ -58,16 +70,20 @@ export interface CodexCommandDeps {
   readonly fetcher?: typeof fetch
   /** Usage request budget in ms; defaults to 10s. */
   readonly timeoutMs?: number
+  /** Catalogue request budget in ms; defaults to 7s. */
+  readonly catalogTimeoutMs?: number
+  /** Resolves the version the catalogue request names; defaults to env, CLI probe, built-in. */
+  readonly clientVersion?: () => Promise<ClientVersion | { readonly error: 'version-invalid' }>
 }
 
 /** Short usage text for the command. */
 export const CODEX_USAGE = [
-  'Usage: /codex [status|setup|login [browser|device]|logout|models|help]',
+  'Usage: /codex [status|setup|login [browser|device]|logout|models [refresh]|help]',
   '  status   sign-in state, credential expiry, route, model count and usage',
   '  setup    ensure the openai-codex route without signing in',
   '  login    open the ChatGPT sign-in (browser or device code)',
   '  logout   remove the shared credential after confirmation',
-  '  models   list openai-codex models',
+  '  models   list openai-codex models; refresh fetches the account catalogue',
 ].join('\n')
 
 /** Human label for one account, without the token. */
@@ -413,8 +429,207 @@ async function logout(deps: CodexCommandDeps): Promise<void> {
   }
 }
 
-/** `/codex models`. */
-async function models(deps: CodexCommandDeps): Promise<void> {
+/** One line describing a remote entry's declared capacities. */
+function capacityText(entry: CatalogEntry): string {
+  const output = entry.maxTokens === undefined
+    ? String(DEFAULT_CODEX_MAX_OUTPUT_TOKENS) + ' out (default)'
+    : String(entry.maxTokens) + ' out'
+  return String(entry.contextWindow) + ' ctx · ' + output + ' · ' + entry.input.join('+')
+}
+
+/** Why the catalogue read failed. */
+function catalogReasonText(reason: CatalogReason): string {
+  switch (reason) {
+    case 'cancelled':
+      return 'the request was cancelled'
+    case 'credential-expired':
+      return 'the credential was rejected (401); run /codex login'
+    case 'permission-denied':
+      return 'this account cannot list models (403)'
+    case 'rate-limited':
+      return 'the catalogue service rate-limited the request (429)'
+    case 'network-error':
+      return 'the request failed'
+    case 'timeout':
+      return 'the request timed out'
+    case 'invalid-response':
+      return 'the service returned an unexpected response'
+  }
+}
+
+/** The preview lines one patch shows before it writes. */
+function previewLines(
+  version: ClientVersion,
+  listing: CatalogListing,
+  plan: CatalogPlan,
+  registered: number,
+): string[] {
+  const lines = [
+    'openai-codex: remote catalogue ' + String(listing.entries.length) + ' models · client_version '
+      + version.value + ' (' + version.source + ')',
+    '  current   ' + String(plan.preserved.length) + ' explicit · ' + String(registered) + ' registered',
+  ]
+  for (const entry of plan.entries) lines.push('  add       ' + entry.id + '  ' + capacityText(entry))
+  const rich = new Set(plan.entries.map(entry => entry.id))
+  for (const id of plan.added) {
+    if (!rich.has(id)) lines.push('  add       ' + id + '  (registered, not listed)')
+  }
+  if (plan.limited.length > 0) {
+    const levels = [...new Set(plan.limited.flatMap(item => item.omitted))].sort().join('/')
+    lines.push('  omitted   ' + levels + '  (' + String(plan.limited.length) + ' models; this Host cannot express them)')
+  }
+  if (plan.unlisted.length > 0) lines.push('  unlisted  ' + plan.unlisted.join(', '))
+  if (plan.unsupported > 0) lines.push('  skipped   ' + String(plan.unsupported) + ' unreadable entries')
+  return lines
+}
+
+/** The models the runtime currently registers, or none when the catalogue fails. */
+async function registeredModels(llm: ModelCatalog | undefined): Promise<readonly { readonly id: string }[]> {
+  if (llm === undefined) return []
+  try {
+    return await llm.listModels(CODEX_PROVIDER)
+  }
+  catch {
+    return []
+  }
+}
+
+/**
+ * `/codex models refresh`: read the account catalogue, preview the patch, write
+ * it only after confirmation, then confirm the registration.
+ * @param deps - Host seams and terminal interaction helpers.
+ */
+async function refreshModels(deps: CodexCommandDeps): Promise<void> {
+  const settings = deps.settings
+  if (settings === undefined) {
+    deps.notice('warning', 'The settings service is unavailable in this profile.')
+    return
+  }
+  if (deps.credentials === undefined) {
+    deps.notice('warning', 'The credential store is unavailable in this profile.')
+    return
+  }
+  // Local refusals are decided before the network: a route that cannot take the
+  // patch must not cost a request to discover.
+  const profile = routeProfile(settings)
+  switch (profile.kind) {
+    case 'unavailable':
+      deps.notice('warning', 'The llm-pi-ai settings namespace is unavailable.')
+      return
+    case 'missing':
+      deps.notice('warning', 'Route openai-codex is missing — run /codex setup.')
+      return
+    case 'blocked':
+      deps.notice('warning', 'Route openai-codex names credential reference ' + String(profile.apiKeyEnv)
+        + '; OAuth is not used. Run /codex setup to remove it first.')
+      return
+    case 'present':
+      break
+  }
+  if (settings.writable === false) {
+    deps.notice('warning', 'Model settings are read-only; the catalogue was not changed.')
+    return
+  }
+  const state = credentialState(await deps.credentials.readRecord(CODEX_KEY), deps.now?.() ?? Date.now())
+  if (state.kind === 'absent' || state.kind === 'incomplete') {
+    deps.notice('warning', 'openai-codex: not signed in — run /codex login')
+    return
+  }
+  if (state.kind === 'expired' || state.kind === 'expired-refreshable') {
+    deps.notice('warning', 'openai-codex: cannot read the catalogue — the credential expired; pi-ai refreshes it'
+      + ' on the next request. Send one message or run /codex login, then retry.')
+    return
+  }
+  const access = state.grant.access
+  if (access === undefined || access === '') {
+    deps.notice('warning', 'openai-codex: not signed in — run /codex login')
+    return
+  }
+  const accountId = readCodexAccount(state.grant)?.accountId
+  if (accountId === undefined) {
+    deps.notice('warning', 'Codex: the stored credential carries no account id — run /codex login again.')
+    return
+  }
+  const version = await (deps.clientVersion ?? resolveClientVersion)()
+  if ('error' in version) {
+    deps.notice('warning', 'DSH_CODEX_CLIENT_VERSION must be a semantic version such as 0.165.0.')
+    return
+  }
+  const listing = await fetchCodexCatalog({
+    access,
+    accountId,
+    clientVersion: version.value,
+    signal: deps.signal,
+    ...(deps.fetcher === undefined ? {} : { fetcher: deps.fetcher }),
+    ...(deps.catalogTimeoutMs === undefined ? {} : { timeoutMs: deps.catalogTimeoutMs }),
+  })
+  if (listing.kind === 'unavailable') {
+    if (listing.reason === 'cancelled') return
+    deps.notice('warning', 'openai-codex: cannot read the catalogue — ' + catalogReasonText(listing.reason) + '.')
+    return
+  }
+  const native = await registeredModels(deps.llm)
+  const plan = planCatalogPatch(profile.value?.models, native, listing)
+  if ('error' in plan) {
+    deps.notice('warning', 'Existing model configuration cannot be safely merged; check /settings edit llm-pi-ai.')
+    return
+  }
+  const preview = previewLines(version, listing, plan, native.length)
+  if (plan.added.length === 0) {
+    deps.notice('info', preview.concat(['  no models to add; the listing matches the registered catalogue.']).join('\n'))
+    return
+  }
+  deps.notice('info', preview.join('\n'))
+  if (!await confirm(
+    deps,
+    'Write the explicit model list (' + String(plan.proposed.length) + ' entries, ' + String(plan.added.length) + ' added)?',
+    'Write models',
+    'Replaces providers.openai-codex.models; existing entries keep their settings',
+  )) {
+    deps.notice('info', 'Model settings left unchanged.')
+    return
+  }
+  const namespace = findSettingsNamespace(settings, 'llm-pi-ai')
+  if (namespace === undefined) {
+    deps.notice('warning', 'The llm-pi-ai settings namespace disappeared before writing.')
+    return
+  }
+  try {
+    await writeSettingsOps(settings, 'llm-pi-ai', [
+      { op: 'set', path: ['providers', CODEX_PROVIDER, 'models'], value: plan.proposed },
+    ], namespace.revision)
+  }
+  catch (error) {
+    deps.notice('error', 'Could not save the model list — ' + redact(error instanceof Error ? error.message : String(error)))
+    return
+  }
+  if (plan.newlyAvailable.length > 0 && !await waitForModels(deps.llm, plan.newlyAvailable, { wait: deps.wait })) {
+    deps.notice('warning', 'Saved the model list, but registration was not confirmed within 5s; run /reload and check /codex models.')
+    return
+  }
+  const counted = await countCodexModels(deps.llm)
+  if (counted.error !== undefined) {
+    deps.notice('warning', 'Saved the model list, but the catalogue is unavailable: ' + counted.error)
+    return
+  }
+  deps.notice('info', 'openai-codex: ' + String(counted.count) + ' models registered. '
+    + (plan.newlyAvailable.length === 0 ? 'No new model was available.' : 'Added ' + plan.newlyAvailable.join(', ') + '.'))
+}
+
+/**
+ * `/codex models`: list what is registered, or refresh from the account catalogue.
+ * @param deps - Host seams and terminal interaction helpers.
+ * @param action - the word after `models`, if any.
+ */
+async function models(deps: CodexCommandDeps, action: string): Promise<void> {
+  if (action === 'refresh') {
+    await refreshModels(deps)
+    return
+  }
+  if (action !== '') {
+    deps.notice('info', CODEX_USAGE)
+    return
+  }
   if (deps.llm === undefined) {
     deps.notice('warning', 'The LLM catalogue service is unavailable.')
     return
@@ -479,7 +694,7 @@ async function dispatch(args: string, deps: CodexCommandDeps): Promise<void> {
       await logout(deps)
       return
     case 'models':
-      await models(deps)
+      await models(deps, rest[0]?.toLowerCase() ?? '')
       return
     case 'help':
       deps.notice('info', CODEX_USAGE)

@@ -92,6 +92,39 @@ export async function waitForProvider(llm: ModelCatalog | undefined, options: Ro
 }
 
 /**
+ * Wait for the adapter to list every expected model.
+ *
+ * A failed read counts as a miss rather than a success: the caller is about to
+ * report that the write took effect, so only an observed listing qualifies.
+ * @param llm - LLM catalogue, when mounted.
+ * @param ids - model ids the write should have registered.
+ * @param options - probe bounds; defaults to 200ms × 25 (5s).
+ * @returns true once every id is listed.
+ */
+export async function waitForModels(
+  llm: ModelCatalog | undefined,
+  ids: readonly string[],
+  options: RouteOptions = {},
+): Promise<boolean> {
+  if (ids.length === 0) return true
+  if (llm === undefined) return false
+  const attempts = Math.max(1, options.attempts ?? 25)
+  const intervalMs = options.intervalMs ?? 200
+  const wait = options.wait ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)))
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const listed = new Set((await llm.listModels(CODEX_PROVIDER)).map(model => model.id))
+      if (ids.every(id => listed.has(id))) return true
+    }
+    catch {
+      // A catalogue that cannot be read has not confirmed the registration.
+    }
+    if (attempt < attempts - 1) await wait(intervalMs)
+  }
+  return false
+}
+
+/**
  * Ensure the Codex route exists and is registered.
  *
  * A route that already exists is never rewritten, even when it carries an

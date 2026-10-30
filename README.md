@@ -182,7 +182,7 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 | `/model [provider/model]` | 打开可搜索的模型列表或直接切换；选择同时保存为默认模型 |
 | `/reasoning [effort\|default\|map]` | 列出或切换思考强度并保存；`default` 清除显式 effort；`map` 引导编辑 level → wire 映射 |
 | `/provider [add\|list\|edit [route]\|models <route>\|input [provider/model]\|remove <route>]` | 配置或查看 provider；刷新模型目录；编辑输入模态；删除 route |
-| `/codex [status\|setup\|login [browser\|device]\|logout\|models\|help]` | ChatGPT Codex 登录、路由与额度 |
+| `/codex [status\|setup\|login [browser\|device]\|logout\|models [refresh]\|help]` | ChatGPT Codex 登录、路由、模型目录与额度 |
 | `/codebuddy [status\|login [cn\|en\|all]\|logout [cn\|en\|all]\|models [refresh]\|quota\|checkin\|prompt [show\|reset]\|doctor]` | CodeBuddy / WorkBuddy 账号与模型 |
 | `/mode [manual\|accept-edits\|plan\|auto\|off]` | 打开模式选择器或切换当前会话模式 |
 | `/permissions [preset]`、`/permission [preset]` | 打开原生 DSH 权限选择器或直接切换 permission preset；`/mode` 单独选择交互模式 |
@@ -378,8 +378,10 @@ dsh --profile tui
 | `/codex login [browser\|device]` | 走 OAuth；成功后自动补建路由 |
 | `/codex logout` | 确认后取消进行中的登录、删除凭据并回读确认 |
 | `/codex models` | 列出 `openai-codex` 可用模型 |
+| `/codex models refresh` | 从账号目录拉取全量模型，预览缺失项后写入显式列表（未登录、过期、网络失败都不写入） |
 
 - 路由的 `models: []` 表示使用 pi-ai 原生目录，不覆盖模型列表。
+- `/codex models refresh` 写入的是**显式列表**：之后 pi-ai 新增的模型不会再自动出现，需要再次 refresh。宿主无法表达 `ultra` 推理等级，预览会把它单列为被省略的等级。
 - 凭据由 pi-ai 经 DSH 凭据 seam 写入共享的 `~/.dsh/.credentials.yaml`，key 为 `llm-pi-ai/openai-codex`，**跨 profile 共享**：登出会影响其他 profile。
 - 若路由配置了 `apiKeyEnv`，OAuth 会静默失效；`setup` 会检测并拒绝这种冲突。
 - 登录方式：`browser` 监听 `localhost:1455` 接回调；端口被 Codex CLI 占用时回退为粘贴回调 URL，也可手动粘贴授权码。`device` 走 device code（有效期 15 分钟）。
