@@ -39,6 +39,12 @@ dsh plugin --profile tui add /absolute/path/to/dsh-native-tui
 | `--pack` | 先打包，再移除旧安装并安装独立副本（版本号未变也会装新内容） |
 | `--command <name>` | 自定义生成的启动命令名 |
 
+`pnpm` 版本：脚本默认让 pnpm 使用**已安装的版本**，跳过 `package.json` 中 `packageManager: pnpm@12.14.0` 的自动下载。原因见下节。需要严格使用锁定版本时，设 `DSH_NATIVE_TUI_STRICT_PNPM_VERSION=1`。
+
+> 为什么跳过版本自举：pnpm 12 会先把锁定版本下载到 `~/Library/pnpm/package-manager-store` 再执行。该下载在只读 home、沙箱或 store 中只存有旧版原生二进制时会失败，报 `no @pnpm/exe.darwin-arm64 native binary was found for this host`，看起来像 lockfile 损坏，实际是 CLI 自身无法就位。依赖图来自 `pnpm-lock.yaml`，`packageManager` 只决定 CLI 版本，因此用已安装的 pnpm 是安全的。脚本执行前还会探测一次 `pnpm --version`，失败时给出明确修复提示而不是把 pnpm 的原始报错直接抛给用户。
+
+`--pack` 会在打包前清空 `.tmp/*.tgz`，并校验 `pnpm pack` 的产物确实落在 `.tmp` 内，避免装到旧包或检出的根目录遗留 tgz。
+
 安装成功后脚本在 `$XDG_BIN_HOME`（未设置时为 `~/.local/bin`）写入启动命令：`tui` profile 为 `dnt`，其他 profile 为 `dnt-<profile>`，等价于 `dsh --profile <profile>` 且原样透传参数。
 
 直接用 `dsh plugin add` 安装时，插件会在默认 DSH home 下首次启动补建同样的命令。以下情况不自动创建：`DSH_HOME` 不是默认的 `~/.dsh`（测试/探针/自定义 home），或设置了 `DSH_NATIVE_TUI_NO_LAUNCHER=1`。目标文件已存在且不带 `dsh-native-tui launcher` 标记时不会覆盖。

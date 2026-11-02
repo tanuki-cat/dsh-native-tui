@@ -28,6 +28,10 @@ Environment:
   DSH_HOME              DSH home used by dsh (dsh's own default when unset)
   DSH_NATIVE_TUI_NO_LAUNCHER=1
                         skip the launcher command
+  DSH_NATIVE_TUI_STRICT_PNPM_VERSION=1
+                        let pnpm provision the package.json-pinned version
+                        instead of using the installed one; needed only when
+                        the pinned version must be exact
 
 Examples:
   scripts/install.sh
@@ -76,6 +80,32 @@ done
 [[ -n "$profile" ]] || die "profile must not be empty"
 command -v pnpm >/dev/null 2>&1 || die "pnpm is required (https://pnpm.io)"
 command -v dsh >/dev/null 2>&1 || die "dsh is required but was not found on PATH"
+
+# pnpm 12 mirrors the `packageManager` version into its own store under
+# ~/Library/pnpm (macOS) before running anything. When that download cannot
+# happen — read-only home, sandbox, or a store that only holds an older
+# native binary — the failure surfaces as "no @pnpm/exe.<platform> native
+# binary was found for this host", which reads like a broken lockfile. The
+# pinned version only decides the CLI; the dependency graph comes from
+# pnpm-lock.yaml, so running the installed pnpm is safe and keeps this script
+# working wherever pnpm itself already works.
+if [[ "${DSH_NATIVE_TUI_STRICT_PNPM_VERSION:-}" != "1" ]]; then
+  export npm_config_manage_package_manager_versions=false
+fi
+
+# pnpm reports a failed provision on stderr and then falls back to the
+# installed CLI with exit status 0, so neither the exit code nor the version
+# line alone can detect it.
+pnpm_probe="$(pnpm --version 2>&1)" || true
+pnpm_version="$(printf '%s\n' "$pnpm_probe" | tail -n 1)"
+if [[ ! "$pnpm_version" =~ ^[0-9]+\.[0-9]+ ]]; then
+  die "pnpm is installed but cannot run: $pnpm_probe"
+fi
+if printf '%s' "$pnpm_probe" | grep -q 'Cannot use the pnpm version this project pins'; then
+  echo "install: warning: the pnpm version pinned by package.json could not be provisioned;" \
+       "using pnpm $pnpm_version instead. Make \$HOME writable for pnpm to use the pinned version." >&2
+fi
+
 if [[ "${DSH_NATIVE_TUI_NO_LAUNCHER:-}" == '1' ]]; then
   install_command=0
 fi
@@ -123,10 +153,26 @@ fi
 
 if [[ "$mode" == 'pack' ]]; then
   mkdir -p .tmp
+  # A tarball left by an earlier run would otherwise be picked up by a
+  # "which one did I just build" check, and installing a stale build is hard
+  # to notice. nullglob keeps the glob from expanding to a literal name when
+  # .tmp holds no tarball yet.
+  shopt -s nullglob
+  stale=(.tmp/*.tgz)
+  shopt -u nullglob
+  ((${#stale[@]} == 0)) || rm -f "${stale[@]}"
   echo "==> pnpm pack"
   pack_json="$(pnpm pack --pack-destination .tmp --json)"
   target="$(printf '%s' "$pack_json" | node -e 'let s = ""; process.stdin.on("data", d => { s += d }); process.stdin.on("end", () => { try { process.stdout.write(JSON.parse(s).filename ?? "") } catch {} })')"
   [[ -n "$target" ]] || die "could not read the packed tarball path from pnpm pack"
+  [[ -f "$target" ]] || die "pnpm pack reported $target but no such file exists"
+  # pnpm returns an absolute path for --pack-destination; a build that ends up
+  # next to the checkout instead would make "which tarball is installed"
+  # ambiguous, so keep the install pinned to the .tmp copy.
+  case "$target" in
+    "$repo_root"/.tmp/*) ;;
+    *) die "pnpm packed outside .tmp ($target); remove stale tarballs and retry" ;;
+  esac
   # pnpm skips resolution when the profile lockfile already pins the same
   # tarball path and version, so a rebuilt tarball would otherwise stay stale.
   if dsh plugin --profile "$profile" remove dsh-native-tui >/dev/null 2>&1; then

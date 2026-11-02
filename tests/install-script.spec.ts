@@ -40,6 +40,16 @@ function fixture(): InstallerFixture {
     writeFileSync(path, `#!/bin/sh\nprintf '%s\\n' "${name} $*" >> "${log}"\n`)
     chmodSync(path, 0o755)
   }
+  // install.sh probes the CLI before using it, so the stub must answer the
+  // way a working pnpm does instead of printing nothing.
+  writeFileSync(join(bin, 'pnpm'), [
+    '#!/bin/sh',
+    `printf '%s\\n' "pnpm $*" >> "${log}"`,
+    'if [ "$1" = "--version" ]; then echo "12.14.0"; fi',
+    'exit 0',
+    '',
+  ].join('\n'))
+  chmodSync(join(bin, 'pnpm'), 0o755)
 
   const runWith = (extra: NodeJS.ProcessEnv, ...args: string[]): SpawnSyncReturns<string> => {
     const env: NodeJS.ProcessEnv = {
@@ -118,5 +128,41 @@ describe('scripts/install.sh launcher', () => {
     expect(f.run().status).toBe(0)
     expect(f.run('--profile', 'work', '--command', 'dnt').status).toBe(0)
     expect(readFileSync(f.launcher, 'utf8')).toContain("exec dsh --profile 'work'")
+  })
+})
+
+describe('scripts/install.sh pnpm handling', () => {
+  /** Replace the pnpm stub with one that behaves like a given scenario. */
+  function stubPnpm(f: InstallerFixture, body: string): void {
+    const path = join(f.root, 'bin', 'pnpm')
+    writeFileSync(path, '#!/bin/sh\nprintf \'%s\\n\' "pnpm $*" >> "' + f.log + '"\n' + body + '\nexit 0\n')
+    chmodSync(path, 0o755)
+  }
+
+  it('fails with a readable message when pnpm cannot run at all', () => {
+    const f = fixture()
+    stubPnpm(f, 'echo "no native binary was found for this host" >&2; exit 0')
+    const result = f.run()
+    expect(result.status).not.toBe(0)
+    expect(result.stderr).toContain('pnpm is installed but cannot run')
+    expect(result.stderr).toContain('native binary')
+  })
+
+  it('warns instead of failing when the pinned pnpm version cannot be provisioned', () => {
+    const f = fixture()
+    stubPnpm(f, 'echo "[WARN] Cannot use the pnpm version this project pins" >&2; echo 12.16.1')
+    const result = f.run()
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stderr).toContain('could not be provisioned')
+    expect(result.stderr).toContain('12.16.1')
+  })
+
+  it('disables pnpm version self-management by default', () => {
+    const f = fixture()
+    stubPnpm(f, 'echo 12.14.0')
+    const result = f.run()
+    expect(result.status, result.stderr).toBe(0)
+    const script = readFileSync(join(f.root, 'repo', 'scripts', 'install.sh'), 'utf8')
+    expect(script).toContain('npm_config_manage_package_manager_versions=false')
   })
 })
