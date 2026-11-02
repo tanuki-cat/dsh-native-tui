@@ -486,6 +486,7 @@ dsh --profile tui
 ~~~text
 /mcp list
 /mcp add
+/mcp reload [name]
 /mcp remove <name>
 ~~~
 
@@ -496,7 +497,16 @@ dsh --profile tui
 
 配置写入 profile 的 `mcp-manager.servers`。mcp-manager 把每个条目映射为官方 `mcp-client` Loader row，并在 Loader fiber 激活后记录状态；settings 变更会实时 reconcile 这组 row，因此新增、修改、删除服务都无需重启 TUI。
 
-`/mcp list` 每行显示 `connected` / `starting` / `error: ...` / `disconnected: ...` / `not loaded`。mcp-manager 使用 `failOnStartupError` 并 await fiber，初始连接失败会显示错误而不是静默成功。运行中 mcp-client 会自行重连：重连期间其工具保持注册，状态仍为 `connected`；一旦重连耗尽或禁用重连，mcp-client 注销该服务的工具，mcp-manager 通过 `tools/change` 观测到后标记 `disconnected`。
+`/mcp list` 每行显示 `connected` / `starting` / `error: ...` / `disconnected: ...` / `not loaded`。mcp-manager 使用 `failOnStartupError` 并 await fiber，初始连接失败会显示错误而不是静默成功。
+
+mcp-manager 自己拥有断线判定与重建，因为 mcp-client 只通过传输 close 信号发现断线，而 Streamable HTTP 传输在服务端重启后不会发出该信号——工具一直保持注册，每次调用都以连接错误失败。因此：
+
+- **工具调用是健康信号**：某次调用以连接类错误失败即标记 `disconnected` 并自动重建该服务的 row；调用成功则清除退避预算。判定以 SDK 的 `ConnectionClosed` 错误码为准，其次才匹配 `Connection closed`、`server is disconnected`、`fetch failed`、`socket hang up`、`ECONNRESET` 等传输层固定文案；工具自身输出里出现 `terminated`、`not connected` 之类的业务措辞不会被当成断线。
+- **工具注销仍会被识别**：mcp-client 放弃重连后注销工具，manager 通过 `tools/change` 观测到并同样进入重建。
+- **已判定故障的服务不会被 `tools/change` 翻回 `connected`**：故障 row 在重建前一直保留旧的工具注册，只有调用成功或重建成功才清除故障标记。这条保证任何一次不相关的工具注册变化都不会把断开的服务显示成已连接。
+- **重建使用 500 ms 起、上限 30 s、最多 5 次的指数退避**；用尽后状态停在 `disconnected` 并提示 `/mcp reload <name>`。正常重启场景下首次重试即恢复（约 500 ms）。
+
+`/mcp reload [name]` 是手动重建入口：不带参数重建全部服务，带参数只重建一个，并立即显示重建后的状态。它和自动重建走同一条 Loader 路径，但**总是把退避预算重置为 0**，因此是退避耗尽后唯一的恢复方式。重建以当前 settings 快照为准且只读，不会改写 `mcp-manager.servers`；对未配置的服务名会直接报错而不是静默忽略。
 
 新增或修改配置后 mcp-manager 立即装载（`/mcp list` 会短暂显示 `not loaded` / `starting`），无需重启。MCP tools 以 `mcp__<serverName>__<toolName>` 暴露。
 

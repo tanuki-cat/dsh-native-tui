@@ -81,7 +81,39 @@ export async function mcpCommand(ctx: CommandContext, args: string): Promise<voi
     return
   }
 
-  ctx.notice('warning', 'Usage: /mcp [add | list | remove <name>]')
+  if (args === 'reload' || args.startsWith('reload ')) {
+    const name = args.slice('reload'.length).trim()
+    if (name !== '' && !Object.hasOwn(servers, name)) {
+      ctx.notice('warning', 'No configured MCP server "' + name + '".')
+      return
+    }
+    if (mcpStatus === undefined) {
+      ctx.notice('warning', 'The MCP manager is unavailable; enable the dsh-mcp-client integration first.')
+      return
+    }
+    const targets = name === '' ? Object.keys(servers) : [name]
+    if (targets.length === 0) {
+      ctx.notice('info', 'No MCP servers configured. Use /mcp add.')
+      return
+    }
+    ctx.notice('info', 'Reloading MCP ' + (targets.length === 1 ? targets[0] : targets.length + ' servers') + '…')
+    for (const target of targets) {
+      try {
+        await mcpStatus.reload(target)
+      }
+      catch (error) {
+        ctx.notice('error', 'Could not reload MCP server ' + target + ': ' + errorMessage(error))
+        continue
+      }
+      const state = mcpStatus.snapshot()[target]
+      const tone = state?.status === 'connected' ? 'info' : 'warning'
+      ctx.notice(tone, 'MCP server ' + target + ' reloaded: ' + (state?.status ?? 'not loaded')
+        + (state?.error === undefined ? '' : ' · ' + state.error))
+    }
+    return
+  }
+
+  ctx.notice('warning', 'Usage: /mcp [add | list | reload [name] | remove <name>]')
 }
 
 /** Walk the interactive `/mcp add` flow and write the server row. */

@@ -209,6 +209,12 @@ export interface WorkspaceChangesService {
 /** The MCP manager's live connection snapshot. */
 export interface McpManagerStatus {
   snapshot(): Record<string, { readonly status: 'starting' | 'connected' | 'disconnected' | 'error'; readonly error?: string }>
+  /**
+   * Rebuild one server's client row from the stored configuration. This is the
+   * manual reconnect path for a server whose automatic budget is exhausted.
+   * @param serverName - configured server to rebuild.
+   */
+  reload(serverName: string): Promise<void>
 }
 
 /** Per-session projection reads. */

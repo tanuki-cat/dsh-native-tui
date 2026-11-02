@@ -116,7 +116,62 @@ describe('command handler argument paths', () => {
   it('prints the /mcp usage for an unknown subcommand', async () => {
     const ctx = contextOf({ settings })
     await mcpCommand(ctx, 'nonsense')
-    expect(allText(ctx)).toContain('Usage: /mcp [add | list | remove <name>]')
+    expect(allText(ctx)).toContain('Usage: /mcp [add | list | reload [name] | remove <name>]')
+  })
+
+  it('reloads every configured MCP server through /mcp reload', async () => {
+    const reloaded: string[] = []
+    const ctx = contextOf({
+      settings: {
+        describe: () => [{ ns: 'mcp-manager', value: { servers: { idea: {}, demo: {} } }, schema: {}, revision: 1 }],
+        update: async () => undefined,
+        mutate: async () => undefined,
+      },
+      mcpManagerStatus: {
+        reload: async (name: string) => { reloaded.push(name) },
+        snapshot: () => ({ idea: { status: 'connected' }, demo: { status: 'connected' } }),
+      },
+    })
+    await mcpCommand(ctx, 'reload')
+    expect(reloaded).toEqual(['idea', 'demo'])
+    expect(allText(ctx)).toContain('MCP server idea reloaded: connected')
+    expect(allText(ctx)).toContain('MCP server demo reloaded: connected')
+  })
+
+  it('reloads one named MCP server and reports its failure state', async () => {
+    const reloaded: string[] = []
+    const ctx = contextOf({
+      settings: {
+        describe: () => [{ ns: 'mcp-manager', value: { servers: { idea: {} } }, schema: {}, revision: 1 }],
+        update: async () => undefined,
+        mutate: async () => undefined,
+      },
+      mcpManagerStatus: {
+        reload: async (name: string) => { reloaded.push(name) },
+        snapshot: () => ({ idea: { status: 'error', error: 'connection refused' } }),
+      },
+    })
+    await mcpCommand(ctx, 'reload idea')
+    expect(reloaded).toEqual(['idea'])
+    expect(allText(ctx)).toContain('MCP server idea reloaded: error · connection refused')
+  })
+
+  it('refuses to reload an unconfigured MCP server', async () => {
+    const ctx = contextOf({ settings })
+    await mcpCommand(ctx, 'reload ghost')
+    expect(allText(ctx)).toContain('No configured MCP server "ghost".')
+  })
+
+  it('refuses to reload when the MCP manager is absent', async () => {
+    const ctx = contextOf({
+      settings: {
+        describe: () => [{ ns: 'mcp-manager', value: { servers: { idea: {} } }, schema: {}, revision: 1 }],
+        update: async () => undefined,
+        mutate: async () => undefined,
+      },
+    })
+    await mcpCommand(ctx, 'reload idea')
+    expect(allText(ctx)).toContain('The MCP manager is unavailable')
   })
 
   it('lists an empty MCP registry', async () => {
