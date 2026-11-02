@@ -9,6 +9,25 @@ function durable(type: string, data: unknown, seq: number): TranscriptEntry {
 }
 
 describe('reasoning colors', () => {
+  it('gives every selectable level a distinct color in both themes', () => {
+    // The status line renders "think <level>"; a level without a color silently
+    // renders dim, which reads as "this level has no visual state".
+    for (const theme of ['dark', 'light'] as const) {
+      const palette = createPalette(theme)
+      const levels = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+      const rendered = levels.map(level => palette.reasoning(level)('x'))
+      for (const [index, level] of levels.entries()) {
+        expect(rendered[index], theme + ' has no colour for ' + level).not.toBe(palette.dim('x'))
+      }
+      expect(new Set(rendered).size, theme + ' reuses a colour across levels').toBe(levels.length)
+    }
+  })
+
+  it('maps xhigh to a color between high and max', () => {
+    expect(createPalette('dark').reasoning('xhigh')('x')).toContain('38;5;212')
+    expect(createPalette('light').reasoning('xhigh')('x')).toContain('38;5;161')
+  })
+
   it('maps low, medium, high, and max to theme-aware colors', () => {
     const dark = createPalette('dark')
     expect(dark.reasoning('low')('x')).toContain('38;5;28')

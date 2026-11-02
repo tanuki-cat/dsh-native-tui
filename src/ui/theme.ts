@@ -1,5 +1,15 @@
 import type { EditorTheme, MarkdownTheme, SelectListTheme } from '@earendil-works/pi-tui'
 import type { Config } from '../config.js'
+import type { ProviderReasoningLevel } from '../runtime/providers.js'
+
+/**
+ * Colours for every selectable reasoning level.
+ *
+ * Typed as a full record rather than a partial map so adding a level to
+ * {@link ProviderReasoningLevel} without giving it a colour fails to compile
+ * instead of silently rendering in the dim default.
+ */
+type ReasoningCodes = Record<ProviderReasoningLevel, string>
 
 /** Semantic ANSI roles owned by the terminal front door. */
 export interface Palette {
@@ -78,11 +88,32 @@ export function createPalette(theme: Config['theme']): Palette {
   const dim = sgr('2', '22')
   // 256-color values stay readable on both surfaces: the light palette uses
   // deeper blue/pink/red where the dark palette can afford brighter hues.
-  const reasoningCodes: Record<string, string> = theme === 'light'
-    ? { low: '38;5;28', medium: '38;5;25', high: '38;5;162', max: '38;5;160' }
-    : { low: '38;5;28', medium: '38;5;117', high: '38;5;211', max: '38;5;196' }
+  // Every level in PROVIDER_REASONING_LEVELS needs an entry: a missing one
+  // silently falls back to dim, which reads as "this level has no colour".
+  const reasoningCodes: ReasoningCodes = theme === 'light'
+    ? {
+        off: '38;5;243',
+        minimal: '38;5;30',
+        low: '38;5;28',
+        medium: '38;5;25',
+        high: '38;5;162',
+        xhigh: '38;5;161',
+        max: '38;5;160',
+      }
+    : {
+        off: '38;5;245',
+        minimal: '38;5;37',
+        low: '38;5;28',
+        medium: '38;5;117',
+        high: '38;5;211',
+        xhigh: '38;5;212',
+        max: '38;5;196',
+      }
   const reasoning = (effort: string | undefined): ((text: string) => string) => {
-    const code = reasoningCodes[String(effort ?? '').toLowerCase()]
+    // The effort arrives as a wire label, so look it up as a plain string and
+    // fall back to dim for anything the ladder does not define.
+    const key = String(effort ?? '').toLowerCase() as ProviderReasoningLevel
+    const code = Object.hasOwn(reasoningCodes, key) ? reasoningCodes[key] : undefined
     return code === undefined ? dim : sgr(code, '39')
   }
   const warning = sgr('33', '39')
