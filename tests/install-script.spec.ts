@@ -132,6 +132,17 @@ describe('scripts/install.sh launcher', () => {
 })
 
 describe('scripts/install.sh pnpm handling', () => {
+  it('exempts every locked official package version from the release-age gate', () => {
+    const lockfile = readFileSync(join(repoRoot, 'pnpm-lock.yaml'), 'utf8')
+    const workspace = readFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'utf8')
+    const officialPackages = new Set(
+      [...lockfile.matchAll(/^  '(@deepseek-ai\/[^'()]+)':$/gm)].map(match => match[1]!),
+    )
+    expect(officialPackages.size).toBeGreaterThan(0)
+    const missing = [...officialPackages].filter(dependency => !workspace.includes(`  - '${dependency}'`))
+    expect(missing).toEqual([])
+  })
+
   /** Replace the pnpm stub with one that behaves like a given scenario. */
   function stubPnpm(f: InstallerFixture, body: string): void {
     const path = join(f.root, 'bin', 'pnpm')
