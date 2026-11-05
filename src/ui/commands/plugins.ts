@@ -6,22 +6,20 @@
 
 import { showChoice } from '../dialogs.js'
 import type { CommandContext } from './context.js'
-import type { PluginChangeResult, PluginManagerService } from './services.js'
+import type { PluginManagerService } from './services.js'
+import { pluginChangeSuffix as changeSuffix, withPluginProgress } from './plugin-result.js'
 import { NL, errorMessage } from './shared.js'
-
-/** The trailing status for one plugin change. */
-function changeSuffix(result: PluginChangeResult): string {
-  if (result.error !== undefined) {
-    return ' · ' + result.error.code + (result.error.message === undefined ? '' : ' ' + result.error.message)
-  }
-  return ' · ' + result.application + (result.application === 'restart-required' ? ' · run /reload to apply' : '')
-}
+import { pluginUpdateCommand } from './plugin-update.js'
 
 /** The `/plugins` command. */
 export async function pluginsCommand(ctx: CommandContext, args: string): Promise<void> {
   const manager = ctx.host.get('pluginManager') as unknown as PluginManagerService | undefined
   if (manager === undefined) {
     ctx.notice('warning', 'The plugin manager is unavailable in this profile.')
+    return
+  }
+  if (args === 'versions' || args.startsWith('versions ') || args === 'update' || args.startsWith('update ')) {
+    await pluginUpdateCommand(ctx, manager, args)
     return
   }
   if (args === '') {
@@ -31,7 +29,7 @@ export async function pluginsCommand(ctx: CommandContext, args: string): Promise
         ctx.notice('info', 'No bundles reported.')
         return
       }
-      ctx.notice('info', 'Bundles (read-only; use dsh plugin or Web to change):' + NL + bundles.map(bundle => {
+      ctx.notice('info', 'Bundles:' + NL + bundles.map(bundle => {
         const state = bundle.enabled ? '[on] ' : '[off] '
         return state + bundle.name + (bundle.version === undefined ? '' : '  ' + bundle.version)
           + (bundle.installed ? '' : '  (not installed)')
@@ -135,7 +133,8 @@ export async function pluginsCommand(ctx: CommandContext, args: string): Promise
       )
       if (confirmed !== 'yes') return
       ctx.notice('info', 'Installing ' + label + '… pnpm may take a while.')
-      const result = await manager.installBundle(spec, { enabled: true })
+      if (ctx.signal.aborted || ctx.isCurrent?.() === false) return
+      const result = await withPluginProgress(ctx, manager, requestId => manager.installBundle(spec, { enabled: true, requestId }))
       ctx.notice(result.error === undefined ? 'info' : 'error', 'install ' + label + changeSuffix(result))
     } catch (error) {
       ctx.notice('error', 'Could not install ' + spec + ': ' + errorMessage(error))
@@ -207,12 +206,12 @@ export async function pluginsCommand(ctx: CommandContext, args: string): Promise
         ctx.signal,
       )
       if (confirmed !== 'yes') return
-      const result = await manager.setPluginEnabled(id, verb === 'enable')
+      const result = await manager.setPluginEnabled(row.entryId, verb === 'enable')
       ctx.notice(result.error === undefined ? 'info' : 'error', verb + ' ' + id + changeSuffix(result))
     } catch (error) {
       ctx.notice('error', 'Could not ' + verb + ' plugin: ' + errorMessage(error))
     }
     return
   }
-  ctx.notice('warning', 'Usage: /plugins [list | market [query] | inspect <spec> | install <spec> | remove <bundle> | enable <entryId> | disable <entryId>]')
+  ctx.notice('warning', 'Usage: /plugins [list | market [query] | inspect <spec> | install <spec> | remove <bundle> | versions <bundle> | update <bundle> [version] | enable <entryId> | disable <entryId>]')
 }

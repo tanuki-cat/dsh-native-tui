@@ -37,6 +37,8 @@ export interface Config {
    * image input and still read one.
    */
   models?: Record<string, ModelOverride>
+  /** Optional retained-image count bound; absent leaves only the existing byte budget. */
+  maxRequestImages?: number
   /**
    * System prompt template sent to both deployments.
    *
@@ -65,6 +67,8 @@ export interface Config {
  * see `CodeBuddyAdapter.modalitiesOf`.
  */
 export const Config = z.object({
+  maxRequestImages: z.number().step(1).min(1)
+    .description('Maximum retained image occurrences per CodeBuddy request. Unset keeps only the byte budget; older images are offloaded through the Host.'),
   models: z.dict(z.object({
     input: z.array(z.union(['text', 'image'] as const)),
   })).default({}),
@@ -139,6 +143,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     // a composition without it stays text-only and says so in the catalogue.
     resolveAttachments: () => ctx.get('attachments') as AttachmentImageService | undefined,
     ...(config.models === undefined ? {} : { models: config.models }),
+    ...(config.maxRequestImages === undefined ? {} : { maxRequestImages: config.maxRequestImages }),
     // Read the volatile reference per request so /codebuddy prompt applies
     // without remounting the plugin.
     systemPrompt: () => resolveVolatileValue(config.systemPrompt),

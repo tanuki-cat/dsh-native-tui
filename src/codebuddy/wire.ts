@@ -40,6 +40,8 @@ export interface WireImageReader {
 
 /** Image handling for one payload build. */
 export interface WireImageOptions {
+  /** Optional retained-image occurrence limit, independent of the byte budget. */
+  readonly maxRequestImages?: number
   /** Attachment reads; absent when this composition mounts no attachment service. */
   readonly reader?: WireImageReader
   /** Report one degraded image, so a missing reader or unreadable byte range is not silent. */
@@ -427,6 +429,7 @@ function sendingMessages(messages: readonly RequestMessage[]): readonly RequestM
 function assertImagesFit(
   messages: readonly RequestMessage[],
   prepared: ReadonlyMap<string, PreparedImage>,
+  maxImages?: number,
 ): void {
   // `requiredImageOffload` applies the base64 expansion itself for the base64
   // representation, so this returns the encoded bytes as measured, not their
@@ -435,13 +438,14 @@ function assertImagesFit(
     prepared.get(block.attachment.attachmentId)?.bytes ?? block.attachment.bytes
   const offloadImages = requiredImageOffload(
     messages,
-    { representation: 'base64', maxBytes: MAX_REQUEST_IMAGE_BYTES, countQuantum: IMAGE_OFFLOAD_COUNT_QUANTUM },
+    { representation: 'base64', maxBytes: MAX_REQUEST_IMAGE_BYTES, countQuantum: IMAGE_OFFLOAD_COUNT_QUANTUM,
+      ...maxImages === undefined ? {} : { maxImages } },
     bytesOf,
   )
   if (offloadImages > 0) {
     throw new LlmError(
       'CodeBuddy request images exceed the ' + String(MAX_REQUEST_IMAGE_BYTES)
-      + '-byte inline budget; ' + String(offloadImages) + ' more oldest occurrence(s) must be offloaded.',
+      + '-byte inline budget' + (maxImages === undefined ? '' : ' or ' + maxImages + '-image count budget') + '; ' + String(offloadImages) + ' more oldest occurrence(s) must be offloaded.',
       IMAGE_OFFLOAD_REQUIRED_CODE,
       { offloadImages },
     )
@@ -478,7 +482,7 @@ export async function buildChatPayload(
   for (const message of options.messages) assertImageRole(message)
   const sending = sendingMessages(options.messages)
   const prepared = await prepareImages(requestImageRefs(sending), scoped)
-  assertImagesFit(sending, prepared)
+  assertImagesFit(sending, prepared, images.maxRequestImages)
   const messages: WireMessage[] = []
   if (options.system !== undefined && options.system !== '') {
     messages.push({ role: 'system', content: options.system })

@@ -137,6 +137,8 @@ export interface CodeBuddyAdapterOptions {
    * 2026-10-19, `default` and `glm-5.0` declare no images and still read them.
    */
   models?: Readonly<Record<string, ModelOverride>>
+  /** Optional image occurrence budget for both routes. */
+  maxRequestImages?: number
   /**
    * Reads the system prompt template sent in place of the harness-composed
    * one. Called per request so a live settings edit applies to the next turn;
@@ -365,6 +367,7 @@ export class CodeBuddyAdapter extends LlmAdapter {
     const systemPrompt = this.config.systemPrompt?.()
     const payload = await buildChatPayload(options, profile, this.config.resolveFileText, {
       ...(attachments === undefined ? {} : { reader: attachments as WireImageReader }),
+      ...(this.config.maxRequestImages === undefined ? {} : { maxRequestImages: this.config.maxRequestImages }),
       onDiagnostic: message => this.config.onDiagnostic?.(profile.id + ': ' + message),
     }, systemPrompt === undefined || systemPrompt === '' ? {} : { systemPrompt })
     yield* streamChat({

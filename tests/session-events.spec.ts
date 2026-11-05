@@ -6,6 +6,7 @@ import type { WaitRetry } from '../src/ui/waiting.js'
 
 /** What one subscribed app observed, in call order. */
 interface Recorded {
+  readonly statuses: number
   readonly begins: number
   readonly retries: WaitRetry[]
   readonly ends: number
@@ -14,9 +15,9 @@ interface Recorded {
 }
 
 /** Wire the subscriber to a recording stub bus. */
-function harness(): { emit: (name: string, ...args: unknown[]) => void; seen: Recorded } {
+function harness(projections?: unknown): { emit: (name: string, ...args: unknown[]) => void; seen: Recorded; dispose: () => void } {
   const handlers = new Map<string, Array<(...args: unknown[]) => void>>()
-  const seen = { begins: 0, retries: [] as WaitRetry[], ends: 0, entries: [] as TranscriptEntry[], notices: [] as string[] }
+  const seen = { statuses: 0, begins: 0, retries: [] as WaitRetry[], ends: 0, entries: [] as TranscriptEntry[], notices: [] as string[] }
   const host: SessionEventsHost = {
     host: {
       on: (name: string, handler: (...args: unknown[]) => void) => {
@@ -25,14 +26,14 @@ function harness(): { emit: (name: string, ...args: unknown[]) => void; seen: Re
         handlers.set(name, list)
         return () => { handlers.set(name, list.filter(entry => entry !== handler)) }
       },
-      get: () => undefined,
+      get: (name: string) => name === 'sessionProjections' ? projections : undefined,
     } as unknown as Context,
     sessionId: () => 's1' as never,
     appendEntry: entry => { seen.entries.push(entry) },
     replaceEntries: update => { seen.entries.splice(0, seen.entries.length, ...update(seen.entries)) },
     notice: text => { seen.notices.push(text) },
     scheduleTranscript: () => {},
-    renderStatus: () => {},
+    renderStatus: () => { seen.statuses += 1 },
     beginAttempt: () => {},
     endAttempt: () => {},
     nextLiveSeq: () => 1,
@@ -41,9 +42,9 @@ function harness(): { emit: (name: string, ...args: unknown[]) => void; seen: Re
     retryScheduled: retry => { seen.retries.push(retry) },
     endWait: () => { seen.ends += 1 },
   }
-  subscribeSessionEvents(host)
+  const dispose = subscribeSessionEvents(host)
   return {
-    seen,
+    seen, dispose,
     emit: (name, ...args) => { for (const handler of handlers.get(name) ?? []) handler(...args) },
   }
 }

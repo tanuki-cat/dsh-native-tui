@@ -129,26 +129,6 @@ export interface WorkspaceService {
   unarchiveSession(sessionId: SessionId): Promise<void>
 }
 
-/** One reminder row. */
-export interface ScheduleRow {
-  readonly id: string
-  readonly kind: string
-  readonly title: string
-  readonly prompt: string
-  readonly scheduledAt: string
-}
-
-/** The schedule service. */
-export interface ScheduleService {
-  list(request: { sessionId: SessionId }): Promise<readonly ScheduleRow[]>
-  create(
-    sessionId: SessionId,
-    request: { title: string; prompt: string; after_seconds: number },
-    signal?: AbortSignal,
-  ): Promise<ScheduleRow>
-  delete(request: { sessionId: SessionId; id: string }, signal?: AbortSignal): Promise<unknown>
-}
-
 /** One plugin entry. */
 export interface PluginRow {
   readonly entryId: string
@@ -158,47 +138,12 @@ export interface PluginRow {
   readonly meta?: { readonly name?: string; readonly description?: string }
 }
 
-/** The outcome of one plugin enable/install/remove. */
-export interface PluginChangeResult {
-  readonly changed: boolean
-  readonly application: string
-  readonly target: string
-  readonly enabled?: boolean
-  readonly error?: { readonly code: string; readonly message?: string }
-}
+/** The native command surface follows the Host's versioned management types. */
+export type PluginChangeResult = import('@deepseek-ai/dsh-plugin-manager').ChangeResult
+export type PluginInspection = import('@deepseek-ai/dsh-plugin-manager').PluginSpecInspection
+export type PluginManagerService = Pick<import('@deepseek-ai/dsh-plugin-manager').PluginManager,
+  'listBundles' | 'listPlugins' | 'setPluginEnabled' | 'inspect' | 'installBundle' | 'removeBundle' | 'listVersions' | 'updateBundle' | 'cancelInstall'>
 
-/** The result of inspecting an installable plugin spec. */
-export interface PluginInspection {
-  readonly status: 'accepted' | 'refused'
-  readonly kind?: string
-  readonly name?: string
-  readonly version?: string
-  readonly description?: string
-  readonly bundle?: boolean | null
-  readonly problem?: string
-  readonly reason?: string
-}
-
-/** The plugin manager the `/plugins` handler drives. */
-export interface PluginManagerService {
-  listBundles(): Promise<readonly {
-    name: string
-    enabled: boolean
-    installed: boolean
-    removable?: boolean
-    official?: boolean
-    availability?: string
-    optional?: boolean
-    version?: string
-    description?: string
-    installTarget?: { readonly spec: string; readonly version: string }
-  }[]>
-  listPlugins(): Promise<readonly PluginRow[]>
-  setPluginEnabled(id: string, enabled: boolean): Promise<PluginChangeResult>
-  inspect(spec: string): Promise<PluginInspection>
-  installBundle(spec: string, options?: { enabled?: boolean }): Promise<PluginChangeResult>
-  removeBundle(name: string): Promise<PluginChangeResult>
-}
 
 /** The workspace-changes service behind `/changes` and `/diff`. */
 export interface WorkspaceChangesService {
@@ -219,6 +164,7 @@ export interface McpManagerStatus {
 
 /** Per-session projection reads. */
 export interface SessionProjectionsService {
+  onEventChanged(listener: (session: Session, changes: readonly { readonly key: string; readonly val: unknown }[], seq: number) => void): () => void
   snapshot(session: Session, keys?: readonly string[]): { readonly values: Readonly<Record<string, unknown>> }
 }
 

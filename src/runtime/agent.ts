@@ -74,14 +74,16 @@ export interface ContextPressureReader {
  * @param projections - live Session projections, or undefined when unmounted.
  * @param session - session whose meter state and newest request header are read.
  * @param fallbackReservedTokens - adapter default used when no envelope declared a cap.
+ * @param values - already-read scoped snapshot, shared with the status and composition readers.
  * @returns the routed capacity and the reading, either possibly undefined.
  */
 export function readContextMeter(
   projections: ContextPressureReader | undefined,
   session: Session,
   fallbackReservedTokens: number | undefined,
+  values?: Readonly<Record<string, unknown>>,
 ): { readonly window: number | undefined; readonly reading: ContextMeterReading | undefined } {
-  const state = projections?.snapshot(session, ['contextPressure']).values.contextPressure as ContextPressureState | undefined
+  const state = (values ?? projections?.snapshot(session, ['contextPressure']).values)?.contextPressure as ContextPressureState | undefined
   if (state === undefined || state === null || typeof state !== 'object') return { window: undefined, reading: undefined }
   const tokens = projectedContextTokens(state)
   const reserved = sessionReservedCompletionTokens(session) ?? fallbackReservedTokens
@@ -141,14 +143,16 @@ export function unreplayedReasoningTokens(session: Session): number {
  * @param projections - live Session projections, or undefined when unmounted.
  * @param session - session whose breakdown state is read.
  * @param occupancyTokens - provider-anchored occupancy to rebase the split onto.
+ * @param values - the scoped snapshot used for the matching occupancy reading.
  * @returns the three buckets, or undefined when the meter is not mounted.
  */
 export function readContextBreakdown(
   projections: ContextPressureReader | undefined,
   session: Session,
   occupancyTokens?: number,
+  values?: Readonly<Record<string, unknown>>,
 ): ContextBreakdown | undefined {
-  const state = projections?.snapshot(session, ['contextBreakdown']).values.contextBreakdown as ContextBreakdownState | undefined
+  const state = (values ?? projections?.snapshot(session, ['contextBreakdown']).values)?.contextBreakdown as ContextBreakdownState | undefined
   const raw = contextBreakdown(state)
   if (raw === undefined) return undefined
   return rebaseComposition(raw, occupancyTokens, unreplayedReasoningTokens(session)) ?? raw

@@ -108,6 +108,10 @@
 - id: tool-jobs
   disabled: true
 
+# Keep the read-before-write and external-change checks on across core upgrades.
+- id: fs-observation-policy
+  disabled: false
+
 - id: tool-fs
   disabled: true
 

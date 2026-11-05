@@ -39,7 +39,8 @@ import { modeCommand } from './mode.js'
 import { errorMessage } from './shared.js'
 import { diffCommand, toolCommand, toolsCommand } from './tools.js'
 import { exportCommand, openCommand, presetCommand, previewCommand } from './workspace-files.js'
-import { scheduleCommand, workspacesCommand } from './workspace.js'
+import { workspacesCommand } from './workspace.js'
+import { scheduleCommand } from './schedule.js'
 
 /** What the dispatcher needs that a command context does not carry. */
 export interface CommandRouterDeps {
@@ -147,7 +148,7 @@ export async function runCommandLine(line: string, deps: CommandRouterDeps): Pro
       ))
       return
     case 'init':
-      deps.sendPrompt(INIT_AGENTS_PROMPT)
+      deps.sendPrompt(INIT_AGENTS_PROMPT, line)
       return
     case 'sessions':
       await sessionsCommand(ctx())

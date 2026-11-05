@@ -6,6 +6,7 @@ Session、模型、工具、审批、压缩、MCP、插件都由 Host 提供，�
 
 > 设计方案与差距清单：[Host-native 方案](docs/design-task-feature-dsh-native-tui-host-native.md)
 > 实施进度、验证证据与未验收项：[实施进度](docs/progress-dsh-native-tui.md)
+> rc.1 适配范围与验收：[版本评估和实施记录](docs/design-task-upgrade-dsh-0-2-2-rc-1.md)
 
 ## 快速开始
 
@@ -13,7 +14,7 @@ Session、模型、工具、审批、压缩、MCP、插件都由 Host 提供，�
 
 - Node `>=24.9.0`
 - pnpm（仓库使用 `pnpm-lock.yaml`，不要用 npm / yarn）
-- 全局安装的 `dsh` 0.2.2-alpha.2
+- 全局安装的 `dsh` 0.2.2-rc.1
 
 ### 安装
 
@@ -220,9 +221,9 @@ Plan 保留工具目录，用策略和最终 guard 限制受控调用；`exit_pl
 | 命令 | 作用 |
 |---|---|
 | `/mcp [add\|list\|remove <name>]` | 配置、查看或删除 MCP 服务 |
-| `/plugins [list\|market [query]\|inspect <spec>\|install <spec>\|remove <bundle>\|enable <entryId>\|disable <entryId>]` | 列出、浏览官方市场、检查/安装/移除 bundle，或启停插件项 |
+| `/plugins [list\|market [query]\|inspect <spec>\|install <spec>\|remove <bundle>\|versions <bundle>\|update <bundle> [version]\|enable <entryId>\|disable <entryId>]` | 管理 bundle 与插件项；registry 第三方 bundle 可查询并确认更新，link/tgz 安装不支持此更新入口 |
 | `/workspaces [new <path>\|use <id\|path>\|pin\|unpin\|archive\|unarchive]` | 列出/创建/切换/固定/归档 workspace 会话 |
-| `/schedule [add <seconds> <title>\|delete <id>]` | 列出/创建/删除一次性提醒 |
+| `/schedule [list [offset] [all\|active\|inactive]\|add <seconds> <title>\|create [JSON]\|view\|edit\|pause\|resume\|run\|delete\|history <id>]` | 宿主全部任务的分页、创建、编辑、暂停/恢复、立即投递、删除和历史；新任务默认投递到当前 Session |
 | `/jobs [kill <id>]` | 列出或终止后台任务 |
 | `/agents` | 列出直接子代理 |
 | `/settings [tui\|host\|edit [ns]\|items <ns> <field>\|set <ns> <json>]` | 引导式 TUI 配置页、Host 命名空间编辑器，或脚本化写入 |
@@ -393,6 +394,21 @@ dsh --profile tui
 - 登录方式：`browser` 监听 `localhost:1455` 接回调；端口被 Codex CLI 占用时回退为粘贴回调 URL，也可手动粘贴授权码。`device` 走 device code（有效期 15 分钟）。
 - 额度来自 `GET https://chatgpt.com/backend-api/wham/usage`，按窗口时长识别（5 小时 = 18000 秒，周 = 604800 秒），不依赖 primary/secondary 顺序。
 
+## 任务与文件防护
+
+`/schedule` 管理宿主全部任务，不只当前 Session。
+
+- `/schedule add 300 检查构建` 保留一次性提醒用法，明确投递到当前 Session。
+- `/schedule create` 打开 JSON 编辑器；可填写 `after`、`at`、`every`、`daily`、`weekly`、`cron` 或 `rrule` timing，以及 `session`、`new_once` 或 `new` target。`daily`、`weekly`、`cron` 必须填写明确的 `time_zone`。
+- `/schedule edit <id>` 只提交填写的字段；省略的 `timing` 与 `target` 保持原值。冲突会提示重新读取，不覆盖其他编辑。
+- `/schedule run <id>` 和删除均需确认。history 中的记录表示持久投递成功，不等于模型任务完成。
+
+Schedule 新存储格式不支持旧程序直接打开。正式升级前备份 DSH 数据；降级需恢复升级前备份。
+
+本 bundle 显式启用先读后写和外部修改检查，不随 rc.1 的核心默认值改变。profile 的后续 patch 仍可覆盖。多文件补丁默认关闭，可在启动前设 `DSH_NATIVE_TUI_APPLY_PATCH=1` 为各 preset 启用核心 `apply_patch`；它仍受观察策略与文件沙箱约束。停止或部分失败时，卡片保留已完成 diff 和原始诊断，不承诺回滚。
+
+插件安装显示本次操作的日志、失败阶段、原始诊断和完整日志路径；更新后是否即时生效、是否需要 /reload，以及旧版本恢复结果，都以 Host 返回为准。
+
 ## CodeBuddy / WorkBuddy
 
 内置 `codebuddy` 插件（bundle 行 `dsh-native-tui/codebuddy`）把两个部署注册为 DSH LLM 路由：
@@ -415,6 +431,8 @@ dsh --profile tui
 ~~~
 
 登录前 `/model` 已能看到两条路由与 seed 模型（CN 8 个 / EN 6 个，未经真实账号验证）；登录后 `models refresh` 会用账号目录替换。
+
+可在 `/settings edit codebuddy` 中设置正整数 `maxRequestImages`，限制每次请求保留的图片出现次数（同一附件重复出现也分别计数）。未设置时仍只使用原有字节预算；超限通过 Host 图片卸载与重试处理，不会直接丢弃当前图片。该设置重载插件后生效。
 
 ### 系统提示词与指纹校验
 
@@ -538,7 +556,7 @@ pnpm build      # tsc -p tsconfig.build.json → dist/（gitignored）
 ~~~sh
 pnpm build
 pnpm pack --pack-destination .tmp
-DSH_HOME=/tmp/dsh-native-tui-approval-home dsh plugin --profile tui add .tmp/dsh-native-tui-0.2.2-alpha.2.tgz
+DSH_HOME=/tmp/dsh-native-tui-approval-home dsh plugin --profile tui add .tmp/dsh-native-tui-0.2.2-rc.1.tgz
 DSH_HOME=/tmp/dsh-native-tui-approval-home node scripts/fake-tty-approval.mjs
 ~~~
 
@@ -561,7 +579,7 @@ node scripts/fake-tty-tool-details.mjs             # 显式 accept-edits 下的�
 node scripts/fake-tty-permission-restart.mjs       # minimal 同会话 Agent 重建、取消及权限恢复；使用终端 fence fixture，不依赖物理 PTY
 ~~~
 
-升级核心时，`scripts/upgrade-core-e2e.mjs` 要求 `DSH_CLI_ENTRY` 指向已安装的 `0.2.2-alpha.2` CLI 的 `lib/bin.js`；探针使用独立的 `.tmp/upgrade-core-*` profile 和本地 mock provider，保留输出证据。通用 fake-TTY 入口同样支持该变量，不设置时仍使用既有全局安装路径。
+升级核心时，`scripts/upgrade-core-e2e.mjs` 要求 `DSH_CLI_ENTRY` 指向已安装的 `0.2.2-rc.1` CLI 的 `lib/bin.js`；探针使用独立的 `.tmp/upgrade-core-*` profile 和本地 mock provider，保留输出证据。通用 fake-TTY 入口同样支持该变量，不设置时仍使用既有全局安装路径。`scripts/rc1-capabilities-e2e.mjs` 使用同一变量，验证 Schedule 宿主级管理、补丁默认关闭、原生/PTC 显式启用、未读编辑拒绝，以及多文件增删移动的真实磁盘效果。
 
 普通终端环境可运行真实 PTY 冒烟：
 
@@ -602,7 +620,7 @@ python3 scripts/pty-smoke.py
 
 ## 兼容性
 
-- DSH 依赖统一为 `0.2.2-alpha.2`，Cordis 为 `4.0.6-alpha.1`；使用隔离安装的目标 CLI 通过四套预设的新建、恢复、模型路由及 reload 探针，不依赖全局 CLI 版本。旧核心不在本版本支持范围。
+- DSH 依赖统一为 `0.2.2-rc.1`，Cordis 为 `4.1.0`；使用隔离安装的目标 CLI 通过四套预设的新建、恢复、模型路由及 reload 探针，不依赖全局 CLI 版本。旧核心不在本版本支持范围。
 - Preset patch 从 `@deepseek-ai/dsh-web-app` 的 standard/ptc/minimal/cordis 复制而来：standard/ptc/minimal 需要 `subagent-model-selection-settings` Host 行，cordis 需要 cordis host-runner 与 `tool-cordis/host`。
 - `@file` 补全依赖 `@deepseek-ai/dsh-file-reference-local`。
 - pi-tui 1.4.0；Node `>=24.9.0`。

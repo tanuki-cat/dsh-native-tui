@@ -17,6 +17,7 @@
           - id: tool-fs
             name: '@deepseek-ai/dsh-tool-fs'
             config:
+              applyPatch: !!js process.env.DSH_NATIVE_TUI_APPLY_PATCH === '1'
               read: false
               readImage: true
               write: false

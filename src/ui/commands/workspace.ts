@@ -1,5 +1,5 @@
 /**
- * `/workspaces` and `/schedule`.
+ * `/workspaces` command.
  *
  * @module dsh-native-tui/ui/commands/workspace
  */
@@ -7,7 +7,7 @@
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { createHostSession, type HostSession } from '../../runtime/agent.js'
 import type { CommandContext } from './context.js'
-import type { ScheduleService, WorkspaceService } from './services.js'
+import type { WorkspaceService } from './services.js'
 import { NL, errorMessage } from './shared.js'
 
 /** Start a session in another directory, keeping the current preset. */
@@ -120,64 +120,4 @@ export async function workspacesCommand(
     return
   }
   ctx.notice('warning', 'Usage: /workspaces [new <path> [title] | use <id|path> | pin|unpin|archive|unarchive <id>]')
-}
-
-/** The `/schedule` command. */
-export async function scheduleCommand(ctx: CommandContext, args: string): Promise<void> {
-  const scheduleService = ctx.host.get('schedule') as unknown as ScheduleService | undefined
-  if (scheduleService === undefined) {
-    ctx.notice('warning', 'The schedule service is unavailable.')
-    return
-  }
-  if (args === '') {
-    try {
-      const rows = await scheduleService.list({ sessionId: ctx.active.id })
-      if (rows.length === 0) {
-        ctx.notice('info', 'No active reminders for this session.')
-        return
-      }
-      ctx.notice('info', 'Reminders:' + NL + rows.map(row => row.id + '  ' + row.kind + '  ' + row.title + '  ' + row.scheduledAt).join(NL))
-    } catch (error) {
-      ctx.notice('error', 'Could not list reminders: ' + errorMessage(error))
-    }
-    return
-  }
-  const parts = args.split(/\s+/u)
-  const subcommand = parts[0] ?? ''
-  const rest = args.slice(subcommand.length).trim()
-  if (subcommand === 'add') {
-    const firstSpace = rest.indexOf(' ')
-    const secondsText = firstSpace === -1 ? rest : rest.slice(0, firstSpace)
-    const title = firstSpace === -1 ? '' : rest.slice(firstSpace + 1).trim()
-    const seconds = Number(secondsText)
-    if (!Number.isSafeInteger(seconds) || seconds < 1 || title === '') {
-      ctx.notice('warning', 'Usage: /schedule add <seconds> <title>')
-      return
-    }
-    try {
-      const created = await scheduleService.create(ctx.active.id, {
-        title,
-        prompt: title,
-        after_seconds: seconds,
-      })
-      ctx.notice('info', 'Reminder created: ' + created.id + '  ' + created.scheduledAt)
-    } catch (error) {
-      ctx.notice('error', 'Could not create reminder: ' + errorMessage(error))
-    }
-    return
-  }
-  if (subcommand === 'delete') {
-    if (rest === '') {
-      ctx.notice('warning', 'Usage: /schedule delete <id>')
-      return
-    }
-    try {
-      const result = await scheduleService.delete({ sessionId: ctx.active.id, id: rest })
-      ctx.notice('info', 'Reminder delete: ' + JSON.stringify(result))
-    } catch (error) {
-      ctx.notice('error', 'Could not delete reminder: ' + errorMessage(error))
-    }
-    return
-  }
-  ctx.notice('warning', 'Usage: /schedule [add <seconds> <title> | delete <id>]')
 }

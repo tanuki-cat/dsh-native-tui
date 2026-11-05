@@ -26,6 +26,8 @@
             disabled: !!js process.platform !== 'win32'
           - id: tool-fs
             name: '@deepseek-ai/dsh-tool-fs'
+            config:
+              applyPatch: !!js process.env.DSH_NATIVE_TUI_APPLY_PATCH === '1'
           - id: tool-fs-search
             name: '@deepseek-ai/dsh-tool-fs-search'
             config:

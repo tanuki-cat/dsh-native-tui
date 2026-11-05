@@ -12,8 +12,7 @@ import {
 import type { Context } from '@deepseek-ai/cordis'
 import { bindModelSelection, sameModelSelection } from '../runtime/model-selection.js'
 import type {} from '@deepseek-ai/dsh-commands'
-import { createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
-import type { ContentBlock } from '@deepseek-ai/dsh-llm/types'
+import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { DisplayMode, ResolvedConfig } from '../config.js'
 import { createHostSession, readContextBreakdown, readContextMeter, restartHostSession, resumeHostSession, sessionAgentPreset, type AgentPresetService, type HostSession } from '../runtime/agent.js'
@@ -47,6 +46,7 @@ import { Rule } from './rule.js'
 import { scrollToEndLabel } from './scroll-indicator.js'
 import { PromptEditor } from './prompt-editor.js'
 import { SessionDrafts } from './session-drafts.js'
+import { enqueuePrompt, submitDraft } from './prompt-submission.js'
 import { pickStoredSession } from './commands/sessions.js'
 
 
@@ -446,14 +446,16 @@ export async function startTerminalApp(
    */
   const contextInputs = () => {
     const projections = host.get('sessionProjections') as SessionProjectionsService | undefined
-    const meter = readContextMeter(projections, active.agent.session, contextReserved)
+    const values = projections?.snapshot(active.agent.session, ['contextPressure', 'contextBreakdown', 'sessionStats']).values
+    const meter = readContextMeter(projections, active.agent.session, contextReserved, values)
     return {
       projections,
       meter,
       // The routed request's own capacity wins, as on the Web meter; the model
       // catalog value only stands in before the first request is routed.
       window: meter.window ?? contextWindow,
-      stats: projections?.snapshot(active.agent.session, ['sessionStats']).values.sessionStats as SessionStats | undefined,
+      values,
+      stats: values?.sessionStats as SessionStats | undefined,
       events: active.agent.session.snapshotEvents(),
     }
   }
@@ -471,7 +473,7 @@ export async function startTerminalApp(
       metrics,
       // Rebased onto the occupancy the row reports, so the split can never add
       // up to more context than the session is actually paying for.
-      breakdown: readContextBreakdown(inputs.projections, active.agent.session, metrics.contextEstimateTokens),
+      breakdown: readContextBreakdown(inputs.projections, active.agent.session, metrics.contextEstimateTokens, inputs.values),
     }
   }
 
@@ -681,24 +683,17 @@ export async function startTerminalApp(
     tui.requestRender()
   }
 
-  const sendPrompt = (text: string, historyText = text): void => {
-    const content: ContentBlock[] = []
-    if (text.trim() !== '') content.push({ type: 'text', text })
-    for (const pending of pendingAttachments) content.push(pending.block)
-    if (content.length === 0) return
+  const sendPrompt = (text: string, historyText = text): boolean => {
     try {
-      const message = createUserMessage({
-        content,
-        source: { kind: 'user' },
-      })
-      if (active.agent.status === 'running') active.agent.steer(message)
-      else active.agent.followup(message)
-      pendingAttachments.splice(0)
-      editor.addToHistory(historyText)
-      renderStatus()
+      if (!enqueuePrompt(active.agent, text, pendingAttachments)) return false
     } catch (error) {
+      if (historyText.startsWith('/') && editor.getText() === '') editor.setText(historyText)
       pushNotice('error', 'Prompt failed: ' + errorMessage(error))
+      return false
     }
+    editor.addToHistory(historyText)
+    renderStatus()
+    return true
   }
 
   /**
@@ -786,16 +781,16 @@ export async function startTerminalApp(
     if (exiting) return
     const trimmed = text.trim()
     if (trimmed === '' && pendingAttachments.length === 0) return
-    editor.setText('')
     if (trimmed === 'exit' || trimmed === 'quit') {
       requestExit(0)
       return
     }
     if (trimmed.startsWith('/')) {
+      editor.setText('')
       void runCommand(trimmed)
       return
     }
-    sendPrompt(trimmed)
+    submitDraft(text, editor, () => sendPrompt(trimmed))
   }
 
   const requestExit = (code: number): void => {

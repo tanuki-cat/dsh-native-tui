@@ -11,7 +11,7 @@ const repo = dirname(dirname(fileURLToPath(import.meta.url)))
 const entry = process.env.DSH_CLI_ENTRY
 assert(entry, 'Set DSH_CLI_ENTRY to the target CLI lib/bin.js')
 const manifest = JSON.parse(await readFile(resolve(dirname(entry), '../package.json'), 'utf8'))
-assert.equal(manifest.version, '0.2.2-alpha.2')
+assert.equal(manifest.version, '0.2.2-rc.1')
 const root = await mkdtemp(join(repo, '.tmp/upgrade-core-'))
 const probeFile = join(root, 'probe.txt')
 await writeFile(probeFile, 'UPGRADE_READ_OK\n')

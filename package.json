@@ -1,6 +1,6 @@
 {
   "name": "dsh-native-tui",
-  "version": "0.2.2-alpha.2",
+  "version": "0.2.2-rc.1",
   "private": true,
   "license": "MIT",
   "description": "DeepSeek Harness host-native terminal front door built on pi-tui",
@@ -56,41 +56,45 @@
     "spike:carrier": "node --import tsx src/spike/carrier.ts"
   },
   "dependencies": {
-    "@deepseek-ai/schemastery": "3.18.6-alpha.1",
+    "@deepseek-ai/schemastery": "3.19.0",
     "@earendil-works/pi-tui": "1.4.0",
     "fflate": "^0.8.3",
-    "@deepseek-ai/dsh-computer-use": "0.2.2-alpha.2",
-    "@deepseek-ai/dsh-experimental-auto-review": "0.2.2-alpha.2",
-    "@deepseek-ai/dsh-experimental-computer-use-cua-driver-native": "0.2.2-alpha.2",
-    "@deepseek-ai/dsh-mcp-client": "0.2.2-alpha.2",
-    "@deepseek-ai/dsh-mcp-resources": "0.2.2-alpha.2",
-    "@deepseek-ai/dsh-session-stats": "0.2.2-alpha.2",
+    "@deepseek-ai/dsh-computer-use": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-experimental-auto-review": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-experimental-computer-use-cua-driver-native": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-mcp-client": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-mcp-resources": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-session-stats": "0.2.2-rc.1",
     "cli-highlight": "2.1.11"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "~4.0.6-alpha.1",
-    "@deepseek-ai/dsh-agent": ">=0.2.2-alpha.2 <0.3.0",
-    "@deepseek-ai/dsh-commands": ">=0.2.2-alpha.2 <0.3.0",
-    "@deepseek-ai/dsh-file-reference": ">=0.2.2-alpha.2 <0.3.0",
-    "@deepseek-ai/dsh-llm": ">=0.2.2-alpha.2 <0.3.0",
-    "@deepseek-ai/dsh-session": ">=0.2.2-alpha.2 <0.3.0",
-    "@deepseek-ai/dsh-user-approval": ">=0.2.2-alpha.2 <0.3.0",
-    "@deepseek-ai/dsh-user-questions": ">=0.2.2-alpha.2 <0.3.0"
+    "@deepseek-ai/cordis": "~4.1.0",
+    "@deepseek-ai/dsh-agent": ">=0.2.2-rc.1 <0.3.0",
+    "@deepseek-ai/dsh-commands": ">=0.2.2-rc.1 <0.3.0",
+    "@deepseek-ai/dsh-file-reference": ">=0.2.2-rc.1 <0.3.0",
+    "@deepseek-ai/dsh-llm": ">=0.2.2-rc.1 <0.3.0",
+    "@deepseek-ai/dsh-session": ">=0.2.2-rc.1 <0.3.0",
+    "@deepseek-ai/dsh-schedule": ">=0.2.2-rc.1 <0.3.0",
+    "@deepseek-ai/dsh-plugin-manager": ">=0.2.2-rc.1 <0.3.0",
+    "@deepseek-ai/dsh-user-approval": ">=0.2.2-rc.1 <0.3.0",
+    "@deepseek-ai/dsh-user-questions": ">=0.2.2-rc.1 <0.3.0"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "4.0.6-alpha.1",
-    "@deepseek-ai/dsh-agent": "0.2.2-alpha.2",
-    "@deepseek-ai/dsh-commands": "0.2.2-alpha.2",
-    "@deepseek-ai/dsh-file-reference": "0.2.2-alpha.2",
-    "@deepseek-ai/dsh-llm": "0.2.2-alpha.2",
-    "@deepseek-ai/dsh-session": "0.2.2-alpha.2",
-    "@deepseek-ai/dsh-user-approval": "0.2.2-alpha.2",
-    "@deepseek-ai/dsh-user-questions": "0.2.2-alpha.2",
+    "@deepseek-ai/cordis": "4.1.0",
+    "@deepseek-ai/dsh-agent": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-commands": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-file-reference": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-session": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-user-approval": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-user-questions": "0.2.2-rc.1",
     "@types/node": "^22.20.5",
     "tsx": "^4.23.15",
     "typescript": "^6.0.3",
     "vitest": "^4.1.12",
-    "@deepseek-ai/dsh-scope": "0.2.2-alpha.2"
+    "@deepseek-ai/dsh-scope": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-schedule": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-plugin-manager": "0.2.2-rc.1"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/cordis": {
@@ -106,6 +110,12 @@
       "optional": true
     },
     "@deepseek-ai/dsh-session": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-schedule": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-plugin-manager": {
       "optional": true
     },
     "@deepseek-ai/dsh-user-approval": {

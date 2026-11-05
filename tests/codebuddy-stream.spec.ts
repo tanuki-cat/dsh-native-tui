@@ -339,6 +339,16 @@ describe('codebuddy wire serialization', () => {
     expect(fitsMessages[2]?.content.map(part => part.type)).toEqual(['image_url'])
   })
 
+  it('counts repeated image occurrences independently and can offload to an optional count bound', async () => {
+    const reader = { readImageRequest: vi.fn(async () => ({ data: new Uint8Array([1]), mediaType: 'image/png' })) }
+    const user = (id: string, offloaded?: true) => ({ role: 'user' as const, content: [{ type: 'image' as const, attachment: imageRef, ...offloaded === undefined ? {} : { offloaded } }], source: { kind: 'user' }, id })
+    const options = optionsOf({ messages: [user('u1'), user('u2')] })
+    await expect(buildChatPayload(options, cnProfile, undefined, { reader, maxRequestImages: 1 })).rejects.toMatchObject({ code: 'IMAGE_OFFLOAD_REQUIRED', failure: { offloadImages: 1 } })
+    expect(reader.readImageRequest).toHaveBeenCalledTimes(1)
+    await expect(buildChatPayload(options, cnProfile, undefined, { reader })).resolves.toHaveProperty('messages')
+    await expect(buildChatPayload(optionsOf({ messages: [user('u1', true), user('u2')] }), cnProfile, undefined, { reader, maxRequestImages: 1 })).resolves.toHaveProperty('messages')
+  })
+
   it('prices only the messages it actually sends', async () => {
     const big = { ...imageRef, bytes: 12 * 1024 * 1024 }
     const reader = { async readImageRequest() { return { data: new Uint8Array(big.bytes), mediaType: 'image/png' } } }

@@ -112,7 +112,7 @@ export class ToolCard implements Component {
       else if (expanded && block.name !== 'read' && block.name !== 'edit') container.addChild(new Text(palette.dim(literalToolText(formatToolArguments(block.args))), 0, 0))
     }
     const result = block.result
-    if (result?.trim() && (block.isError || (diffs.length === 0 && (block.name !== 'read' || expanded)))) {
+    if (result?.trim() && (block.isError || block.stopped || (diffs.length === 0 && (block.name !== 'read' || expanded)))) {
       container.addChild(new Spacer(1))
       container.addChild(new ToolOutput(result, palette, expanded, shell ? 5 : 10, shell ? 'end' : 'start', block.isError, block.name === 'read' ? languageForPath(path) : undefined))
     } else if (result?.trim() && block.name === 'read' && !expanded) {
@@ -120,6 +120,7 @@ export class ToolCard implements Component {
     }
     if (block.pending) container.addChild(new Text(palette.warning('└ running…'), 0, 0))
     else if (block.isError) container.addChild(new Text(palette.error('└ error'), 0, 0))
+    else if (block.stopped) container.addChild(new Text(palette.warning('└ stopped · partial changes retained; inspect the result'), 0, 0))
     return box
   }
 }

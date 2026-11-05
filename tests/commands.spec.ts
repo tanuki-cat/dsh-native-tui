@@ -6,7 +6,8 @@ import { agentsCommand, jobsCommand } from '../src/ui/commands/runtime-status.js
 import { sessionsCommand } from '../src/ui/commands/sessions.js'
 import { formatLocalTimestamp } from '../src/ui/format-time.js'
 import { settingsCommand } from '../src/ui/commands/settings.js'
-import { scheduleCommand, workspacesCommand } from '../src/ui/commands/workspace.js'
+import { workspacesCommand } from '../src/ui/commands/workspace.js'
+import { scheduleCommand } from '../src/ui/commands/schedule.js'
 
 /** One recorded notice. */
 interface Notice {
@@ -205,9 +206,9 @@ describe('command handler argument paths', () => {
   })
 
   it('reports an empty reminder list', async () => {
-    const ctx = contextOf({ schedule: { list: async () => [] } })
+    const ctx = contextOf({ schedule: { list: async () => ({ items: [], shown: 0, total: 0, offset: 0, limit: 20 }) } })
     await scheduleCommand(ctx, '')
-    expect(allText(ctx)).toContain('No active reminders for this session.')
+    expect(allText(ctx)).toContain('No matching tasks.')
   })
 
   it('lists background jobs through the service', () => {

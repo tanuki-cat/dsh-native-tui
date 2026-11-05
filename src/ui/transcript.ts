@@ -34,7 +34,7 @@ import { trimTranscriptWindow } from './transcript-window.js'
  * before a result exists. Other sub-calls stay inside the parent `run_code`
  * card; showing every one would duplicate what that result already summarizes.
  */
-const PTC_CARD_TOOLS: ReadonlySet<string> = new Set(['write', 'edit'])
+const PTC_CARD_TOOLS: ReadonlySet<string> = new Set(['write', 'edit', 'apply_patch'])
 
 /**
  * Dispatch rows one compact `run_code` card keeps. A program can call the same
@@ -42,6 +42,10 @@ const PTC_CARD_TOOLS: ReadonlySet<string> = new Set(['write', 'edit'])
  * for and counts the rest instead of growing past the viewport.
  */
 const COMPACT_CALL_LINES = 10
+
+function resultStopped(meta: unknown): boolean {
+  return typeof meta === 'object' && meta !== null && 'stopped' in meta && meta.stopped === true
+}
 
 /** One rendered transcript row. */
 export type TranscriptBlock = ({
@@ -63,6 +67,8 @@ export type TranscriptBlock = ({
   readonly args: string
   readonly result?: string
   readonly isError?: boolean
+  /** A patch stopped after retaining zero or more committed operations. */
+  readonly stopped?: boolean
   readonly pending: boolean
   readonly diffs?: readonly FileDiff[]
   /**
@@ -493,6 +499,7 @@ export function createTranscriptReducer(options: TranscriptOptions) {
               args,
               result: contentText(ptcContent(data?.content)),
               ...(data?.isError === true ? { isError: true } : {}),
+              ...(resultStopped(data?.meta) ? { stopped: true } : {}),
               ...(diffs === undefined ? {} : { diffs }),
               pending: false,
               seq,
@@ -626,6 +633,7 @@ export function createTranscriptReducer(options: TranscriptOptions) {
               args: '',
               result,
               ...(isError ? { isError: true } : {}),
+              ...(resultStopped(event.data.meta) ? { stopped: true } : {}),
               ...(diffs === undefined ? {} : { diffs }),
               pending: false,
               seq,
@@ -635,6 +643,7 @@ export function createTranscriptReducer(options: TranscriptOptions) {
               ...prior,
               result,
               ...(isError ? { isError: true } : {}),
+              ...(resultStopped(event.data.meta) ? { stopped: true } : {}),
               ...(diffs === undefined ? {} : { diffs }),
               pending: false,
               seq,

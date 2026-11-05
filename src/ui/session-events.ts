@@ -15,6 +15,7 @@ import { formatChangesSummary } from '../runtime/changes.js'
 import { formatDeliverables, type PresentedFileView } from '../runtime/deliverables.js'
 import type { TranscriptEntry } from './transcript.js'
 import type { WaitRetry } from './waiting.js'
+import type { SessionProjectionsService } from './commands/services.js'
 
 /** The workspace-changes service slice the live listener reads. */
 interface ChangesService {
@@ -57,6 +58,14 @@ export interface SessionEventsHost {
 export function subscribeSessionEvents(host: SessionEventsHost): () => void {
   const timers: Array<() => void> = []
   const own = (dispose: () => void): void => { timers.push(dispose) }
+  const projections = host.host.get('sessionProjections') as SessionProjectionsService | undefined
+  if (projections !== undefined) {
+    own(projections.onEventChanged((session, changes) => {
+      if (session.id === host.sessionId() && changes.some(change => ['contextPressure', 'contextBreakdown', 'sessionStats'].includes(change.key))) {
+        host.renderStatus()
+      }
+    }))
+  }
 
   own(host.host.on('session/event', (session, event) => {
     if (session.id !== host.sessionId()) return
@@ -96,7 +105,7 @@ export function subscribeSessionEvents(host: SessionEventsHost): () => void {
     if (event.type === 'turn/start') host.beginWait()
     if (event.type === 'turn/end') host.endWait()
     host.scheduleTranscript()
-    host.renderStatus()
+    if (projections === undefined || event.type === 'turn/start' || event.type === 'turn/end') host.renderStatus()
   }))
 
   own(host.host.on('agent/assistant-stream', ({ agent, frame }) => {
