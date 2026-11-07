@@ -29,6 +29,8 @@ function harness() {
   const agent = { status: 'idle', session: { snapshotEvents: () => events }, ctx: { get: () => hasPlan && directPlan ? plan : undefined } } as unknown as Agent
   const commands = {
     list: vi.fn(() => hasPlan ? [{ name: 'plan', definitionId: '@deepseek-ai/dsh-plan-mode' }] : []),
+    find: vi.fn((_agent: Agent, name: string) => hasPlan && name === 'plan'
+      ? { definitionId: '@deepseek-ai/dsh-plan-mode' } : undefined),
     execute: vi.fn(async (_agent: Agent, line: string, _attachments: readonly never[], _signal: AbortSignal) => {
       events.push({ type: 'plan/mode', data: { active: line === '/plan' } })
       return { result: { kind: 'success', text: 'Plan updated' } }
@@ -207,6 +209,7 @@ describe('interaction modes', () => {
     const h = harness()
     h.directPlan = false
     h.commands.list.mockReturnValue([{ name: 'plan', definitionId: 'unrelated-plugin' }])
+    h.commands.find.mockReturnValue({ definitionId: 'unrelated-plugin' })
     expect(() => h.modes.set(h.agent, 'plan')).toThrow('unavailable')
   })
 
@@ -334,10 +337,24 @@ describe('interaction modes', () => {
     expect(h.preset).toBe('plan')
   })
 
+  it('re-probes the plan command once the command table changes', () => {
+    const h = harness()
+    h.directPlan = false
+    h.hasPlan = false
+    expect(h.modes.available(h.agent)).not.toContain('plan')
+    h.commands.find.mockReturnValue({ definitionId: '@deepseek-ai/dsh-plan-mode' })
+    // A cached verdict must never outlive the registration it described.
+    expect(h.modes.available(h.agent)).not.toContain('plan')
+    const invalidate = h.listeners.get('commands/change') as () => void
+    invalidate()
+    expect(h.modes.available(h.agent)).toContain('plan')
+  })
+
   it('owns guard and listener registrations through the plugin context', () => {
     const h = harness()
     expect(h.guards.size).toBe(1)
-    expect(h.listeners.size).toBe(2)
+    // Tool gate, pre-step plan reconciliation, and the command-table invalidation.
+    expect(h.listeners.size).toBe(3)
     h.dispose()
     expect(h.guards.size).toBe(0)
     expect(h.listeners.size).toBe(0)

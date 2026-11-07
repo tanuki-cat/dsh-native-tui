@@ -96,6 +96,9 @@ interface Entry {
   timer?: ReturnType<typeof setTimeout>
 }
 
+/** Shared empty result for a server that registered nothing; never mutated. */
+const NO_TOOLS: Set<string> = new Set()
+
 const SERVER_NAME = /^[A-Za-z0-9_-]{1,32}$/u
 /**
  * Loader.create cannot run inside the Manager's own config reload, so the first
@@ -145,11 +148,6 @@ function describeFailure(error: unknown): string {
   }
   const text = String(error)
   return text === '' ? '(thrown ' + Object.prototype.toString.call(error) + ')' : text
-}
-
-/** Tool-name prefix mcp-client registers for one server, e.g. `mcp__demo__echo`. */
-function toolNamePrefix(serverName: string): string {
-  return TOOL_PREFIX + serverName + '__'
 }
 
 /**
@@ -225,23 +223,40 @@ export function apply(ctx: Context, config: Config): void {
   let queue: Promise<void> = Promise.resolve()
 
   /**
-   * Tool names currently registered for one server, read from the tool
-   * registry.
+   * Every live MCP tool grouped by the server that registered it.
+   *
+   * `tools/change` fires for the whole registry, so one read serves every
+   * configured server; asking per server made the observation O(servers × tools).
+   * @returns live tool names by server, or undefined when the registry cannot answer.
+   */
+  const liveToolSets = (): Map<string, Set<string>> | undefined => {
+    const registry = toolRegistry()
+    if (registry === undefined) return undefined
+    try {
+      const byServer = new Map<string, Set<string>>()
+      for (const schema of registry.schemas()) {
+        const serverName = serverOfTool(schema.name)
+        if (serverName === undefined) continue
+        const tools = byServer.get(serverName)
+        if (tools === undefined) byServer.set(serverName, new Set([schema.name]))
+        else tools.add(schema.name)
+      }
+      return byServer
+    }
+    catch {
+      // A failed status probe must never fail the connection it describes.
+      return undefined
+    }
+  }
+
+  /**
+   * Tool names currently registered for one server.
    * @param serverName - configured server.
    * @returns the live tool set, or undefined when the registry cannot answer.
    */
   const liveTools = (serverName: string): Set<string> | undefined => {
-    const registry = toolRegistry()
-    if (registry === undefined) return undefined
-    const prefix = toolNamePrefix(serverName)
-    try {
-      return new Set(registry.schemas().map(schema => schema.name).filter(toolName => toolName.startsWith(prefix)))
-    }
-    catch {
-      // A failed status probe must never fail the connection it describes, and
-      // must never be mistaken for "the server registered no tools".
-      return undefined
-    }
+    const byServer = liveToolSets()
+    return byServer === undefined ? undefined : byServer.get(serverName) ?? NO_TOOLS
   }
 
   const removeRow = (entry: Entry): void => {
@@ -415,10 +430,11 @@ export function apply(ctx: Context, config: Config): void {
    * call or a successful rebuild clears the fault.
    */
   const syncToolState = (): void => {
+    const byServer = liveToolSets()
+    // An unreadable registry proves nothing; keep whatever we already believe.
+    if (byServer === undefined) return
     for (const [serverName, entry] of entries) {
-      const live = liveTools(serverName)
-      // An unreadable registry proves nothing; keep whatever we already believe.
-      if (live === undefined) continue
+      const live = byServer.get(serverName) ?? NO_TOOLS
       if (live.size > 0) {
         entry.tools = live
         if (entry.faulted) continue

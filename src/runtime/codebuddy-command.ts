@@ -644,6 +644,22 @@ async function promptCommand(deps: CodeBuddyCommandDeps, action: string): Promis
  * @param deps - terminal and host services.
  */
 export async function runCodebuddyCommand(args: string, deps: CodeBuddyCommandDeps): Promise<void> {
+  try {
+    await dispatch(args, deps)
+  }
+  catch (error) {
+    // Mirrors the /codex boundary: the terminal dispatches commands without
+    // awaiting them, so an escaped rejection would end the process.
+    report(deps, ['/codebuddy failed — ' + redact(error instanceof Error ? error.message : String(error))], 'error')
+  }
+}
+
+/**
+ * Route one sub-command. Only this inner body may throw.
+ * @param args - the text after the command name.
+ * @param deps - terminal and host services.
+ */
+async function dispatch(args: string, deps: CodeBuddyCommandDeps): Promise<void> {
   const [sub = 'status', ...rest] = args.trim().split(/\s+/u)
   if (sub === '' || sub === 'status') { await status(deps); return }
   if (sub === 'help') { report(deps, [CODEBUDDY_USAGE]); return }

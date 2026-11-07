@@ -1,7 +1,28 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { visibleWidth } from '@earendil-works/pi-tui'
-import { showApproval, showChoice, showQuestionBatch, showSearchChoice, showTextInput } from '../src/ui/dialogs.js'
+import { bindAbort, showApproval, showChoice, showQuestionBatch, showSearchChoice, showTextInput } from '../src/ui/dialogs.js'
 import { createPalette } from '../src/ui/theme.js'
+
+describe('dialog cancellation', () => {
+  it('settles a dialog whose signal aborted before it was registered', () => {
+    // The dialog is built between the entry guard and the registration, so an
+    // abort in that window must still close it instead of leaving it open.
+    const controller = new AbortController()
+    controller.abort()
+    const onAbort = vi.fn()
+    bindAbort(controller.signal, onAbort)
+    expect(onAbort).toHaveBeenCalledOnce()
+  })
+
+  it('leaves a live signal attached until it aborts', () => {
+    const controller = new AbortController()
+    const onAbort = vi.fn()
+    bindAbort(controller.signal, onAbort)
+    expect(onAbort).not.toHaveBeenCalled()
+    controller.abort()
+    expect(onAbort).toHaveBeenCalledOnce()
+  })
+})
 
 describe('dialog frame', () => {
   it('renders a bounded opaque surface for a multiline title', async () => {

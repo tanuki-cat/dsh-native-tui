@@ -198,15 +198,35 @@ describe('session metrics', () => {
       const first = memo(events, base.stats, base.window, base.meter)
       return run(memo) !== first
     }
-    // A new log snapshot, a new projection value, a new window, and a moved
-    // meter reading must each miss. Every case warms its own memo, so one miss
-    // cannot explain the next assertion.
-    expect(misses(memo => memo([...events], base.stats, base.window, base.meter))).toBe(true)
+    // A new projection value, a new window, and a moved meter reading must each
+    // miss. Every case warms its own memo, so one miss cannot explain the next
+    // assertion. A fresh array holding the same events is NOT a changed input:
+    // the Host hands out a new frozen snapshot per append, so identity cannot
+    // key the fold — the surviving prefix does.
+    expect(misses(memo => memo([...events], base.stats, base.window, base.meter))).toBe(false)
     expect(misses(memo => memo(events, { turns: 1, steps: 1, decodeMs: 1_000, decodeTokens: 50 }, base.window, base.meter))).toBe(true)
     expect(misses(memo => memo(events, base.stats, 200_000, base.meter))).toBe(true)
     expect(misses(memo => memo(events, base.stats, base.window, { tokens: 400_001 }))).toBe(true)
     expect(misses(memo => memo(events, base.stats, base.window, { tokens: 400_000, reservedTokens: 8_192 }))).toBe(true)
     expect(misses(memo => memo(events, base.stats, base.window, undefined))).toBe(true)
+  })
+
+  it('resumes an appended log instead of refolding it', () => {
+    // The Host snapshot is a new array per append, so the fold keeps its state
+    // and reads only the suffix. A replaced earlier event must still refold.
+    const memo = createSessionMetricsMemo()
+    const first = [usageEvent(100, 20, 800, 0)]
+    const warm = memo(first, undefined, 1_000_000, { tokens: 400_000 })
+    const appended = [...first, usageEvent(100, 20, 0, 0)]
+    const grown = memo(appended, undefined, 1_000_000, { tokens: 400_000 })
+    expect(grown).not.toBe(warm)
+    // A resumed fold must land on exactly what a from-scratch fold reports.
+    expect(grown).toEqual(collectSessionMetrics(appended, undefined, 1_000_000, { tokens: 400_000 }))
+    // Same length and same newest event, but a different oldest one: the prefix
+    // is not the one already folded, so the answer must come from a full fold.
+    const replaced = [usageEvent(500, 0, 0, 0), appended[1]!]
+    expect(memo(replaced, undefined, 1_000_000, { tokens: 400_000 }))
+      .toEqual(collectSessionMetrics(replaced, undefined, 1_000_000, { tokens: 400_000 }))
   })
 
   it('hits when the projection hands out an equal state object', () => {

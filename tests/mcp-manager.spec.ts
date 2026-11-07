@@ -438,6 +438,31 @@ describe('mcp-manager', () => {
     h.cleanup()
   })
 
+  it('reads the tool registry once per change, not once per configured server', async () => {
+    // `tools/change` is a registry-wide event; asking per server made the
+    // observation O(servers × tools) on every registration change.
+    let reads = 0
+    const h = harness({
+      servers: () => ({ alpha: stdio('false'), beta: stdio('false'), gamma: stdio('false') }),
+      tools: () => {
+        reads += 1
+        return [{ name: 'mcp__alpha__echo' }, { name: 'mcp__beta__echo' }, { name: 'mcp__gamma__echo' }]
+      },
+    })
+    h.run()
+    await settle()
+    reads = 0
+
+    h.emit('tools/change')
+    expect(reads).toBe(1)
+    expect(h.status).toEqual({
+      alpha: { status: 'connected' },
+      beta: { status: 'connected' },
+      gamma: { status: 'connected' },
+    })
+    h.cleanup()
+  })
+
   it('resets the reconnect budget on a manual reload', async () => {
     const h = harness({
       servers: () => ({ demo: stdio('false') }),

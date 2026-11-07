@@ -13,7 +13,7 @@ interface Notice {
 }
 
 /** A dispatcher whose every collaborator records what the line asked of it. */
-function harness(options: { readonly hostResult?: unknown; readonly skills?: readonly SkillSuggestion[]; readonly running?: boolean } = {}) {
+function harness(options: { readonly hostResult?: unknown; readonly skills?: readonly SkillSuggestion[]; readonly running?: boolean; readonly hostListThrows?: boolean; readonly contextThrows?: boolean } = {}) {
   const skillRegistry = {
     list: async () => [
       { name: 'alpha', description: 'first skill', invocation: { modelInvocable: true, userInvocable: true }, source: 'user-agents', provider: 'filesystem' },
@@ -32,7 +32,10 @@ function harness(options: { readonly hostResult?: unknown; readonly skills?: rea
       // stays unmounted so a handler cannot quietly depend on it.
       get: (name: string) => name === 'skills' ? skillRegistry : undefined,
       commands: {
-        list: () => [],
+        list: () => {
+          if (options.hostListThrows === true) throw new Error('registry exploded')
+          return []
+        },
         execute: async () => options.hostResult,
       },
     },
@@ -64,7 +67,11 @@ function harness(options: { readonly hostResult?: unknown; readonly skills?: rea
     persistSelection: async () => undefined,
   } as unknown as CommandContext
   const deps: CommandRouterDeps = {
-    context: () => { contextBuilds += 1; return context },
+    context: () => {
+      contextBuilds += 1
+      if (options.contextThrows === true) throw new Error('context exploded')
+      return context
+    },
     switchTo: async next => { switched.push(next) },
     openNewSession: async (cwd, preset) => { calls.push('openNew:' + cwd + ':' + preset); return context.active },
     sendPrompt: (text, historyText = text) => { prompts.push(text); history.push(historyText) },
@@ -232,6 +239,20 @@ describe('command router', () => {
     await runCommandLine(line, h.deps)
     expect(h.prompts).toEqual([])
     expect(h.notices[0]?.tone).toBe('warning')
+  })
+
+  it('turns a throwing handler into one error notice instead of a rejection', async () => {
+    // The terminal dispatches commands without awaiting them, so a rejection
+    // here would escape as an unhandled rejection and end the process.
+    const h = harness({ hostListThrows: true })
+    await expect(runCommandLine('/help', h.deps)).resolves.toBeUndefined()
+    expect(h.notices).toEqual([{ tone: 'error', text: 'Command failed: registry exploded' }])
+  })
+
+  it('survives a command context that cannot be built', async () => {
+    const h = harness({ contextThrows: true })
+    await expect(runCommandLine('/help', h.deps)).resolves.toBeUndefined()
+    expect(h.notices).toEqual([])
   })
 
   it('refuses to stage a model-only skill instead of sending it', async () => {

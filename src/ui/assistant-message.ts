@@ -1,17 +1,23 @@
-import { Box, Container, Markdown, Spacer, Text, type Component } from '@earendil-works/pi-tui'
+import { Box, Container, Spacer, Text, type Component } from '@earendil-works/pi-tui'
 import { clipGraphemes } from './grapheme-preview.js'
 import { reasoningPreview, reasoningText } from './reasoning-text.js'
 import { sanitizeTerminalText } from '../runtime/terminal-text.js'
 import type { TranscriptBlock, TranscriptOptions } from './transcript.js'
 import type { AssistantPart } from './transcript-stream.js'
+import { StreamMarkdown } from './stream-markdown.js'
+import { StreamText } from './stream-text.js'
 
 type AssistantBlock = Extract<TranscriptBlock, { kind: 'assistant' }>
+
+/** Body a part grows into; both re-render only the tail an append touched. */
+type PartBody = StreamText | StreamMarkdown
+
 interface PartComponent {
   readonly type: AssistantPart['type']
   readonly text: string
   readonly raw: string
   readonly component: Component
-  readonly body: Text | Markdown
+  readonly body: PartBody
 }
 
 /** One message keeps its completed parts and only updates the streaming leaf. */
@@ -50,14 +56,16 @@ export class AssistantMessage extends Container {
     const next = visible.map((part, index): PartComponent => {
       const before = this.parts[index]
       if (before?.type === part.type) {
-        if (before.text !== part.text) before.body.setText(part.type === 'text' ? part.text : palette.dim(part.text))
+        if (before.text !== part.text) before.body.setText(part.text)
         return before.text === part.text && before.raw === part.raw ? before : { ...before, ...part }
       }
       if (part.type === 'text') {
-        const body = new Markdown(part.text, 0, 0, this.options.markdown)
+        const body = new StreamMarkdown(part.text, this.options.markdown)
         return { ...part, component: body, body }
       }
-      const body = new Text(palette.dim(part.text), 0, 0)
+      // Reasoning is styled per rendered line, so no ANSI state has to cross a
+      // line boundary when the tail is re-wrapped on its own.
+      const body = new StreamText(part.text, line => palette.dim(line))
       if (mode === 'compact') return { ...part, component: body, body }
       const box = new Box(1, 0, palette.thinkingBand)
       box.addChild(new Text(palette.dim('thinking'), 0, 0))

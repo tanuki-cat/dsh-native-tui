@@ -407,43 +407,76 @@ export function formatCacheHitPercent(cacheReadTokens: number, promptTokens: num
   return '99.' + '9'.repeat(distinguishingPlaces - 1) + String(10 - roundedLoss)
 }
 
-/**
- * Fold provider usage records and official stats into status-bar metrics.
- * Turns/steps come from session-stats when present; the event fallback keeps
- * the line useful in compositions without that projection.
- * @param events - complete durable Session event log.
- * @param stats - optional whole-session sessionStats projection.
- * @param contextWindow - selected model context capacity, when known.
- * @param meter - the token meter's reading when that service is mounted;
- *   without it the latest provider prompt stands in, which lags the surface the
- *   compactor prices.
- * @returns cumulative token/cache figures and context pressure.
- */
-export function collectSessionMetrics(
-  events: readonly SessionEvent[],
-  stats?: SessionStats,
-  contextWindow?: number,
-  meter?: ContextMeterReading,
-): SessionMetrics {
-  let turns = stats?.turns ?? 0
-  let steps = stats?.steps ?? 0
-  let buckets: UsageBuckets = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+/** Mutable accumulator behind the status-bar fold. */
+interface MetricsFoldState {
+  /** Events already folded; a later call resumes here. */
+  processed: number
+  /** Newest folded event, used to detect that the log was replaced rather than appended. */
+  lastEvent: SessionEvent | undefined
+  /** Oldest folded event, the second sentinel guarding against a replaced log. */
+  firstEvent: SessionEvent | undefined
+  /** Whether a `sessionStats` projection supplied turns/steps/decode while folding. */
+  hasStats: boolean
+  /** Turns counted from the log, used only when no projection is mounted. */
+  turns: number
+  /** Steps counted from the log, used only when no projection is mounted. */
+  steps: number
+  /** Cumulative provider usage buckets. */
+  buckets: UsageBuckets
   /**
    * Slot of the newest settlement. The token meter lets a later report for the
    * same step replace the earlier one — a settled message replacing its own
    * attempt, or a retried attempt replacing its predecessor — so the fold keeps
    * that slot's buckets to subtract when the replacement arrives.
    */
-  let settled: { readonly turn: unknown; readonly step: unknown; readonly buckets: UsageBuckets } | undefined
-  let latestPromptTokens = 0
+  settled: { readonly turn: unknown; readonly step: unknown; readonly buckets: UsageBuckets } | undefined
+  /** Newest provider prompt sample, which stands in when no meter is mounted. */
+  latestPromptTokens: number
   /** Sequence of the newest provider sample, for deciding what a prune can subtract. */
-  let latestUsageSeq: number | undefined
+  latestUsageSeq: number | undefined
   /** Event-log decode totals when the sessionStats projection is not mounted. */
-  let fallbackDecodeMs = 0
-  let fallbackDecodeTokens = 0
-  for (const event of events) {
-    if (stats === undefined && event.type === 'turn/start') turns += 1
-    if (stats === undefined && event.type === 'step/end') steps += 1
+  decodeMs: number
+  /** Event-log decode token totals when the sessionStats projection is not mounted. */
+  decodeTokens: number
+}
+
+/**
+ * Empty fold state.
+ * @returns a state that has processed no events yet.
+ */
+function createMetricsFoldState(): MetricsFoldState {
+  return {
+    processed: 0,
+    lastEvent: undefined,
+    firstEvent: undefined,
+    hasStats: false,
+    turns: 0,
+    steps: 0,
+    buckets: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    settled: undefined,
+    latestPromptTokens: 0,
+    latestUsageSeq: undefined,
+    decodeMs: 0,
+    decodeTokens: 0,
+  }
+}
+
+/**
+ * Fold the events a state has not seen yet.
+ *
+ * The fold is append-only: one settlement adds its own usage record and may
+ * replace an earlier report for the same step, so only the suffix beyond
+ * {@link MetricsFoldState.processed} has to be read on a status repaint.
+ * @param state - accumulator extended in place.
+ * @param events - complete durable Session event log.
+ * @param hasStats - whether turns/steps/decode come from the projection.
+ */
+function foldEvents(state: MetricsFoldState, events: readonly SessionEvent[], hasStats: boolean): void {
+  state.hasStats = hasStats
+  for (let index = state.processed; index < events.length; index += 1) {
+    const event = events[index]!
+    if (!hasStats && event.type === 'turn/start') state.turns += 1
+    if (!hasStats && event.type === 'step/end') state.steps += 1
     if ((event.type as string) === 'compaction/summary' || (event.type as string) === 'compaction/prune') {
       // Only shadowed events that were already in the latest provider sample
       // can be subtracted from that sample. A tool result created after the
@@ -460,27 +493,27 @@ export function collectSessionMetrics(
         ? Math.max(...shadowedSeqs)
         : typeof data.shadowedRange?.end === 'number' ? data.shadowedRange.end : undefined
       const shadowed = data.shadowedTokenCount
-      if (latestUsageSeq !== undefined && shadowedEnd !== undefined && shadowedEnd <= latestUsageSeq
+      if (state.latestUsageSeq !== undefined && shadowedEnd !== undefined && shadowedEnd <= state.latestUsageSeq
         && typeof shadowed === 'number' && Number.isFinite(shadowed) && shadowed > 0) {
-        latestPromptTokens = Math.max(0, latestPromptTokens - shadowed)
+        state.latestPromptTokens = Math.max(0, state.latestPromptTokens - shadowed)
       }
       continue
     }
     if ((event.type as string) === 'llm/retry-started') {
       const retry = event.data as { readonly turn?: unknown; readonly step?: unknown }
-      if (settled !== undefined && settled.turn === retry.turn && settled.step === retry.step) settled = undefined
+      if (state.settled !== undefined && state.settled.turn === retry.turn && state.settled.step === retry.step) state.settled = undefined
       continue
     }
     const usage = usageOf(event)
     if (usage === undefined) continue
-    if (stats === undefined && event.type === 'assistant/message') {
+    if (!hasStats && event.type === 'assistant/message') {
       const first = Array.isArray(event.data.stream)
         ? assistantStreamFirstTokenTime(event.data.stream)
         : undefined
       const output = usage.outputTokens
       if (first !== undefined && typeof output === 'number' && Number.isFinite(output) && output >= 0) {
-        fallbackDecodeMs += Math.max(0, event.time - first)
-        fallbackDecodeTokens += output
+        state.decodeMs += Math.max(0, event.time - first)
+        state.decodeTokens += output
       }
     }
     const next: UsageBuckets = {
@@ -490,33 +523,54 @@ export function collectSessionMetrics(
       cacheWrite: usageNumber(usage, 'cacheWriteTokens'),
     }
     const slot = event.data as { readonly turn?: unknown; readonly step?: unknown }
-    if (settled !== undefined && settled.turn === slot.turn && settled.step === slot.step) {
-      buckets = {
-        input: buckets.input - settled.buckets.input,
-        output: buckets.output - settled.buckets.output,
-        cacheRead: buckets.cacheRead - settled.buckets.cacheRead,
-        cacheWrite: buckets.cacheWrite - settled.buckets.cacheWrite,
+    if (state.settled !== undefined && state.settled.turn === slot.turn && state.settled.step === slot.step) {
+      const prior = state.settled.buckets
+      state.buckets = {
+        input: state.buckets.input - prior.input,
+        output: state.buckets.output - prior.output,
+        cacheRead: state.buckets.cacheRead - prior.cacheRead,
+        cacheWrite: state.buckets.cacheWrite - prior.cacheWrite,
       }
     }
-    buckets = {
-      input: buckets.input + next.input,
-      output: buckets.output + next.output,
-      cacheRead: buckets.cacheRead + next.cacheRead,
-      cacheWrite: buckets.cacheWrite + next.cacheWrite,
+    state.buckets = {
+      input: state.buckets.input + next.input,
+      output: state.buckets.output + next.output,
+      cacheRead: state.buckets.cacheRead + next.cacheRead,
+      cacheWrite: state.buckets.cacheWrite + next.cacheWrite,
     }
-    settled = { turn: slot.turn, step: slot.step, buckets: next }
+    state.settled = { turn: slot.turn, step: slot.step, buckets: next }
     // The newest sample is the log's stand-in estimate, whatever slot it reports.
-    latestPromptTokens = next.input + next.cacheRead + next.cacheWrite
+    state.latestPromptTokens = next.input + next.cacheRead + next.cacheWrite
     const sampleSeq = Number(event.seq)
-    if (Number.isSafeInteger(sampleSeq)) latestUsageSeq = sampleSeq
+    if (Number.isSafeInteger(sampleSeq)) state.latestUsageSeq = sampleSeq
   }
+  state.processed = events.length
+  state.lastEvent = events.length === 0 ? undefined : events[events.length - 1]
+  state.firstEvent = events.length === 0 ? undefined : events[0]
+}
+
+/**
+ * Turn one folded state plus the projection readings into the status-bar view.
+ * @param state - folded event log.
+ * @param stats - optional whole-session sessionStats projection.
+ * @param contextWindow - selected model context capacity, when known.
+ * @param meter - the token meter's reading when that service is mounted.
+ * @returns cumulative token/cache figures and context pressure.
+ */
+function finalizeMetrics(
+  state: MetricsFoldState,
+  stats: SessionStats | undefined,
+  contextWindow: number | undefined,
+  meter: ContextMeterReading | undefined,
+): SessionMetrics {
+  const buckets = state.buckets
   const promptTokens = buckets.input + buckets.cacheRead + buckets.cacheWrite
   // The Web usage pill sums the four disjoint buckets, so a provider's own
   // total never enters the figure.
   const totalTokens = promptTokens + buckets.output
   const cacheHit = formatCacheHitPercent(buckets.cacheRead, promptTokens)
-  const decodeMs = stats?.decodeMs ?? fallbackDecodeMs
-  const decodeTokens = stats?.decodeTokens ?? fallbackDecodeTokens
+  const decodeMs = stats?.decodeMs ?? state.decodeMs
+  const decodeTokens = stats?.decodeTokens ?? state.decodeTokens
   const tokensPerSecond = decodeMs > 0 && decodeTokens > 0
     ? decodeTokens / (decodeMs / 1000)
     : undefined
@@ -524,13 +578,13 @@ export function collectSessionMetrics(
   // owns the figure — including its silence before the first provider sample.
   // Only a composition without the meter falls back to the log's last prompt,
   // which lags the surface the compactor prices.
-  const estimateTokens = meter === undefined ? latestPromptTokens : meter.tokens
+  const estimateTokens = meter === undefined ? state.latestPromptTokens : meter.tokens
   const pressure = contextWindow === undefined || estimateTokens === undefined
     ? undefined
     : contextPressure(contextWindow, meter?.reservedTokens ?? 0, estimateTokens)
   return {
-    turns,
-    steps,
+    turns: stats?.turns ?? state.turns,
+    steps: stats?.steps ?? state.steps,
     ...(tokensPerSecond === undefined ? {} : { tokensPerSecond }),
     totalTokens,
     ...(cacheHit === undefined ? {} : { cacheHit }),
@@ -544,20 +598,41 @@ export function collectSessionMetrics(
 }
 
 /**
+ * Fold provider usage records and official stats into status-bar metrics.
+ * Turns/steps come from session-stats when present; the event fallback keeps
+ * the line useful in compositions without that projection.
+ * @param events - complete durable Session event log.
+ * @param stats - optional whole-session sessionStats projection.
+ * @param contextWindow - selected model context capacity, when known.
+ * @param meter - the token meter's reading when that service is mounted;
+ *   without it the latest provider prompt stands in, which lags the surface
+ *   the compactor prices.
+ * @returns cumulative token/cache figures and context pressure.
+ */
+export function collectSessionMetrics(
+  events: readonly SessionEvent[],
+  stats?: SessionStats,
+  contextWindow?: number,
+  meter?: ContextMeterReading,
+): SessionMetrics {
+  const state = createMetricsFoldState()
+  foldEvents(state, events, stats !== undefined)
+  return finalizeMetrics(state, stats, contextWindow, meter)
+}
+
+/**
  * Memoizing wrapper around {@link collectSessionMetrics}.
  *
  * The status row repaints on every durable Session event while the fold is
- * linear in the whole log, so a long session pays it thousands of times. The
- * Host hands out one frozen event snapshot per log length, so the array
- * identity changes exactly when the log does; the length is part of the key so
- * a caller that appends in place still misses.
+ * linear in the whole log, so a long session used to refold thousands of events
+ * for each settlement. The Host hands out one frozen event snapshot per log
+ * length, so an appended log is the previous array plus a suffix: the fold
+ * keeps its accumulated state and reads only the events it has not seen.
  *
- * The projection and the meter are keyed by the values the fold reads rather
- * than by object identity: the Host may hand out a fresh state object per call,
- * and a new object with the same counters must not refold the log. The stats
- * presence is part of the key because the event fallback only runs when no
- * projection exists.
- * @returns a fold that returns the previous result while its inputs are equal.
+ * The projection, the window and the meter are applied when the result is
+ * finalized rather than while folding, so a new provider sample or a context
+ * window resolution costs no log scan at all.
+ * @returns a fold that resumes from the events it already read.
  */
 export function createSessionMetricsMemo(): (
   events: readonly SessionEvent[],
@@ -565,9 +640,11 @@ export function createSessionMetricsMemo(): (
   contextWindow?: number,
   meter?: ContextMeterReading,
 ) => SessionMetrics {
+  let state = createMetricsFoldState()
+  /** Bumped whenever the fold consumes events, so an unchanged reading keeps its identity. */
+  let foldVersion = 0
   let last: {
-    readonly events: readonly SessionEvent[]
-    readonly length: number
+    readonly foldVersion: number
     readonly hasStats: boolean
     readonly turns: number | undefined
     readonly steps: number | undefined
@@ -579,31 +656,45 @@ export function createSessionMetricsMemo(): (
     readonly metrics: SessionMetrics
   } | undefined
   return (events, stats, contextWindow, meter) => {
+    const hasStats = stats !== undefined
+    // A replaced or truncated log, or a projection appearing/disappearing,
+    // changes what the fold would count, so it has to start over. The Host only
+    // ever appends, so two sentinels are enough to prove the prefix is the one
+    // already folded; verifying the whole prefix would cost the scan this
+    // avoids.
+    const resumable = state.hasStats === hasStats
+      && state.processed <= events.length
+      && (state.processed === 0
+        || events[state.processed - 1] === state.lastEvent && events[0] === state.firstEvent)
+    if (!resumable) state = createMetricsFoldState()
+    const processed = state.processed
+    foldEvents(state, events, hasStats)
+    if (state.processed !== processed) foldVersion += 1
+    const tokens = meter?.tokens
+    const reserved = meter?.reservedTokens
     if (last !== undefined
-      && last.events === events
-      && last.length === events.length
-      && last.hasStats === (stats !== undefined)
+      && last.foldVersion === foldVersion
+      && last.hasStats === hasStats
       && last.turns === stats?.turns
       && last.steps === stats?.steps
       && last.decodeMs === stats?.decodeMs
       && last.decodeTokens === stats?.decodeTokens
       && last.contextWindow === contextWindow
-      && last.tokens === meter?.tokens
-      && last.reserved === meter?.reservedTokens) {
+      && last.tokens === tokens
+      && last.reserved === reserved) {
       return last.metrics
     }
-    const metrics = collectSessionMetrics(events, stats, contextWindow, meter)
+    const metrics = finalizeMetrics(state, stats, contextWindow, meter)
     last = {
-      events,
-      length: events.length,
-      hasStats: stats !== undefined,
+      foldVersion,
+      hasStats,
       turns: stats?.turns,
       steps: stats?.steps,
       decodeMs: stats?.decodeMs,
       decodeTokens: stats?.decodeTokens,
       contextWindow,
-      tokens: meter?.tokens,
-      reserved: meter?.reservedTokens,
+      tokens,
+      reserved,
       metrics,
     }
     return metrics

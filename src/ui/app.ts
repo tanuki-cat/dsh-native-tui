@@ -24,6 +24,7 @@ import { showApproval, showQuestionBatch } from './dialogs.js'
 import type { PendingAttachment } from '../runtime/attachments.js'
 import { TuiAutocompleteProvider, type SessionReferenceService, type SkillSuggestion } from './autocomplete.js'
 import { currentPreset, renderStatusRows, terminalWindowTitle } from './status-line.js'
+import { createStatusRows } from './status-rows.js'
 import { createPalette, editorTheme, markdownTheme, type Palette } from './theme.js'
 import { debug } from '../debug.js'
 import { globalShortcut } from './keymap.js'
@@ -496,12 +497,16 @@ export async function startTerminalApp(
     })
   }
 
+  // The chrome rows are deduplicated: an identical repaint only costs the fold.
+  const statusRows = createStatusRows({ header, status, footer })
+
   const paintStatus = (): void => {
     if (disposed) return
     reasoningEffort = modelSelection.current?.reasoningEffort
     const options = active.agent.options
     const inputs = contextInputs()
-    renderStatusRows({ header, status, footer }, palette, {
+    statusRows.reset()
+    renderStatusRows(statusRows.rows, palette, {
       title,
       sessionId: active.id,
       cwd: summaryCwd() ?? config.cwd,
@@ -518,6 +523,7 @@ export async function startTerminalApp(
       stats: inputs.stats,
       events: inputs.events,
     }, metricsFold)
+    if (!statusRows.changed) return
     syncWindowTitle()
     tui.requestRender()
   }
@@ -875,7 +881,7 @@ export async function startTerminalApp(
       if (shortcut === 'new-session') void runCommand('/new')
       else void pickStoredSession(commandContext()).then(id => {
         if (id !== undefined && id !== active.id) return runCommand('/resume ' + id)
-      })
+      }, error => { pushNotice('error', 'Could not open the session picker: ' + errorMessage(error)) })
       return { consume: true }
     }
     if (shortcut === 'cycle-reasoning') {

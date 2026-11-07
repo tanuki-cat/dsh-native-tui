@@ -57,6 +57,20 @@ export function dialogFrame(lines: readonly string[], width: number, palette: Pa
   })
 }
 
+/**
+ * Attach one abort handler to a dialog.
+ *
+ * The dialog is built between the entry guard and this registration, so an
+ * abort that landed in that window would otherwise leave the overlay open and
+ * its promise unsettled forever.
+ * @param signal - cancellation for the dialog, when the caller supplies one.
+ * @param onAbort - settles the dialog as cancelled.
+ */
+export function bindAbort(signal: AbortSignal | undefined, onAbort: () => void): void {
+  signal?.addEventListener('abort', onAbort, { once: true })
+  if (signal?.aborted === true) onAbort()
+}
+
 /** SelectList wrapper that owns its title and key hint. */
 class ChoiceDialog implements Component {
   private readonly list: SelectList
@@ -249,8 +263,7 @@ export function showChoice(
       reject(error)
       return
     }
-    signal?.addEventListener('abort', onAbort, { once: true })
-    if (Boolean(signal?.aborted)) onAbort()
+    bindAbort(signal, onAbort)
   })
 }
 
@@ -301,8 +314,7 @@ export function showSearchChoice(
       reject(error)
       return
     }
-    signal?.addEventListener('abort', onAbort, { once: true })
-    if (Boolean(signal?.aborted)) onAbort()
+    bindAbort(signal, onAbort)
   })
 }
 
@@ -344,7 +356,7 @@ export function showTextInput(
       reject(error)
       return
     }
-    signal?.addEventListener('abort', onAbort, { once: true })
+    bindAbort(signal, onAbort)
   })
 }
 
@@ -436,7 +448,7 @@ export function showMultilineInput(
       reject(error)
       return
     }
-    signal?.addEventListener('abort', onAbort, { once: true })
+    bindAbort(signal, onAbort)
   })
 }
 
@@ -538,7 +550,7 @@ function showStyledTextPager(
       reject(error)
       return
     }
-    signal?.addEventListener('abort', onAbort, { once: true })
+    bindAbort(signal, onAbort)
   })
 }
 
@@ -595,7 +607,7 @@ export function showImagePreview(
       reject(error)
       return
     }
-    signal?.addEventListener('abort', onAbort, { once: true })
+    bindAbort(signal, onAbort)
   })
 }
 
@@ -804,7 +816,7 @@ function showMultiChoice(
       reject(error)
       return
     }
-    signal?.addEventListener('abort', onAbort, { once: true })
+    bindAbort(signal, onAbort)
   })
 }
 

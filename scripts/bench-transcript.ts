@@ -170,3 +170,52 @@ console.log('=== F. long session + 10,000 thinking deltas, detailed display ==='
     renderer.container.render(120)
   }, 9)
 }
+
+console.log('')
+console.log('=== G. streaming reasoning with line breaks (realistic model output) ===')
+{
+  const entries = makeEntries(200)
+  const renderer = new TranscriptRenderer(options)
+  renderer.set(entries, [])
+  renderer.container.render(120)
+  let seq = 1_500_000
+  let pushed = 0
+  const frame = (): void => {
+    seq += 1
+    pushed += 1
+    const delta = 'thinking about the shape of this code path '.slice(0, 46) + (pushed % 12 === 0 ? '\n' : '')
+    entries.push({ type: 'live', event: {
+      type: 'assistant/live-chunk', seq, time: 0,
+      data: { attemptId: 'lines', turn: 900, step: 0, chunk: { type: 'reasoning-delta', index: 0, text: delta } },
+    } } as never)
+    renderer.set(entries, [])
+    renderer.container.render(120)
+  }
+  // Warm to roughly F's text volume (~190 KB) before measuring steady state.
+  for (let index = 0; index < 4000; index += 1) frame()
+  measure('200 turns + reasoning with line breaks', frame, 9)
+}
+
+console.log('')
+console.log('=== H. streaming markdown paragraphs ===')
+{
+  const entries = makeEntries(200)
+  const renderer = new TranscriptRenderer(options)
+  renderer.set(entries, [])
+  renderer.container.render(120)
+  let seq = 1_700_000
+  let pushed = 0
+  const frame = (): void => {
+    seq += 1
+    pushed += 1
+    const delta = 'The quick brown fox jumps over the lazy dog. '.slice(0, 46) + (pushed % 8 === 0 ? '\n\n' : ' ')
+    entries.push({ type: 'live', event: {
+      type: 'assistant/live-chunk', seq, time: 0,
+      data: { attemptId: 'md', turn: 901, step: 0, chunk: { type: 'text-delta', index: 0, text: delta } },
+    } } as never)
+    renderer.set(entries, [])
+    renderer.container.render(120)
+  }
+  for (let index = 0; index < 4000; index += 1) frame()
+  measure('200 turns + markdown paragraphs', frame, 9)
+}

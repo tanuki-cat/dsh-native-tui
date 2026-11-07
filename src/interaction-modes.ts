@@ -43,13 +43,19 @@ export interface ModeExecution {
 type Decision = { kind: 'allow' | 'cancel' } | { kind: 'deny' | 'ask'; reason?: string }
 interface Commands {
   list(agent: Agent): readonly { name: string; definitionId?: string }[]
+  /** Resolve one command definition without materializing and sorting the table. */
+  find?(agent: Agent, name: string): { readonly definitionId?: unknown } | undefined
   execute(agent: Agent, line: string, attachments: readonly never[], signal: AbortSignal): Promise<{ result: { kind: string; text?: string } } | undefined>
 }
 interface ModeTools { guard(check: (exec: ModeExecution) => string | undefined): () => void }
 interface ModeEvents {
   on(event: 'tools/pre-execute', listener: (exec: ModeExecution, next: () => Promise<Decision>) => Promise<Decision>): () => void
   on(event: 'agent/pre-step', listener: (request: { agent: Agent; signal: AbortSignal }, next: () => Promise<{ kind: string }>) => Promise<{ kind: string }>): () => void
+  on(event: 'commands/change', listener: () => void): () => void
 }
+
+/** Identity the Host plan-mode plugin registers its `/plan` command under. */
+const PLAN_COMMAND_ID = '@deepseek-ai/dsh-plan-mode'
 
 const READ_TOOLS = new Set([
   'read', 'read_image', 'glob', 'grep', 'web_search', 'web_fetch', 'skill',
@@ -82,6 +88,18 @@ export function apply(ctx: Context): void {
 export class InteractionModeService {
   private readonly permissions: Permissions
   private readonly commands: Commands | undefined
+  /**
+   * Whether a plan command exists, per agent.
+   *
+   * `current()` runs on every status repaint and every guarded tool call, and a
+   * composition without the Host plan-mode service can only answer by looking
+   * the command up. The verdict is thrown away whenever the command table
+   * changes — the Host emits `commands/change` when a definition is registered
+   * and when its layer is disposed — so an unregistered or newly registered
+   * command is never frozen in. The list-based fallback below is a shape
+   * compatibility branch, not a second invalidation path.
+   */
+  private planCommands = new WeakMap<Agent, boolean>()
 
   constructor(ctx: Context) {
     this.permissions = ctx.get('permissionPresets') as Permissions
@@ -89,6 +107,7 @@ export class InteractionModeService {
     const events = ctx as unknown as ModeEvents
     const tools = ctx.get('tools') as ModeTools
     ctx.effect(() => tools.guard(exec => this.planDenial(exec)))
+    events.on('commands/change', () => { this.planCommands = new WeakMap() })
     events.on('tools/pre-execute', async (exec, next) => {
       const downstream = await next()
       if (downstream.kind !== 'allow' || exec.agent === undefined || isTransport(exec)) return downstream
@@ -112,8 +131,8 @@ export class InteractionModeService {
       if (direct !== undefined) return direct
     }
     catch { /* A nested preset can isolate the service from agent.ctx. */ }
-    const commands = this.commands
-    if (commands?.list?.(agent).some(command => command.name === 'plan' && command.definitionId === '@deepseek-ai/dsh-plan-mode') !== true) return undefined
+    if (!this.hasPlanCommand(agent)) return undefined
+    const commands = this.commands!
     const get = (): { active: boolean } => {
       const event = agent.session.snapshotEvents().findLast(event => (event.type as string) === 'plan/mode')
       return { active: (event?.data as { active?: unknown } | undefined)?.active === true }
@@ -128,6 +147,29 @@ export class InteractionModeService {
         })
       },
     }
+  }
+
+  /**
+   * Whether the Host plan-mode plugin registered `/plan` for this agent.
+   * @param agent - agent whose scoped command table is consulted.
+   * @returns true when the durable plan selection can be driven through it.
+   */
+  private hasPlanCommand(agent: Agent): boolean {
+    const cached = this.planCommands.get(agent)
+    if (cached !== undefined) return cached
+    let available = false
+    try {
+      const found = this.commands?.find?.(agent, 'plan')
+      available = found === undefined
+        // A composition without the lookup helper still answers, at list cost.
+        ? this.commands?.list?.(agent).some(command => command.name === 'plan' && command.definitionId === PLAN_COMMAND_ID) === true
+        : found.definitionId === PLAN_COMMAND_ID
+    }
+    catch {
+      available = false
+    }
+    this.planCommands.set(agent, available)
+    return available
   }
 
   current(agent: Agent): InteractionMode | 'custom' {

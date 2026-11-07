@@ -69,10 +69,34 @@ export interface CommandRouterDeps {
 
 /**
  * Dispatch one submitted `/` line.
+ *
+ * Every caller is fire-and-forget — the terminal's submit path and the nested
+ * `ctx.runCommand` a handler uses — so a handler failure must never escape as a
+ * rejected promise: it would surface as an unhandled rejection and end the
+ * terminal process. Failures become one error notice instead.
  * @param line - the line as typed, including its leading slash.
  * @param deps - the collaborators the handlers cannot reach on their own.
  */
 export async function runCommandLine(line: string, deps: CommandRouterDeps): Promise<void> {
+  try {
+    await dispatchCommandLine(line, deps)
+  }
+  catch (error) {
+    try {
+      deps.context().notice('error', 'Command failed: ' + errorMessage(error))
+    }
+    catch {
+      // The context itself could not be built; there is nothing left to report to.
+    }
+  }
+}
+
+/**
+ * Route the line to its handler. Only this inner body may throw.
+ * @param line - the line as typed, including its leading slash.
+ * @param deps - the collaborators the handlers cannot reach on their own.
+ */
+async function dispatchCommandLine(line: string, deps: CommandRouterDeps): Promise<void> {
   const withoutSlash = line.slice(1)
   const space = withoutSlash.indexOf(' ')
   const name = (space === -1 ? withoutSlash : withoutSlash.slice(0, space)).toLowerCase()

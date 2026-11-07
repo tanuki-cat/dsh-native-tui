@@ -22,7 +22,7 @@ import {
   type TUI,
 } from '@earendil-works/pi-tui'
 import type { ChoiceItem } from './dialogs.js'
-import { dialogFrame } from './dialogs.js'
+import { bindAbort, dialogFrame } from './dialogs.js'
 import { selectTheme, type Palette } from './theme.js'
 
 /** Sentinel a field submenu returns to remove the saved override. */
@@ -176,7 +176,7 @@ export function showSettingsPanel(
       reject(error)
       return
     }
-    signal?.addEventListener('abort', onAbort, { once: true })
+    bindAbort(signal, onAbort)
   })
 }
 
