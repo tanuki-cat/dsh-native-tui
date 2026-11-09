@@ -47,6 +47,11 @@ function resultStopped(meta: unknown): boolean {
   return typeof meta === 'object' && meta !== null && 'stopped' in meta && meta.stopped === true
 }
 
+function resultOperation(meta: unknown): 'create' | 'update' | undefined {
+  if (meta === null || typeof meta !== 'object' || !('operation' in meta)) return undefined
+  return meta.operation === 'create' || meta.operation === 'update' ? meta.operation : undefined
+}
+
 /** One rendered transcript row. */
 export type TranscriptBlock = ({
   readonly kind: 'user'; readonly text: string
@@ -71,6 +76,8 @@ export type TranscriptBlock = ({
   readonly stopped?: boolean
   readonly pending: boolean
   readonly diffs?: readonly FileDiff[]
+  /** Host-reported file operation; insertion hunks alone do not prove creation. */
+  readonly operation?: 'create' | 'update'
   /**
    * Distinct sub-calls a `run_code` program dispatched, as compact rows such as
    * `read src/a.ts` or `mcp idea`. Only compact code-execution cards collect
@@ -472,6 +479,7 @@ export function createTranscriptReducer(options: TranscriptOptions) {
         const settle = extensionType === 'tool/ptc-dispatch'
         const args = ptcArguments(data?.arguments)
         const diffs = settle ? resultFileDiffs(data?.meta, args) : undefined
+        const operation = settle ? resultOperation(data?.meta) : undefined
         // A compact parent card lists what its program dispatched; a detailed
         // card shows the program source and ignores these rows.
         if (runCodeDisplay === 'compact' && subCallId !== undefined) {
@@ -501,6 +509,7 @@ export function createTranscriptReducer(options: TranscriptOptions) {
               ...(data?.isError === true ? { isError: true } : {}),
               ...(resultStopped(data?.meta) ? { stopped: true } : {}),
               ...(diffs === undefined ? {} : { diffs }),
+              ...(operation === undefined ? {} : { operation }),
               pending: false,
               seq,
             }
@@ -625,6 +634,7 @@ export function createTranscriptReducer(options: TranscriptOptions) {
           const result = toolResultText(event.data.message)
           const isError = event.data.message.isError === true
           const diffs = resultFileDiffs(event.data.meta, prior?.kind === 'tool' ? prior.args : '')
+          const operation = resultOperation(event.data.meta)
           if (index === undefined) {
             blocks.push({
               kind: 'tool',
@@ -635,6 +645,7 @@ export function createTranscriptReducer(options: TranscriptOptions) {
               ...(isError ? { isError: true } : {}),
               ...(resultStopped(event.data.meta) ? { stopped: true } : {}),
               ...(diffs === undefined ? {} : { diffs }),
+              ...(operation === undefined ? {} : { operation }),
               pending: false,
               seq,
             })
@@ -645,6 +656,7 @@ export function createTranscriptReducer(options: TranscriptOptions) {
               ...(isError ? { isError: true } : {}),
               ...(resultStopped(event.data.meta) ? { stopped: true } : {}),
               ...(diffs === undefined ? {} : { diffs }),
+              ...(operation === undefined ? {} : { operation }),
               pending: false,
               seq,
             }

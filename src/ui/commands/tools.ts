@@ -10,9 +10,11 @@ import { showTextPager } from '../dialogs.js'
 import type { CommandContext } from './context.js'
 import { NL } from './shared.js'
 
+const TOOL_HISTORY_LIMIT = 50
+
 /** The `/tools` command. */
 export function toolsCommand(ctx: CommandContext): void {
-  const calls = collectToolCalls(ctx.active.agent.session.snapshotEvents(), 20)
+  const calls = collectToolCalls(ctx.active.agent.session.snapshotEvents(), TOOL_HISTORY_LIMIT)
   if (calls.length === 0) {
     ctx.notice('info', 'No tool calls recorded in this session yet.')
     return
@@ -33,7 +35,7 @@ export async function toolCommand(ctx: CommandContext, args: string): Promise<vo
     ctx.notice('warning', 'Usage: /tool <index> (see /tools)')
     return
   }
-  const call = collectToolCalls(ctx.active.agent.session.snapshotEvents(), 20)[index]
+  const call = collectToolCalls(ctx.active.agent.session.snapshotEvents(), TOOL_HISTORY_LIMIT)[index]
   if (call === undefined) {
     ctx.notice('warning', 'No tool call at index ' + String(index) + '.')
     return
@@ -53,7 +55,7 @@ export async function toolCommand(ctx: CommandContext, args: string): Promise<vo
 
 /** The `/diff` command: page the latest or one indexed tool diff. */
 export async function diffCommand(ctx: CommandContext, args: string): Promise<void> {
-  const calls = collectToolCalls(ctx.active.agent.session.snapshotEvents(), 50)
+  const calls = collectToolCalls(ctx.active.agent.session.snapshotEvents(), TOOL_HISTORY_LIMIT)
   const withDiffs = calls
     .map((call, index) => ({ call, index }))
     .filter(item => item.call.diffs !== undefined && item.call.diffs.length > 0)

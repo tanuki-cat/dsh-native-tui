@@ -8,9 +8,9 @@ const palette = createPalette('plain')
 const options = { showReasoning: true, maxEntries: 100, palette, markdown: markdownTheme(palette) }
 type ToolBlock = Extract<TranscriptBlock, { kind: 'tool' }>
 const write = (content: string, overrides: Partial<ToolBlock> = {}): ToolBlock => ({
-  kind: 'tool', callId: 'write-1', name: 'write', pending: false,
+  kind: 'tool', callId: 'write-1', name: 'write', pending: false, operation: 'create',
   args: JSON.stringify({ file_path: 'example.ts', content }),
-  diffs: [{ path: 'example.ts', oldText: 'previous content', newText: content }],
+  diffs: [{ path: 'example.ts', oldText: null, newText: content }],
   result: 'Created file', ...overrides,
 })
 const render = (block: ToolBlock, expanded = false): string => renderTranscriptBlock(block, { ...options, toolsExpanded: expanded }).render(120).join('\n')

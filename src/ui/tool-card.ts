@@ -59,10 +59,12 @@ export class ToolCard implements Component {
     if (block.name === 'run_code') return renderCodeExecutionCard(block, { ...this.options, toolsExpanded: expanded })
     const container = new Container()
     const addBody = (component: Component): void => { container.addChild(new ToolBody(component, palette)) }
-    if (block.name === 'write') return renderWriteCard(block, palette, expanded)
+    const diffs = block.diffs ?? []
+    const writeUpdate = block.operation === 'update'
+      || (block.operation === undefined && diffs.some(diff => diff.oldText !== null))
+    if (block.name === 'write' && (block.pending || !writeUpdate || diffs.length === 0)) return renderWriteCard(block, palette, expanded)
     const path = stringArg(args, 'file_path') ?? stringArg(args, 'path')
     const shell = block.name === 'bash' || block.name === 'pwsh'
-    const diffs = block.diffs ?? []
     const mcp = /^mcp__(.+?)__(.+)$/u.exec(block.name)
     const name = mcp === null ? block.name : 'mcp ' + mcp[1] + '/' + mcp[2]
     const pathLabel = (path: string): string => palette.accent(toolLabel(path, 160, 'end'))

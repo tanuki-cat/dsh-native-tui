@@ -92,7 +92,7 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 - 工具卡片按来源区分，两条路径共用同一套 diff 渲染，不按预设分支：
   - `ptc` 预设的 `run_code` 内嵌子调用由 `tool/ptc-dispatch-start` / `tool/ptc-dispatch` 建卡片。
   - `standard` / `cordis` 等 native 预设直接走 `tool/call` / `tool/result` 顶层卡片；`minimal` 不暴露 `write`/`edit`。
-- `write` 展示编号源码预览，`edit` 展示带行号和增删统计的 diff；标题显示产生它的工具与文件，如 `• edit src/file.ts`，圆点颜色表示执行状态。
+- `write` 新建文件或尚无变更结果时展示编号源码预览；覆盖已有文件且 Host 提供实际 diff 时，和 `edit` 一样展示带行号和增删统计的 diff。标题保留实际工具名，如 `• write src/file.ts`，圆点颜色表示执行状态。
 - 审批与问答 waterfall。普通选择、输入、分页和图片 overlay 使用带边框的不透明背景；审批使用屏幕下方的编号选项与分隔线，突出实际调用和原因。审批按 toolName 与 callId 精确读取本次原生或 PTC 调用的参数，展示实际命令、目标路径或 MCP 方法；无法匹配时明确显示参数不可用，不借用相邻调用。`View full request details` 可查看完整 JSON，按视觉行翻页并随窗口缩放；Esc 返回原审批，查看详情本身不批准请求。长预览会标记截断，为批准、拒绝与取消保留空间。
 - 权限问答（`approval` intent）只提供调用方声明的批准、拒绝及可选持久授权，默认选中拒绝，不显示 Other 或跳过。动作保持可见，完整权限说明可分页查看，查看详情不会授权。展示标签与授权答案值分离；Esc 或请求中止不会批准。
 - 普通问答面板支持单选与多选：Space 勾选、Enter 提交，Other 提供自由文本（多选时会与已勾选项一并返回）；每题都有 `Skip this question` 行（无选项文本题为 `Answer… / Skip this question` 菜单），跳过只返回 `{ id, selected: [] }` 并继续批次；Esc 或请求 signal 中止会以 `UserQuestionError(ASK_ABORTED)` 取消整批。
@@ -115,7 +115,7 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 - 可选 `fullscreen`：TuiAltScreen + ScrollView，header/status/editor 固定，鼠标滚轮滚动、文本选择复制。向上滚动离开末尾后，视口末行显示可点击的 `↓ jump to latest`，点击回到最新消息并恢复自动跟随（也可 `Ctrl+End`）。
 - 长会话渲染优化：每个行组件按宽度缓存结果（`MemoBlock`），`maxTranscriptEntries` 默认 600 限制每帧保留的行组件数；帧间隔按上次绘制时刻对齐并按实测帧成本自适应，内容签名未变的帧跳过重绘。
 - 工具按类型展示：shell 为 `• Ran command` / `• Ran PS> command`，文件工具为 `• read path` / `• write path` / `• edit path`，MCP 为 `• mcp service/tool`，PTC 为 `• Ran run_code`。shell 首行最多 120 字符，多行命令标记省略行数；路径与查询等标签最多 160 字符，路径保留末尾。展开后查看原命令，正文仍有安全预览上限。
-- 成功的 read 默认收起，write 显示带行号的源码预览；shell 保留末尾 5 个视觉行，通用结果保留前 10 个视觉行，随后显示省略行数与 Ctrl+O 提示。折叠状态仍展示错误正文。edit 使用 Host 实际变更元数据，展示 `(+N -N)`、行号、红绿增删行和附近上下文，默认最多 24 个 diff 行；超出计算预算的变更范围用 `~` 标记估算计数，整文件替换保留删除和新增两侧样本。空文件、行尾换行不虚增行数；`/diff` 可分页查看会话记录的 diff，仍受预览上限约束。
+- 成功的 read 默认收起，write 新建文件显示带行号的源码预览；shell 保留末尾 5 个视觉行，通用结果保留前 10 个视觉行，随后显示省略行数与 Ctrl+O 提示。折叠状态仍展示错误正文。edit 和有实际更新 diff 的 write 使用 Host 变更元数据，展示 `(+N -N)`、行号、红绿增删行和附近上下文，默认最多 24 个 diff 行；超出计算预算的变更范围用 `~` 标记估算计数，整文件替换保留删除和新增两侧样本。空文件、行尾换行不虚增行数；没有实际 diff 时不推测旧内容。`/diff` 可分页查看会话记录的 diff，仍受预览上限约束。
 - 工具首行的 `•` 用颜色区分状态：黄色运行、绿色完成、红色失败、灰色停止，不额外增加完成提示行；标题文字和尺寸保持不变，错误/停止原因继续展示，`plain` 主题不着色。main-screen 已进入终端滚动历史的圆点延后到必要的完整重绘再刷新颜色，避免为变色清空历史；fullscreen 直接使用最新颜色。默认 main-screen 不支持点击卡片；fullscreen 下点击卡片首行可单独展开/收起。`Ctrl+O` 在两种模式下均切换所有保留工具卡片。
 - 审批在屏幕下方突出实际命令、原因与 cwd，所有操作带编号：方向键或编号键移动选择，Enter 才确认，Esc 取消；详情页完整展示调用参数。单次允许显示 `✓ You approved … this time`，拒绝和取消分别显示真实结果。只提供 Host 声明的操作和授权范围，原生单次审批不会增加长期授权选项。
 - **main-screen 手动全局展开的代价**：视口上方的历史卡片高度变化时，pi-tui 会整屏重绘并清除终端 scrollback；Session 日志不受影响。这不属于自动结算零重绘的保证范围。只查看单次完整输出时，可使用 `/tools`、`/tool <index>` 的独立预览，避免全局重排。
@@ -139,7 +139,7 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 - `/attach` 暂存文件 / 图片 / 剪贴板图片并随下一条 prompt 发送（8 MiB 上限），`/attach preview <i>` 可内联预览，`/attachments` 打开暂存附件管理器。
 - `/deliverables` 列出、打开 panel、预览或用系统文件管理器定位 `present` 交付文件。
 - `/changes` 查看最近一轮 workspace 变更文件与单文件 diff。
-- `/tools` / `/tool <index>` 列出工具调用或分页查看完整参数与结果；`/diff [index]` 查看 write/edit 的独立 diff。
+- `/tools` / `/tool <index>` 列出工具调用或分页查看完整参数与结果；`/diff [index]` 查看 write/edit 的独立 diff。三者使用相同的最近 50 次调用索引，包含原生调用和 PTC 子调用；`/diff` 无参数时打开其中最近一次有实际 diff 的调用。
 
 ### 扩展与集成
 
@@ -578,6 +578,7 @@ node scripts/fake-tty-reasoning-cycle.mjs    # Shift+Tab 编码、连按、草�
 node scripts/fake-tty-interaction-modes.mjs native # 五模式、真实文件效果、原生 permission、plan 审核和 Auto 审核（自建临时 profile）
 node scripts/fake-tty-interaction-modes.mjs ptc    # 相同边界的 PTC 内层链路；需要宿主允许创建子进程 sandbox
 node scripts/fake-tty-tool-details.mjs             # 显式 accept-edits 下的真实 PTC 卡片及审批详情；使用隔离 profile、本地 MCP 命名 fixture 和 mock provider
+node scripts/fake-tty-write-update-diff.mjs        # 原生/PTC × 普通/全屏：write 更新 diff、空文件插入、新建预览与 /diff 最新/索引查看
 node scripts/fake-tty-permission-restart.mjs       # minimal 同会话 Agent 重建、取消及权限恢复；使用终端 fence fixture，不依赖物理 PTY
 ~~~
 

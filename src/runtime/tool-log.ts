@@ -42,8 +42,18 @@ function contentText(message: { readonly content?: readonly unknown[] }): string
   return parts.join('\n')
 }
 
+function record(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
+}
+
+function argumentsText(value: unknown): string {
+  if (typeof value === 'string') return value
+  try { return JSON.stringify(value) ?? '' }
+  catch { return '' }
+}
+
 /**
- * Collect tool calls in first-call order, attaching results by call id.
+ * Collect native and PTC tool calls in first-call order, retaining their first result.
  * @param events - Session events in durable order.
  * @param maxCalls - maximum retained calls, keeping the newest.
  * @returns tool views without duplicates.
@@ -53,41 +63,36 @@ export function collectToolCalls(
   maxCalls = 100,
 ): ToolCallView[] {
   if (!Number.isSafeInteger(maxCalls) || maxCalls <= 0) throw new Error('tool maxCalls must be a positive safe integer')
-  const byCall = new Map<string, { view: ToolCallView; index: number }>()
+  const byCall = new Map<string, ToolCallView>()
+  const settled = new Set<string>()
   const order: string[] = []
   for (const event of events) {
-    if (event.type === 'tool/call') {
-      const data = event.data as { readonly callId?: unknown; readonly name?: unknown; readonly arguments?: unknown } | undefined
-      if (typeof data?.callId !== 'string') continue
-      if (byCall.has(data.callId)) continue
-      order.push(data.callId)
-      byCall.set(data.callId, {
-        index: order.length - 1,
-        view: {
-          callId: data.callId,
-          name: typeof data.name === 'string' ? data.name : 'tool',
-          args: typeof data.arguments === 'string' ? data.arguments : String(data.arguments ?? ''),
-        },
-      })
-    } else if (event.type === 'tool/result') {
-      const data = event.data as {
-        readonly message?: { readonly source?: { readonly callId?: unknown }; readonly content?: readonly unknown[]; readonly isError?: unknown }
-        readonly meta?: unknown
-      } | undefined
-      const callId = data?.message?.source?.callId
-      if (typeof callId !== 'string') continue
-      const entry = byCall.get(callId)
-      if (entry === undefined) continue
-      byCall.set(callId, {
-        index: entry.index,
-        view: {
-          ...entry.view,
-          result: data?.message === undefined ? undefined : contentText(data.message),
-          ...(data?.message?.isError === true ? { isError: true } : {}),
-          ...(asDiffs(data?.meta) === undefined ? {} : { diffs: asDiffs(data?.meta) }),
-        },
-      })
+    const ptc = event.type === 'tool/ptc-dispatch-start' || event.type === 'tool/ptc-dispatch'
+    const start = event.type === 'tool/call' || event.type === 'tool/ptc-dispatch-start'
+    if (!ptc && !start && event.type !== 'tool/result') continue
+    const data = record(event.data)
+    if (data === undefined) continue
+    const message = ptc ? data : record(data.message)
+    const callId = ptc ? data.subCallId : start ? data.callId : record(message?.source)?.callId
+    if (typeof callId !== 'string') continue
+    let call = byCall.get(callId)
+    if ((start && call !== undefined) || settled.has(callId)) continue
+    if (call === undefined) {
+      if (!start && !ptc) continue
+      call = { callId, name: typeof data.name === 'string' ? data.name : 'tool', args: argumentsText(data.arguments) }
+      order.push(callId)
+      byCall.set(callId, call)
     }
+    if (start) continue
+    const diffs = asDiffs(data.meta)
+    byCall.set(callId, {
+      ...call,
+      ...(ptc && data.arguments !== undefined ? { args: argumentsText(data.arguments) } : {}),
+      result: message === undefined ? undefined : contentText({ content: Array.isArray(message.content) ? message.content : [] }),
+      ...(message?.isError === true ? { isError: true } : {}),
+      ...(diffs === undefined ? {} : { diffs }),
+    })
+    settled.add(callId)
   }
-  return order.map(callId => byCall.get(callId)!.view).slice(-maxCalls)
+  return order.slice(-maxCalls).map(callId => byCall.get(callId)!)
 }
