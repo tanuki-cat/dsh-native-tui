@@ -139,7 +139,7 @@ export async function startTerminalApp(
   const footer = new StatusBar(palette.dim(' · '))
   const waitStatus = new WaitStatusLine(palette)
   // The native padding reserves the prompt gutter without shifting the full-width borders.
-  const editor = new PromptEditor(tui, editorTheme(palette, () => reasoningEffort))
+  const editor = new PromptEditor(tui, editorTheme(palette, () => reasoningEffort), palette.autocompleteSelection)
   const markdown = markdownTheme(palette)
   const renderer = new TranscriptRenderer({
     showReasoning: config.showReasoning,
@@ -911,6 +911,7 @@ export async function startTerminalApp(
     }
     if (shortcut === 'clear-input') {
       editor.setText('')
+      tui.requestRender()
       return { consume: true }
     }
     if (shortcut === 'cancel-turn') {

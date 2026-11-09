@@ -123,6 +123,7 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 ### 输入与补全
 
 - `/help`、`/init`（生成 `AGENTS.md` 贡献指南，已存在不覆盖）。
+- `/` 命令、子命令和技能候选显示在输入框上方，最多八项，命令名与说明分列对齐；选中项使用 `›` 和蓝色整行高亮，plain 主题只保留前缀。↑/↓ 选择、Tab 补全，Enter 沿用原有命令执行规则；窄屏会截断长行，短屏优先保留当前选中项。普通与全屏模式共用布局，全屏支持鼠标选择。
 - slash 命令支持子命令补全，例如 `/provider` 显示 add/list/edit/models/input/remove。子命令已完整输入时回车直接执行；从补全中选中时，如果当前过滤结果只包含无参数子命令则直接执行，混有带参数子命令时保持插入。
 - `@file` 主机端补全（`file-reference-local`）：每行是「文件名 + 类型 · 完整路径」，与 pi agent 的文件补全一致。长路径只截断第一列的文件名，不会让所有行停在同一个公共目录前缀上。选中的路径作为普通 prompt 文本，模型需用 `read` 工具读取。
 - `/` 补全在本地/宿主命令之后列出用户可调用技能，支持 `/<name>` 和 pi 风格的 `/skill:<name>`，并显示来源、调用标签与描述。输入 `/skill:` 可只筛选技能；技能与命令同名时使用 `/skill:<name>`。发送时由终端转换为 Host 的 `/<name>` 手势，交给 `dsh-tool-skill` 注入正文；输入历史保留 `/skill:<name>`，按 ↑ 回填后仍调用技能。
@@ -579,6 +580,7 @@ node scripts/fake-tty-interaction-modes.mjs native # 五模式、真实文件效
 node scripts/fake-tty-interaction-modes.mjs ptc    # 相同边界的 PTC 内层链路；需要宿主允许创建子进程 sandbox
 node scripts/fake-tty-tool-details.mjs             # 显式 accept-edits 下的真实 PTC 卡片及审批详情；使用隔离 profile、本地 MCP 命名 fixture 和 mock provider
 node scripts/fake-tty-write-update-diff.mjs        # 原生/PTC × 普通/全屏：write 更新 diff、空文件插入、新建预览与 /diff 最新/索引查看
+node scripts/fake-tty-slash-autocomplete.mjs       # 普通/全屏 × 100/50 列：向上命令补全、整行选中、键盘、子命令、输入框位置及全屏鼠标
 node scripts/fake-tty-permission-restart.mjs       # minimal 同会话 Agent 重建、取消及权限恢复；使用终端 fence fixture，不依赖物理 PTY
 ~~~
 

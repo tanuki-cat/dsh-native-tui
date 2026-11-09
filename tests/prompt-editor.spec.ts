@@ -99,16 +99,18 @@ describe('PromptEditor', () => {
     expect(cursorColumn(editor.render(40))).toBe(2)
   })
 
-  it('leaves autocomplete layout and insertion to the native editor', async () => {
+  it('keeps native input geometry and insertion while placing the slash menu above it', async () => {
     const editor = createEditor()
     editor.setAutocompleteProvider(new CombinedAutocompleteProvider([{ name: 'help', description: 'Show help' }], process.cwd(), null))
     editor.handleInput('/')
     await vi.waitFor(() => { expect(editor.isShowingAutocomplete()).toBe(true) })
     const native = Editor.prototype.render.call(editor, 40)
     const decorated = editor.render(40)
-    expect(decorated[0]).toBe(native[0])
-    expect(decorated[1]).toBe('> ' + native[1]!.slice(2))
-    expect(decorated.slice(2)).toEqual(native.slice(2))
+    expect(decorated[0]).toContain('› help')
+    const input = decorated.slice(native.length - 3)
+    expect(input[0]).toBe(native[0])
+    expect(input[1]).toBe('> ' + native[1]!.slice(2))
+    expect(input[2]).toBe(native[2])
     expect(decorated.join('\n')).toContain('help')
     editor.handleInput('\t')
     expect(editor.getText()).toBe('/help ')

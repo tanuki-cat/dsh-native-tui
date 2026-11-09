@@ -30,6 +30,8 @@ export interface Palette {
   readonly diffRemoveBand: (text: string) => string
   readonly dialogBand: (text: string) => string
   readonly dialogBorder: (text: string) => string
+  /** Full-width selection row in the upward slash-command menu. */
+  readonly autocompleteSelection: (text: string) => string
   /** Color one reasoning-effort label and the matching divider lines. */
   readonly reasoning: (effort: string | undefined) => (text: string) => string
   /** Color one preset id. */
@@ -77,6 +79,7 @@ export function createPalette(theme: Config['theme']): Palette {
       diffRemoveBand: identity,
       dialogBand: identity,
       dialogBorder: identity,
+      autocompleteSelection: identity,
       reasoning: () => identity,
       preset: identity,
       context: () => identity,
@@ -162,6 +165,7 @@ export function createPalette(theme: Config['theme']): Palette {
     diffRemoveBand: sgr(theme === 'light' ? '48;5;224' : '48;5;52', '49'),
     dialogBand: sgr(theme === 'light' ? '48;5;255' : '48;5;236', '49'),
     dialogBorder: sgr(theme === 'light' ? '38;5;24' : '38;5;39', '39'),
+    autocompleteSelection: sgr('48;5;75;30', '39;49'),
     reasoning,
     preset: sgr(theme === 'light' ? '38;5;91' : '38;5;141', '39'),
     context,
