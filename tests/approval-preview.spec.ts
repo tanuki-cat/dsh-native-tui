@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { approvalArguments, approvalRequestDetails } from '../src/ui/approval-preview.js'
+import { approvalArguments, approvalReceipt, approvalRequestDetails } from '../src/ui/approval-preview.js'
 import { ptcCallLine } from '../src/ui/tool-preview.js'
 
 const event = (type: string, name: string, id: string, args: unknown) => ({ type, data: { name, callId: id, subCallId: id, arguments: args } })
@@ -30,6 +30,12 @@ describe('approval arguments', () => {
 })
 
 describe('action summaries', () => {
+  it('records the actual single-use decision without claiming approval after rejection or cancellation', () => {
+    const args = '{"command":"git status"}'
+    expect(approvalReceipt('bash', args, 'allowed-once')).toEqual({ tone: 'success', text: 'You approved bash git status this time' })
+    expect(approvalReceipt('bash', args, 'rejected')).toEqual({ tone: 'warning', text: 'You rejected bash git status' })
+    expect(approvalReceipt('bash', undefined, 'cancelled')).toEqual({ tone: 'info', text: 'Approval cancelled for bash' })
+  })
   it('shows shell commands and workdirs rather than descriptions', () => {
     expect(ptcCallLine('bash', JSON.stringify({ description: 'Safe claim', command: 'git status\npwd', workdir: '/work' })))
       .toBe('bash git status ↵ pwd · cwd /work')

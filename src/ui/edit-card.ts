@@ -1,7 +1,8 @@
 import { Text, truncateToWidth, visibleWidth, type Component } from '@earendil-works/pi-tui'
-import { diffLines, MAX_DIFF_INPUT_LINES, MAX_DIFF_MATRIX_CELLS, type DiffLine, type FileDiff } from './diff.js'
+import { diffLines, diffSourceLines, MAX_DIFF_INPUT_LINES, MAX_DIFF_MATRIX_CELLS, type DiffLine, type FileDiff } from './diff.js'
 import type { Palette } from './theme.js'
 import { literalToolText } from './tool-output.js'
+import { diffRow } from './transcript-chrome.js'
 
 interface NumberedRow {
   readonly kind: DiffLine['kind'] | 'omitted'
@@ -11,8 +12,8 @@ interface NumberedRow {
 
 /** Applied diffs use Host metadata only; rendering never reopens the file. */
 export function renderEditDiff(diff: FileDiff, palette: Palette, expanded = false): Component {
-  const before = diff.oldText === null ? [] : diff.oldText.split('\n')
-  const after = diff.newText.split('\n')
+  const before = diff.oldText === null ? [] : diffSourceLines(diff.oldText)
+  const after = diffSourceLines(diff.newText)
   let commonPrefix = 0, commonSuffix = 0
   while (commonPrefix < before.length && commonPrefix < after.length && before[commonPrefix] === after[commonPrefix]) commonPrefix += 1
   while (commonSuffix < before.length - commonPrefix && commonSuffix < after.length - commonPrefix
@@ -21,15 +22,17 @@ export function renderEditDiff(diff: FileDiff, palette: Palette, expanded = fals
   const beforeEnd = before.length - Math.max(0, commonSuffix - 3)
   const afterEnd = after.length - Math.max(0, commonSuffix - 3)
   const beforeCount = beforeEnd - start, afterCount = afterEnd - start
-  const limit = expanded ? 2000 : 60
+  const limit = expanded ? 2000 : 24
   const omittedHint = expanded ? ' · preview limit' : ' · ctrl+o to expand'
   let rows: NumberedRow[] = []
+  let added = 0, removed = 0, approximate = false
   if (beforeCount > MAX_DIFF_INPUT_LINES || afterCount > MAX_DIFF_INPUT_LINES || beforeCount * afterCount > MAX_DIFF_MATRIX_CELLS) {
     // The fallback samples both sides directly instead of allocating a whole-file diff.
     const contextBefore = commonPrefix - start
     const contextAfter = Math.min(commonSuffix, 3)
-    const removed = before.length - commonPrefix - commonSuffix
-    const added = after.length - commonPrefix - commonSuffix
+    removed = before.length - commonPrefix - commonSuffix
+    added = after.length - commonPrefix - commonSuffix
+    approximate = true
     const budget = Math.max(0, limit - contextBefore - contextAfter - 2)
     const removeBudget = Math.min(removed, budget - Math.min(added, Math.floor(budget / 2)))
     const addBudget = Math.min(added, budget - removeBudget)
@@ -44,8 +47,11 @@ export function renderEditDiff(diff: FileDiff, palette: Palette, expanded = fals
     }
   } else {
     // The calculation can emit at most two rows per input line. Display limits apply afterwards.
-    const calculated = diffLines(diff.oldText === null ? null : before.slice(start, beforeEnd).join('\n'),
-      after.slice(start, afterEnd).join('\n'), MAX_DIFF_INPUT_LINES * 2)
+    const source = (lines: readonly string[]): string => lines.length === 0 ? '' : lines.join('\n') + '\n'
+    const calculated = diffLines(diff.oldText === null ? null : source(before.slice(start, beforeEnd)),
+      source(after.slice(start, afterEnd)), MAX_DIFF_INPUT_LINES * 2)
+    added = calculated.filter(row => row.kind === 'add').length
+    removed = calculated.filter(row => row.kind === 'remove').length
     let oldLine = start + 1, newLine = start + 1
     rows = calculated.map(row => {
       const line = row.kind === 'remove' ? oldLine : newLine
@@ -60,28 +66,34 @@ export function renderEditDiff(diff: FileDiff, palette: Palette, expanded = fals
     }
   }
   const gutter = String(Math.max(before.length, after.length)).length
-  const lines: string[] = []
+  const estimate = approximate ? '~' : ''
+  const summary = '(' + estimate + '+' + added + ' ' + estimate + '-' + removed + ')'
+    + (added === 0 && removed === 0 && diff.oldText !== null && diff.oldText !== diff.newText ? ' · line endings changed' : '')
+  const lines: Array<{ text: string; kind: NumberedRow['kind'] }> = [{ text: palette.dim(summary), kind: 'context' }]
   let characterBudget = 65536
   let limited = false
-  if (start > 0) lines.push(palette.dim('  … ' + start + ' unchanged lines'))
+  if (start > 0) lines.push({ text: palette.dim('… ' + start + ' unchanged lines'), kind: 'omitted' })
   for (const row of rows) {
-    if (row.kind === 'omitted') { lines.push(palette.dim(row.text)); continue }
-    const rowPrefix = (row.kind === 'add' ? '+' : row.kind === 'remove' ? '-' : ' ') + ' ' + String(row.line).padStart(gutter) + ' '
+    if (row.kind === 'omitted') { lines.push({ text: palette.dim(row.text), kind: row.kind }); continue }
+    const rowPrefix = String(row.line).padStart(gutter) + ' ' + (row.kind === 'add' ? '+' : row.kind === 'remove' ? '-' : ' ') + ' '
     const color = row.kind === 'add' ? palette.success : row.kind === 'remove' ? palette.error : palette.dim
     const source = rowPrefix + literalToolText(row.text.slice(0, 65536))
     const bounded = source.slice(0, characterBudget)
     if (bounded.length < source.length || row.text.length > 65536) limited = true
-    lines.push(color(bounded))
+    lines.push({ text: color(bounded), kind: row.kind })
     characterBudget -= bounded.length
     if (characterBudget <= 0) { limited = true; break }
   }
-  if (commonSuffix > 3) lines.push(palette.dim('  … ' + (commonSuffix - 3) + ' unchanged lines'))
-  if (limited) lines.push(palette.dim('… [diff content omitted by preview limit]'))
-  if (expanded) return new Text(lines.join('\n'), 0, 0)
+  if (commonSuffix > 3) lines.push({ text: palette.dim('… ' + (commonSuffix - 3) + ' unchanged lines'), kind: 'omitted' })
+  if (limited) lines.push({ text: palette.dim('… [diff content omitted by preview limit]'), kind: 'omitted' })
   return {
     render: width => {
-      const clipped = lines.map(line => truncateToWidth(line, Math.max(0, width)))
-      if (lines.some(line => visibleWidth(line) > width)) {
+      const clipped = lines.flatMap(line => {
+        const rendered = expanded ? new Text(line.text, 0, 0).render(width) : [truncateToWidth(line.text, Math.max(0, width))]
+        const band = line.kind === 'add' ? palette.diffAddBand : line.kind === 'remove' ? palette.diffRemoveBand : (text: string) => text
+        return rendered.map(text => diffRow(text, width, band))
+      })
+      if (!expanded && lines.some(line => visibleWidth(line.text) > width)) {
         clipped.push(truncateToWidth(palette.dim('… (long diff lines clipped · ctrl+o to expand)'), Math.max(0, width)))
       }
       return clipped

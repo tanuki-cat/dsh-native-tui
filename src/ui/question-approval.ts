@@ -1,6 +1,6 @@
 import type { TUI } from '@earendil-works/pi-tui'
 import type { AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions'
-import type { showChoice } from './dialogs.js'
+import type { showApprovalChoice } from './approval-choice.js'
 import { showApprovalDetails } from './approval-details.js'
 import { literalToolText } from './tool-output.js'
 import type { Palette } from './theme.js'
@@ -12,7 +12,7 @@ const localized = (value: { en: string } | undefined): string | undefined => val
 /** Fixed permission actions with a bounded summary and a complete read-only viewer. */
 export async function showPermissionQuestion(
   tui: TUI, palette: Palette, question: AskUserQuestionItem & { intent: Intent },
-  index: number, total: number, choose: typeof showChoice, frame: Frame, signal?: AbortSignal,
+  index: number, total: number, choose: typeof showApprovalChoice, frame: Frame, signal?: AbortSignal,
 ): Promise<string | undefined> {
   const intent = question.intent
   const actions = [
@@ -38,8 +38,11 @@ export async function showPermissionQuestion(
       : [literalToolText(localized(intent.display?.detail) ?? question.detail ?? '')]),
   ].join(String.fromCharCode(10))
   while (!signal?.aborted) {
-    const choice = await choose(tui, palette, title, items, 'Enter selects · Esc cancels', signal,
-      () => Math.max(1, Math.min(10, Math.floor((tui.terminal?.rows ?? 30) * 0.8) - items.length - 5)))
+    const choice = await choose(tui, palette, {
+      heading: (intent.subject?.name ?? question.header ?? 'Approval required') + ' · ' + (index + 1) + '/' + total,
+      action: localized(intent.display?.question) ?? question.question,
+      detail: localized(intent.display?.detail) ?? question.detail,
+    }, items, signal)
     if (choice === 'details') {
       await showApprovalDetails(tui, palette, title, frame, signal)
       continue

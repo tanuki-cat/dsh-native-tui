@@ -133,7 +133,7 @@ child.stdout.on('data', data => {
     child.stdin.write('ctx' + String.fromCharCode(13))
     return
   }
-  if (prompted && !secondTurn && !exitSent && text.includes('CTXEND') && text.includes('● idle')) {
+  if (prompted && !secondTurn && !exitSent && text.includes('CTXEND') && text.includes(' · Ready')) {
     // Let turn 1 settle and the view return to idle before streaming turn 2.
     secondTurn = true
     setTimeout(() => { try { child.stdin.write('go' + String.fromCharCode(13)) } catch {} }, 1200)

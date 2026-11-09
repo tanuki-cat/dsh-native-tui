@@ -1,10 +1,14 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { createStatusRows } from '../src/ui/status-rows.js'
+import type { StatusSegment } from '../src/ui/status-bar.js'
 
 /** A chrome row that records every write it received. */
 function target() {
   const written: string[] = []
-  return { written, row: { setText: (text: string) => { written.push(text) } } }
+  return { written, row: {
+    setText: (text: string) => { written.push(text) },
+    setSegments: (segments: readonly StatusSegment[]) => { written.push(segments.map(segment => segment.text).join(' · ')) },
+  } }
 }
 
 describe('deduplicated status rows', () => {
@@ -16,8 +20,8 @@ describe('deduplicated status rows', () => {
 
     rows.reset()
     rows.rows.header.setText('H')
-    rows.rows.status.setText('S')
-    rows.rows.footer.setText('F')
+    rows.rows.status.setSegments([{ text: 'S' }])
+    rows.rows.footer.setSegments([{ text: 'F' }])
     expect(rows.changed).toBe(true)
     expect(header.written).toEqual(['H'])
     expect(status.written).toEqual(['S'])
@@ -25,8 +29,8 @@ describe('deduplicated status rows', () => {
 
     rows.reset()
     rows.rows.header.setText('H')
-    rows.rows.status.setText('S')
-    rows.rows.footer.setText('F')
+    rows.rows.status.setSegments([{ text: 'S' }])
+    rows.rows.footer.setSegments([{ text: 'F' }])
     expect(rows.changed).toBe(false)
     expect(header.written).toEqual(['H'])
     expect(status.written).toEqual(['S'])
@@ -41,10 +45,10 @@ describe('deduplicated status rows', () => {
 
     rows.reset()
     rows.rows.header.setText('H')
-    rows.rows.status.setText('S')
+    rows.rows.status.setSegments([{ text: 'S' }])
     rows.reset()
     rows.rows.header.setText('H')
-    rows.rows.status.setText('S2')
+    rows.rows.status.setSegments([{ text: 'S2' }])
 
     expect(rows.changed).toBe(true)
     expect(header.written).toEqual(['H'])
@@ -57,13 +61,28 @@ describe('deduplicated status rows', () => {
     const footer = target()
     const rows = createStatusRows({ header: target().row, status: target().row, footer: footer.row })
     rows.reset()
-    rows.rows.footer.setText('')
+    rows.rows.footer.setSegments([{ text: '' }])
     expect(rows.changed).toBe(true)
     expect(footer.written).toEqual([''])
     rows.reset()
-    rows.rows.footer.setText('')
+    rows.rows.footer.setSegments([{ text: '' }])
     expect(rows.changed).toBe(false)
     expect(footer.written).toEqual([''])
+  })
+
+  it('repaints when the compact label or priority changes without changing the full label', () => {
+    const status = target()
+    const rows = createStatusRows({ header: target().row, status: status.row, footer: target().row })
+    rows.rows.status.setSegments([{ text: 'model', compact: 'm', priority: 2 }])
+    rows.reset()
+    rows.rows.status.setSegments([{ text: 'model', compact: 'm', priority: 2 }])
+    expect(rows.changed).toBe(false)
+    rows.rows.status.setSegments([{ text: 'model', compact: 'new', priority: 2 }])
+    expect(rows.changed).toBe(true)
+    rows.reset()
+    rows.rows.status.setSegments([{ text: 'model', compact: 'new', priority: 1 }])
+    expect(rows.changed).toBe(true)
+    expect(status.written).toHaveLength(3)
   })
 
   it('keeps the last written text across resets', () => {

@@ -225,8 +225,8 @@ describe('reduceTranscript', () => {
     expect(output).toContain('edit a.ts')
     expect(output).not.toContain('├ args')
     expect(output).not.toContain('updated a.ts')
-    expect(output).toContain('- 1 old')
-    expect(output).toContain('+ 1 new')
+    expect(output).toContain('1 - old')
+    expect(output).toContain('1 + new')
   })
 
   it('settles a PTC edit card whose start left the window', () => {
@@ -275,8 +275,8 @@ describe('reduceTranscript', () => {
       const parent = reduceTranscript(input, compactOptions).find(block => block.kind === 'tool' && block.callId === 'call-outer')!
       expect(parent).toMatchObject({ callLines: ['skill daily-log-writer', 'skill dsh-doc'] })
       const text = renderTranscriptBlock(parent, compactOptions).render(100).join('\n')
-      expect(text).toContain('├ skill daily-log-writer')
-      expect(text).toContain('├ skill dsh-doc')
+      expect(text).toContain('└ skill daily-log-writer')
+      expect(text).toContain('    skill dsh-doc')
     }
   })
 
@@ -296,9 +296,9 @@ describe('reduceTranscript', () => {
         'job_output bash-build · wait',
       ] })
       const text = renderTranscriptBlock(parent, compactOptions).render(100).join('\n')
-      expect(text).toContain('├ job_output bash-build · poll')
-      expect(text).toContain('├ job_output bash-test · wait · timeout 90s')
-      expect(text).toContain('├ job_output bash-build · wait')
+      expect(text).toContain('└ job_output bash-build · poll')
+      expect(text).toContain('    job_output bash-test · wait · timeout 90s')
+      expect(text).toContain('    job_output bash-build · wait')
     }
   })
 
@@ -329,11 +329,11 @@ describe('reduceTranscript', () => {
       callLines: ['read src/a.ts', 'bash ls -la', 'mcp idea.get_file_problems src/a.ts'],
     })
     const output = renderTranscriptBlock(parent!, compactOptions).render(100).join('\n')
-    expect(output).toContain('⚙ run_code')
-    expect(output).toContain('├ read src/a.ts')
-    expect(output).toContain('├ bash ls -la')
-    expect(output).toContain('├ mcp idea')
-    expect(output).toContain('└ done')
+    expect(output).toContain('• Ran run_code')
+    expect(output).toContain('└ read src/a.ts')
+    expect(output).toContain('    bash ls -la')
+    expect(output).toContain('    mcp idea')
+    expect(output).not.toContain('└ done')
     expect(output).not.toContain('const files = 1')
     expect(output).not.toContain('├ edit')
 
@@ -341,7 +341,7 @@ describe('reduceTranscript', () => {
       .find(block => block.kind === 'tool' && block.callId === 'call-outer')
     expect(detailedParent).not.toHaveProperty('callLines')
     const detailedOutput = renderTranscriptBlock(detailedParent!, options).render(100).join('\n')
-    expect(detailedOutput).toContain('⚙ run_code · Explore')
+    expect(detailedOutput).toContain('• Ran run_code · Explore')
     expect(detailedOutput).toContain('const files = 1')
   })
 
@@ -362,7 +362,7 @@ describe('reduceTranscript', () => {
     expect(parent).toMatchObject({ callLinesOmitted: 2 })
     expect(parent !== undefined && parent.kind === 'tool' ? parent.callLines : undefined).toHaveLength(10)
     const output = renderTranscriptBlock(parent!, compactOptions).render(100).join('\n')
-    expect(output).toContain('├ … 2 more')
+    expect(output).toContain('+ 2 more calls')
   })
 
   it('keeps the failure message on a compact run_code that lists calls', () => {
@@ -389,8 +389,8 @@ describe('reduceTranscript', () => {
     const parent = reduceTranscript(entries, compactOptions)
       .find(block => block.kind === 'tool' && block.callId === 'call-outer')
     const output = renderTranscriptBlock(parent!, compactOptions).render(100).join('\n')
-    expect(output).toContain('├ read missing.ts')
-    expect(output).toContain('├ ✕ Error: ENOENT: no such file or directory, open missing.ts')
+    expect(output).toContain('└ read missing.ts')
+    expect(output).toContain('    Error: ENOENT: no such file or directory, open missing.ts')
     expect(output).toContain('└ error')
     expect(output).not.toContain('await tools.read')
   })
@@ -660,7 +660,7 @@ describe('reduceTranscript', () => {
     renderer.set(entries, [])
     const compactOutput = renderer.container.render(100).join('\n')
     expect(compactOutput).toContain('thinking · first thought')
-    expect(compactOutput).toContain('⚙ run_code')
+    expect(compactOutput).toContain('• Ran run_code')
     expect(compactOutput).toContain('Press AC')
     expect(compactOutput).not.toContain('long code body')
     expect(compactOutput).toContain('long result body')
@@ -686,7 +686,7 @@ describe('reduceTranscript', () => {
       const renderer = new TranscriptRenderer({ ...options, runCodeDisplay: 'compact' })
       renderer.set(entries, [])
       const output = renderer.container.render(100).join('\n')
-      expect(output).toContain(name === 'pwsh' ? 'PS> ls -la' : '$ ls -la')
+      expect(output).toContain(name === 'pwsh' ? 'PS> ls -la' : 'Ran ls -la')
       expect(output).toContain('List files')
       expect(output).toContain('file.txt')
       expect(output).not.toContain('├ args')
@@ -695,7 +695,7 @@ describe('reduceTranscript', () => {
       const hiddenRenderer = new TranscriptRenderer({ ...options, runCodeDisplay: 'hidden' })
       hiddenRenderer.set(entries, [])
       const hiddenOutput = hiddenRenderer.container.render(100).join('\n')
-      expect(hiddenOutput).not.toContain(name === 'pwsh' ? 'PS> ls -la' : '$ ls -la')
+      expect(hiddenOutput).not.toContain(name === 'pwsh' ? 'PS> ls -la' : 'Ran ls -la')
       expect(hiddenOutput).not.toContain('file.txt')
     }
 

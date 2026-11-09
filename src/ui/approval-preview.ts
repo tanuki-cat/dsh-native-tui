@@ -1,3 +1,7 @@
+import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
+import { ptcCallLine } from './tool-preview.js'
+import { toolLabel } from './tool-output.js'
+
 /** Exact-call arguments for approval previews; unmatched requests never borrow a nearby call. */
 export function approvalArguments(events: readonly unknown[], name: string, callId: string | undefined): string | undefined {
   if (callId === undefined) return undefined
@@ -23,4 +27,15 @@ export function approvalRequestDetails(name: string, callId: string | undefined,
     catch { /* Preserve malformed arguments as literal input. */ }
   }
   return JSON.stringify({ tool: name, callId, sessionCwd: cwd, reason, arguments: value ?? '(arguments unavailable for this request)' }, null, 2)
+}
+
+/** Describe only the decision actually returned for this exact pending request. */
+export function approvalReceipt(name: string, args: string | undefined, outcome: ApprovalOutcome): {
+  readonly tone: 'success' | 'warning' | 'info'
+  readonly text: string
+} {
+  const action = args === undefined ? toolLabel(name) : ptcCallLine(name, args)
+  if (outcome === 'allowed-once') return { tone: 'success', text: 'You approved ' + action + ' this time' }
+  if (outcome === 'rejected') return { tone: 'warning', text: 'You rejected ' + action }
+  return { tone: 'info', text: 'Approval cancelled for ' + action }
 }

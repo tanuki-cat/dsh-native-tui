@@ -8,18 +8,20 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import { homedir } from 'node:os'
 import type { AgentPresetService } from '../runtime/agent.js'
 import type { ContextMeterReading, SessionMetrics, SessionStats } from '../runtime/metrics.js'
 import { collectSessionMetrics, formatSessionMetrics } from '../runtime/metrics.js'
 import type { Palette } from './theme.js'
 import { sanitizeTerminalText } from '../runtime/terminal-text.js'
 import { MODE_LABELS, type InteractionMode } from '../interaction-modes.js'
+import type { StatusBarTarget, StatusSegment } from './status-bar.js'
 
 /** The pi-tui text components the status rows write into. */
 export interface StatusRows {
   readonly header: { setText(text: string): void }
-  readonly status: { setText(text: string): void }
-  readonly footer: { setText(text: string): void }
+  readonly status: StatusBarTarget
+  readonly footer: StatusBarTarget
 }
 
 /** Live state one repaint reads. */
@@ -86,51 +88,64 @@ export function renderStatusRows(
   input: StatusInput,
   fold?: MetricsFold,
 ): void {
+  const label = (value: string): string => sanitizeTerminalText(value).replace(/[\n\t]/gu, ' ').trim()
   rows.header.setText(
-    palette.bold(palette.brand('◆ ' + sanitizeTerminalText(input.title))) + '\n'
-    + palette.dim(sanitizeTerminalText(input.sessionId)) + '\n'
-    + palette.dim(sanitizeTerminalText(input.cwd)),
+    palette.bold(palette.brand('◆ ' + label(input.title))) + '\n'
+    + palette.dim(label(input.sessionId)),
   )
   const state = input.running
-    ? palette.warning('● working')
-    : palette.success('● idle')
-  const thinking = palette.reasoning(input.reasoningEffort)(
-    input.reasoningEffort === undefined ? 'think default' : 'think ' + sanitizeTerminalText(String(input.reasoningEffort)),
-  )
-  const metaBits: string[] = []
-  if (input.preset !== undefined) metaBits.push(palette.dim('preset ') + palette.preset(sanitizeTerminalText(input.preset)))
-  if (input.attachmentCount > 0) metaBits.push(palette.dim('attached ') + palette.accent(String(input.attachmentCount)))
-  const hint = input.running
-    ? 'enter steer · esc cancel · ctrl+c cancel · ctrl+d exit'
-    : 'enter send · shift+tab think · /help · ctrl+d exit'
+    ? palette.warning('Working')
+    : palette.success('Ready')
+  const thinking = input.reasoningEffort === undefined ? ''
+    : ' ' + palette.reasoning(input.reasoningEffort)(label(String(input.reasoningEffort)))
   const metrics = fold === undefined
     ? collectSessionMetrics(input.events as never, input.stats, input.contextWindow, input.contextMeter)
     : fold(input.events as never, input.stats, input.contextWindow, input.contextMeter)
   const split = splitSessionMetrics(formatSessionMetrics(metrics))
-  const model = palette.dim('model ')
-    + palette.bold(palette.brand(sanitizeTerminalText(input.provider)))
+  const model = palette.bold(palette.accent(label(input.model))) + thinking
+  const cwd = workspacePath(label(input.cwd))
+  const status: StatusSegment[] = [{
+    text: palette.brand(label(input.provider))
     + palette.dim('/')
-    + palette.bold(palette.accent(sanitizeTerminalText(input.model)))
-  const context = split.context === undefined ? undefined : splitContextLine(split.context)
-  const divider = palette.dim('  │  ')
-  rows.status.setText([state, model, thinking, ...metaBits].join(divider))
+    + model,
+    compact: model,
+  }, {
+    text: palette.success(cwd),
+    compact: palette.success(cwd.split(/[\\/]/u).filter(Boolean).at(-1) ?? cwd),
+    priority: 2,
+  }, { text: state }]
+  const percent = metrics.contextPercent
+  const context = palette.context(percent, metrics.contextCompactPercent)
+  status.push({
+    text: context(percent === undefined ? 'Context —' : 'Context ' + String(percent) + '% used'),
+    compact: context(percent === undefined ? 'ctx —' : 'ctx ' + String(percent) + '%'),
+  })
+  if (input.attachmentCount > 0) status.push({ text: palette.accent('attached ' + String(input.attachmentCount)) })
+  if (input.preset !== undefined) status.push({ text: palette.dim('preset ') + palette.preset(label(input.preset)), priority: 3 })
+  status.push(...split.usage.split('  ·  ').map((text, index) => ({
+    text: palette.dim(text), priority: index < 2 ? 6 : index === 2 ? 4 : 5,
+  })))
+  rows.status.setSegments(status)
   const mode = input.interactionMode
-  const footerHead: string[] = []
-  if (mode !== undefined) footerHead.push((mode === 'custom'
+  const footer: StatusSegment[] = []
+  if (mode !== undefined) footer.push({ text: (mode === 'custom'
     ? palette.warning('custom mode')
-    : (mode === 'off' ? palette.dim : mode === 'accept-edits' ? palette.success : palette.warning)(MODE_LABELS[mode] + (mode === 'auto' ? ' · EXP' : ''))) + palette.dim(' · /mode'))
-  if ((mode === 'off' || mode === undefined) && input.permissionPreset !== undefined) footerHead.push(
-    palette.dim('permission ') + (input.permissionPreset === 'danger-full-access' ? palette.warning : palette.accent)(sanitizeTerminalText(input.permissionPreset)),
-  )
-  if (context !== undefined) footerHead.push(
-    palette.context(metrics.contextPercent, metrics.contextCompactPercent)(context.head)
-      + (context.detail === '' ? '' : palette.dim(context.detail)),
-  )
-  rows.footer.setText([
-    ...(footerHead.length === 0 ? [] : [footerHead.join(divider)]),
-    palette.accent('↳ ') + palette.dim(split.usage),
-    palette.dim(hint),
-  ].join('\n'))
+    : (mode === 'off' ? palette.dim : mode === 'accept-edits' ? palette.success : palette.warning)(MODE_LABELS[mode] + (mode === 'auto' ? ' · EXP' : ''))) })
+  if ((mode === 'off' || mode === undefined) && input.permissionPreset !== undefined) {
+    const permission = (input.permissionPreset === 'danger-full-access' ? palette.warning : palette.accent)(label(input.permissionPreset))
+    footer.push({ text: palette.dim('permission ') + permission, compact: permission })
+  }
+  const hints = input.running
+    ? ['enter steer', 'esc cancel', 'ctrl+c cancel', 'ctrl+d exit']
+    : ['enter send', 'shift+tab think', '/help', 'ctrl+d exit']
+  footer.push(...hints.map((text, index) => ({ text: palette.dim(text), priority: index + 1 })))
+  rows.footer.setSegments(footer)
+}
+
+/** Replace the home directory only at a path boundary. */
+export function workspacePath(cwd: string, home = homedir()): string {
+  if (cwd === home) return '~'
+  return cwd.startsWith(home + '/') ? '~' + cwd.slice(home.length) : cwd
 }
 
 /** Longest workspace label woven into the terminal window title. */

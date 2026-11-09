@@ -18,8 +18,8 @@ describe('file diff cards', () => {
   it.each(['edit', 'custom-tool'])('renders only file and diff rows for %s', name => {
     const output = render(card({ name }))
     expect(output).toContain(name + ' src/example.ts')
-    expect(output).toContain('- 1 before')
-    expect(output).toContain('+ 1 after')
+    expect(output).toContain('1 - before')
+    expect(output).toContain('1 + after')
     for (const hidden of ['├ args', '├ result', '├ diff', 'Successfully updated', '└ done', 'old_string', 'new_string']) {
       expect(output).not.toContain(hidden)
     }
@@ -48,7 +48,7 @@ describe('file diff cards', () => {
   it('keeps execution errors visible even when a diff is present', () => {
     const output = render(card({ isError: true, result: 'Permission denied' }))
     expect(output).toContain('Permission denied')
-    expect(output).toContain('+ 1 after')
+    expect(output).toContain('1 + after')
     expect(output).toContain('error')
     expect(output).not.toContain('├ args')
   })
@@ -67,7 +67,7 @@ describe('file diff cards', () => {
     expect(output).toContain('edit one.ts')
     expect(output).toContain('edit two.ts')
     expect(output).toContain('lines omitted')
-    expect(output).toContain('+ 1 new')
+    expect(output).toContain('1 + new')
     expect(output).not.toContain('edit src/example.ts')
   })
 

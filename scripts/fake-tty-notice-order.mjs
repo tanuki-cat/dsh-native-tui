@@ -15,7 +15,7 @@ const tick = setInterval(() => {
   else if (phase === 2 && text.includes('Reasoning efforts: low, medium, high')) { phase = 3; try { child.stdin.write('/reasoning high\r') } catch {} }
   else if (phase === 3 && text.includes('Reasoning effort: high')) { phase = 4; try { child.stdin.write('/status\r') } catch {} }
   else if (phase === 4 && text.includes('Reasoning: high')) { phase = 5; try { child.stdin.write('hello\r') } catch {} }
-  else if (phase === 5 && (text.includes('Turn failed') || text.includes('● idle'))) {
+  else if (phase === 5 && (text.includes('Turn failed') || text.includes(' · Ready'))) {
     phase = 6
     setTimeout(() => { try { child.stdin.write('\x04') } catch {} }, 900)
   }
@@ -30,7 +30,7 @@ child.on('exit', (code, signal) => {
     model: pos('Model selected: mock/mock-model'),
     reasoning: pos('Reasoning effort: high'),
     status: pos('Session: native-tui'),
-    user: pos('▌ You'),
+    user: pos('› '),
     context: pos('◇ context'),
     failure: pos('Turn failed'),
   })

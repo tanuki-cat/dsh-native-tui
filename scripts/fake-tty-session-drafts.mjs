@@ -102,7 +102,7 @@ try {
   const initial = await send('/status\r', /Session: native-tui-[a-z0-9-]+/)
   const baseId = initial.match(/Session: (native-tui-[a-z0-9-]+)/)[1]
   await send('base prompt\r', 'DRAFT BASE DONE')
-  await waitFor('● idle', out.lastIndexOf('DRAFT BASE DONE'))
+  await waitFor(' · Ready', out.lastIndexOf('DRAFT BASE DONE'))
   const opened = await send('\x0e', /Switched to native-tui-[a-z0-9-]+/)
   const blankId = opened.match(/Switched to (native-tui-[a-z0-9-]+)/)[1]
   assert.notEqual(blankId, baseId)

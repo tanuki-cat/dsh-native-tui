@@ -7,31 +7,39 @@
  * frame and the first streamed frame of the next step.
  */
 import { appendFileSync } from 'node:fs'
-import { TuiMainScreen } from '@earendil-works/pi-tui'
+import { TuiAltScreen, TuiMainScreen, visibleWidth } from '@earendil-works/pi-tui'
 
 const logPath = process.env.FAKE_TTY_GEOMETRY_LOG
 const marks = (process.env.FAKE_TTY_GEOMETRY_MARKS ?? '').split(',').filter(Boolean)
 const strip = text => text.replace(/\x1b\][^\x07]*\x07/g, '').replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
 
 if (logPath !== undefined) {
-  const render = TuiMainScreen.prototype.doRender
-  let previous = ''
-  TuiMainScreen.prototype.doRender = function (...args) {
-    render.apply(this, args)
-    const state = this.captureRenderState()
-    const lines = state.previousLines.map(strip)
-    const statusRow = lines.findLastIndex(line => line.includes('● working') || line.includes('● idle'))
-    const editorRow = lines.findLastIndex(line => line.startsWith('> '))
-    if (statusRow < 0 || editorRow < 0) return
-    const record = {
-      statusRow: statusRow - state.previousViewportTop,
-      editorRow: editorRow - state.previousViewportTop,
-      wait: lines.some(line => line.includes('⟳ working ·') || line.includes('⟳ retry ')),
-      mark: marks.filter(mark => lines.some(line => line.includes(mark))).join(','),
+  for (const Screen of [TuiMainScreen, TuiAltScreen]) {
+    const render = Screen.prototype.doRender
+    let previous = ''
+    Screen.prototype.doRender = function (...args) {
+      render.apply(this, args)
+      const state = this instanceof TuiMainScreen ? this.captureRenderState()
+        : { previousLines: this.previousScreen, previousViewportTop: 0 }
+      const lines = state.previousLines.map(strip)
+      const statusRow = lines.findLastIndex(line => /(?:^| · )(?:Working|Ready)(?: · |\s*$)/u.test(line))
+      const editorRow = lines.findLastIndex(line => line.startsWith('> '))
+      if (statusRow < 0 || editorRow < 0) return
+      const record = {
+        statusRow: statusRow - state.previousViewportTop,
+        editorRow: editorRow - state.previousViewportTop,
+        wait: lines.some(line => line.includes('⟳ working ·') || line.includes('⟳ retry ')),
+        mark: marks.filter(mark => lines.some(line => line.includes(mark))).join(','),
+        width: this.terminal.columns,
+        status: lines[statusRow].trimEnd(),
+        footer: lines[statusRow + 1]?.trimEnd(),
+        overflow: state.previousLines.some(line => visibleWidth(line) > this.terminal.columns),
+        ...(process.env.FAKE_TTY_FRAME_SNAPSHOT === '1' ? { lines, rawLines: state.previousLines } : {}),
+      }
+      const key = JSON.stringify(record)
+      if (key === previous) return
+      previous = key
+      appendFileSync(logPath, key + '\n')
     }
-    const key = JSON.stringify(record)
-    if (key === previous) return
-    previous = key
-    appendFileSync(logPath, key + '\n')
   }
 }

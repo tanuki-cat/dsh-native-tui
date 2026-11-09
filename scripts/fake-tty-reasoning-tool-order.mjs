@@ -168,7 +168,7 @@ const tick = setInterval(() => {
   else if (phase !== 'done') {
     if (prefixAt === undefined && text.includes(startMark)) prefixAt = Date.now() - started
     if (endAt === undefined && text.includes(endMark)) endAt = Date.now() - started
-    if (toolAt === undefined && text.includes('⚙ run_code')) toolAt = Date.now() - started
+    if (toolAt === undefined && text.includes('• Ran run_code')) toolAt = Date.now() - started
     if (finalAt === undefined && text.includes('TOOL ORDER DONE')) {
       finalAt = Date.now() - started
       phase = 'done'
@@ -181,7 +181,7 @@ child.on('exit', (code, signal) => {
   clearInterval(tick)
   clearTimeout(hard)
   const text = strip(out)
-  const ordered = text.indexOf(endMark) !== -1 && text.indexOf('⚙ run_code') > text.indexOf(endMark)
+  const ordered = text.indexOf(endMark) !== -1 && text.indexOf('• Ran run_code') > text.indexOf(endMark)
   const completed = finalAt !== undefined
   const clears = (out.match(/\x1b\[2J/g) ?? []).length
   const pass = code === 0 && signal === null && ordered && completed && clears === 0

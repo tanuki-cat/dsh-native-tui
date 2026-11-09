@@ -66,7 +66,7 @@ catch (error) { if (error?.code !== 'EEXIST') throw error }
 
 const child = spawn(process.execPath, ['scripts/fake-tty-entry.mjs', '--profile', 'tui'], {
   cwd: process.cwd(),
-  env: { ...process.env, DSH_HOME: home, MOCK_API_KEY: 'dummy', COLUMNS: '120', LINES: '40', TERM: 'xterm-256color', COLORTERM: 'truecolor' },
+  env: { ...process.env, DSH_HOME: home, MOCK_API_KEY: 'dummy', FAKE_TTY_COLUMNS: '240', COLUMNS: '240', LINES: '40', TERM: 'xterm-256color', COLORTERM: 'truecolor' },
   stdio: ['pipe', 'pipe', 'pipe'],
 })
 const strip = text => text.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
@@ -96,11 +96,11 @@ child.on('exit', (code, signal) => {
   clearTimeout(hard)
   server.close()
   const clean = strip(out)
-  // The status row is `● idle  │  model <route/model>  │  …`; only the frames
+  // The status row starts with `<route/model> [effort] · …`; only the frames
   // after the reload matter, because an earlier one cannot prove resumption.
   const marker = clean.lastIndexOf('Reloading dsh')
   const after = marker === -1 ? '' : clean.slice(marker)
-  const models = [...after.matchAll(/model ([^ │]+)/g)].map(match => match[1])
+  const models = [...after.matchAll(/(?:^|\n)([^\s·]+\/[^\s·]+)(?: [a-z]+)? · /gu)].map(match => match[1])
   const lines = clean.split('\n').filter(line => line.startsWith('Session:') || line.startsWith('Resume:'))
   const lastSession = [...lines].reverse().find(line => line.startsWith('Session:'))
   const pass = code === 0

@@ -27,6 +27,21 @@ function request(controller: AbortController, command = 'git status', type = 'to
 function details(overlay: Overlay) { for (let i = 0; i < 3; i++) overlay.handleInput('\x1b[B'); overlay.handleInput('\r') }
 
 describe('approval previews and details', () => {
+  it('numbers actions and requires Enter after a number focuses the selection', async () => {
+    const h = harness(), controller = new AbortController()
+    const running = showApproval(h.tui as never, palette, request(controller, 'git status'))
+    const text = h.overlays[0]!.render(80).join('\n')
+    expect(text).toContain('1. Allow once')
+    expect(text).toContain('2. Reject')
+    expect(text).toContain('3. Cancel')
+    let settled = false
+    void running.then(() => { settled = true })
+    h.overlays[0]!.handleInput('2')
+    await flush()
+    expect(settled).toBe(false)
+    h.overlays[0]!.handleInput('\r')
+    expect(await running).toBe('rejected')
+  })
   it.each(['tool/call', 'tool/ptc-dispatch-start'])('shows the actual %s command while keeping all choices visible', async type => {
     const h = harness(), controller = new AbortController()
     const running = showApproval(h.tui as never, palette, request(controller, 'git status', type))

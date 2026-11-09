@@ -129,7 +129,7 @@ const tick = setInterval(() => {
     phase = 3
     try { child.stdin.write('\x0f') } catch {}
   }
-  else if (phase === 3 && strip(out.slice(collapseOffset)).includes('ctrl+o to expand') && text.includes('+ 1 after')) {
+  else if (phase === 3 && strip(out.slice(collapseOffset)).includes('ctrl+o to expand') && text.includes('1 + after')) {
     collapsedAgain = true
     phase = 4
     seenAt = Date.now()
@@ -148,10 +148,10 @@ child.on('close', async (code, signal) => {
     && clean.includes('edit ' + file)
     && !clean.includes('⚙ write')
     && !clean.includes('├ args') && !clean.includes('├ result')
-    && !clean.includes('+ 1 before')
-    && clean.includes('- 1 before')
-    && clean.includes('+ 1 after')
-    && !clean.includes('⚙ run_code')
+    && !clean.includes('1 + before')
+    && clean.includes('1 - before')
+    && clean.includes('1 + after')
+    && !clean.includes('• Ran run_code')
   console.log('EXIT', code, signal, 'phase', phase, 'collapsedInitially', collapsedInitially, 'expanded', expanded, 'collapsedAgain', collapsedAgain, 'pass', pass)
   console.log(clean.slice(-14000))
   console.log('--- STDERR ---')

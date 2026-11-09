@@ -1,9 +1,9 @@
-import { Box, Container, Text, type Component } from '@earendil-works/pi-tui'
-import { BarText } from './bar-text.js'
-import { highlightCode } from './code-preview.js'
-import { clip, compactCodeExecutionPreview, compactErrorPreview, formatToolArguments } from './tool-preview.js'
+import { Container, Text, type Component } from '@earendil-works/pi-tui'
+import { ToolBody, toolHeading } from './transcript-chrome.js'
+import { SourcePreview } from './source-preview.js'
+import { compactCodeExecutionPreview, compactErrorPreview, formatToolArguments } from './tool-preview.js'
 import type { TranscriptBlock, TranscriptOptions } from './transcript.js'
-import { literalToolText, toolLabel } from './tool-output.js'
+import { literalToolText, toolLabel, ToolOutput } from './tool-output.js'
 
 /** Tools whose cards follow the code-execution density setting. */
 const CODE_EXECUTION_TOOLS: ReadonlySet<string> = new Set(['run_code', 'bash', 'pwsh'])
@@ -116,110 +116,65 @@ function codeExecutionParts(args: string): CodeExecutionParts {
   catch { return { meta: [] } }
 }
 
-/**
- * Detailed card for run_code, bash and pwsh.
- *
- * Mirrors the write/diff cards: the head names the call (the description, or the
- * source's first line when there is none), call options that change what the
- * command means stay on a dim meta row, the body is highlighted source instead of
- * a JSON argument dump, and the result keeps the labeled gutter.
- * @param block - one pending or settled tool row.
- * @param options - palette and display densities.
- * @param status - tail row shared with the generic tool card.
- * @returns the card component.
- */
-function detailedCodeExecutionCard(
-  block: Extract<TranscriptBlock, { kind: 'tool' }>,
-  options: TranscriptOptions,
-  status: string,
-): Component {
-  const palette = options.palette
+/** PTC uses the same compact heading and nested output as native tools. */
+export function renderCodeExecutionCard(block: Extract<TranscriptBlock, { kind: 'tool' }>, options: TranscriptOptions): Component {
+  const { palette } = options
   const { description, source, meta } = codeExecutionParts(block.args)
-  const container = new Container()
   const label = description ?? firstLine(source)
-  const head = '⚙ ' + block.name + (label === undefined ? '' : ' · ' + inlineSummary(label))
-  container.addChild(new Text(palette.bold(palette.accent(head)), 0, 0))
-  if (meta.length > 0) container.addChild(new Text(palette.dim('  ' + meta.join(' · ')), 0, 0))
-  if (source !== undefined) {
-    const lines = literalToolText(source).split('\n')
-    while (lines.at(-1) === '') lines.pop()
-    const preview: string[] = []
-    let used = 0
-    let shortened = false
-    for (const line of lines) {
-      if (preview.length >= (options.toolsExpanded ? 2000 : CODE_PREVIEW_LINES) || used >= (options.toolsExpanded ? 65536 : CODE_PREVIEW_CHARS)) break
-      const budget = options.toolsExpanded ? 65536 - used : Math.min(CODE_LINE_CHARS, CODE_PREVIEW_CHARS - used)
-      const text = line.length > budget ? line.slice(0, Math.max(0, budget - 1)) + '…' : line
-      if (text.length !== line.length) shortened = true
-      preview.push(text)
-      used += text.length
-    }
-    if (preview.length > 0) {
-      container.addChild(new BarText(
-        highlightCode(preview.join('\n'), CODE_EXECUTION_LANGUAGES[block.name], palette),
-        '│ ',
-        text => text,
-        palette.dim,
-      ))
-      const notes: string[] = []
-      const hidden = lines.length - preview.length
-      if (hidden > 0) notes.push(String(hidden) + ' more lines, ' + String(lines.length) + ' total')
-      if (shortened) notes.push('long lines shortened')
-      if (notes.length > 0) {
-        container.addChild(new Text(palette.dim('… (' + notes.join('; ') + ')'), 0, 0))
+  const container = new Container()
+  container.addChild(toolHeading(palette.bold('Ran ') + palette.accent(block.name)
+    + (label === undefined ? '' : palette.dim(' · ' + inlineSummary(label))), palette, block))
+  const body = new Container()
+  container.addChild(new ToolBody(body, palette))
+  if (meta.length > 0) body.addChild(new Text(palette.dim(meta.join(' · ')), 0, 0))
+  const compact = options.runCodeDisplay === 'compact' && !options.toolsExpanded
+  if (compact) {
+    const calls = block.callLines ?? []
+    const shown = new Set(calls)
+    if (calls.length > 0) {
+      for (const line of calls) body.addChild(new Text(palette.dim(literalToolText(line)), 0, 0))
+      if (block.callLinesOmitted) body.addChild(new Text(palette.dim('+ ' + block.callLinesOmitted + ' more calls'), 0, 0))
+    } else {
+      const preview = compactCodeExecutionPreview(block)
+      if (preview !== '' && preview !== label) {
+        body.addChild(new Text(palette.dim(literalToolText(preview)), 0, 0))
+        shown.add(preview)
       }
     }
-  }
-  if (block.result !== undefined && block.result.trim() !== '') {
-    const resultLines = literalToolText(block.result).split('\n')
-    while (resultLines.at(-1) === '') resultLines.pop()
-    const resultLimit = options.toolsExpanded ? 2000 : RESULT_PREVIEW_LINES
-    const visibleResult = resultLines.slice(0, resultLimit)
-    container.addChild(new Text(palette.dim('├ result'), 0, 0))
-    container.addChild(new BarText(
-      clip(visibleResult.join('\n'), options.toolsExpanded ? 65536 : 1200),
-      '│ ',
-      block.isError === true ? palette.error : text => text,
-      block.isError === true ? palette.error : palette.dim,
-    ))
-    if (resultLines.length > resultLimit) {
-      container.addChild(new Text(palette.dim(
-        '… (' + String(resultLines.length - resultLimit) + ' more lines)',
-      ), 0, 0))
-    }
-  }
-  else if (source === undefined && block.args.trim() !== '') {
-    // An unrecognized payload keeps the generic dump rather than an empty card.
-    container.addChild(new Text(palette.dim('├ args'), 0, 0))
-    container.addChild(new BarText(literalToolText(formatToolArguments(block.args)), '│ ', palette.dim, palette.dim))
-  }
-  container.addChild(new Text(status, 0, 0))
-  const box = new Box(1, 0, palette.toolBand)
-  box.addChild(container)
-  return box
-}
-
-/** PTC keeps its dispatched-call summary; expansion opens the program and result. */
-export function renderCodeExecutionCard(block: Extract<TranscriptBlock, { kind: 'tool' }>, options: TranscriptOptions): Component {
-  const palette = options.palette
-  const status = '└ ' + (block.pending ? palette.warning('running…') : block.isError ? palette.error('error') : palette.success('done'))
-  if ((options.runCodeDisplay ?? 'detailed') !== 'compact' || options.toolsExpanded) return detailedCodeExecutionCard(block, options, status)
-  const container = new Container()
-  container.addChild(new Text(palette.bold(palette.accent('⚙ ' + block.name)), 0, 0))
-  const calls = block.callLines ?? []
-  if (calls.length > 0) {
-    for (const line of calls) container.addChild(new Text(palette.dim('├ ' + literalToolText(line)), 0, 0))
-    if (block.callLinesOmitted) container.addChild(new Text(palette.dim('├ … ' + block.callLinesOmitted + ' more'), 0, 0))
-    if (block.isError) {
+    if (block.isError || block.stopped) {
       const message = compactErrorPreview(block.result)
-      if (message !== '') container.addChild(new Text(palette.error('├ ✕ ' + literalToolText(message)), 0, 0))
+      if (message !== '' && !shown.has(message)) body.addChild(new Text(palette.error(literalToolText(message)), 0, 0))
     }
+    body.addChild(new Text(palette.dim('(ctrl+o to expand)'), 0, 0))
   } else {
-    const preview = compactCodeExecutionPreview(block)
-    if (preview !== '') container.addChild(new Text(palette.dim('├ ' + literalToolText(preview)), 0, 0))
+    if (source !== undefined) {
+      const lines = literalToolText(source).split('\n')
+      while (lines.at(-1) === '') lines.pop()
+      const preview: string[] = []
+      let used = 0, shortened = false
+      const budget = options.toolsExpanded ? 65536 : CODE_PREVIEW_CHARS
+      for (const line of lines) {
+        if (preview.length >= (options.toolsExpanded ? 2000 : CODE_PREVIEW_LINES) || used >= budget) break
+        const remaining = options.toolsExpanded ? budget - used : Math.min(CODE_LINE_CHARS, budget - used)
+        const text = line.length > remaining ? line.slice(0, Math.max(0, remaining - 1)) + '…' : line
+        if (text.length !== line.length) shortened = true
+        preview.push(text)
+        used += text.length + 1
+      }
+      if (preview.length > 0) body.addChild(new SourcePreview(preview.join('\n'), CODE_EXECUTION_LANGUAGES[block.name], palette))
+      const hidden = lines.length - preview.length
+      if (hidden > 0 || shortened) body.addChild(new Text(palette.dim(
+        '+ ' + hidden + ' more lines' + (shortened ? ' · long lines shortened' : '')
+          + (options.toolsExpanded ? ' · preview limit' : ' · ctrl+o to expand'),
+      ), 0, 0))
+    } else if (block.args.trim() !== '') {
+      body.addChild(new ToolOutput(formatToolArguments(block.args), palette, options.toolsExpanded ?? false))
+    }
+    if (block.result?.trim()) body.addChild(new ToolOutput(block.result, palette, options.toolsExpanded ?? false,
+      RESULT_PREVIEW_LINES, 'end', block.isError))
   }
-  container.addChild(new Text(status, 0, 0))
-  const box = new Box(1, 0, palette.toolBand)
-  box.addChild(container)
-  return box
+  if (block.pending) container.addChild(new Text(palette.warning('  └ running…'), 0, 0))
+  else if (block.isError) container.addChild(new Text(palette.error('  └ error'), 0, 0))
+  else if (block.stopped) container.addChild(new Text(palette.warning('  └ stopped · inspect the partial result'), 0, 0))
+  return container
 }

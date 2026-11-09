@@ -80,7 +80,7 @@ export type TranscriptBlock = ({
   /** Distinct sub-calls left out of {@link callLines} past the row budget. */
   readonly callLinesOmitted?: number
 } | {
-  readonly kind: 'notice'; readonly tone: 'info' | 'warning' | 'error'; readonly text: string
+  readonly kind: 'notice'; readonly tone: 'info' | 'warning' | 'error' | 'success'; readonly text: string
 } | {
   /**
    * Transient execution/retry status. The application synthesizes it, never

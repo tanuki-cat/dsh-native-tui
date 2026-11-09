@@ -1,14 +1,11 @@
 /**
- * Chrome rows written only when the text they would show changes.
- *
- * `Text.setText` drops its render cache for an identical string too, so a
- * caller that writes on every Session event turns a projection or agent-status
- * change into a full component-tree paint even when nothing visible moved.
+ * Chrome rows written only when their content or layout metadata changes.
  *
  * @module dsh-native-tui/ui/status-rows
  */
 
 import type { StatusRows } from './status-line.js'
+import type { StatusBarTarget, StatusSegment } from './status-bar.js'
 
 /** Deduplicated chrome rows plus the change flag one paint reads. */
 export interface DedupedStatusRows {
@@ -26,18 +23,33 @@ export interface DedupedStatusRows {
  * @returns the deduplicating rows and their per-paint change flag.
  */
 export function createStatusRows(targets: StatusRows): DedupedStatusRows {
-  const painted = new Map<keyof StatusRows, string>()
+  let header: string | undefined
+  const painted = new Map<'status' | 'footer', readonly StatusSegment[]>()
   let changed = false
-  const row = (key: keyof StatusRows): { setText(text: string): void } => ({
-    setText: (text: string): void => {
-      if (painted.get(key) === text) return
-      painted.set(key, text)
+  const row = (key: 'status' | 'footer'): StatusBarTarget => ({
+    setSegments: (segments): void => {
+      const previous = painted.get(key)
+      if (previous !== undefined && previous.length === segments.length && previous.every((segment, index) => {
+        const next = segments[index]
+        return next !== undefined && segment.text === next.text
+          && segment.compact === next.compact && segment.priority === next.priority
+      })) return
+      painted.set(key, segments)
       changed = true
-      targets[key].setText(text)
+      targets[key].setSegments(segments)
     },
   })
   return {
-    rows: { header: row('header'), status: row('status'), footer: row('footer') },
+    rows: {
+      header: { setText: text => {
+        if (header === text) return
+        header = text
+        changed = true
+        targets.header.setText(text)
+      } },
+      status: row('status'),
+      footer: row('footer'),
+    },
     reset: () => { changed = false },
     get changed() { return changed },
   }

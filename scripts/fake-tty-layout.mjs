@@ -1,7 +1,6 @@
 import { spawn } from 'node:child_process'
 
-// Real-Host regression for the spacious layout: inset transcript, three-line
-// header, split status block, and the prompt footer.
+// Real-Host inspection of the header, transcript, and compact status rows.
 // Prepare the isolated profile once:
 //   cp -R ~/.dsh/profiles/tui /tmp/dsh-layout-probe/profiles/tui
 //   cp -R dist cordis.patch.yml presets package.json \
@@ -46,12 +45,9 @@ child.on('exit', (code, signal) => {
   console.log('EXIT', code, signal, 'phase', phase)
   console.log('HEADER_TITLE', clean.includes('◆ DeepSeek Harness'))
   console.log('HEADER_FLUSH', /^native-tui-/m.test(clean))
-  console.log('STATUS_FLUSH', /^● idle/m.test(clean))
-  console.log('STATUS_MODEL', /● idle\s{3}model \S+/.test(clean))
-  console.log('STATUS_THINK', /think (?:default|[a-z]+)/.test(clean))
+  console.log('STATUS_MODEL', /\S+\/\S+.* · Ready · /u.test(clean))
   console.log('TRANSCRIPT_FLUSH', /^i Local commands:/m.test(clean))
-  console.log('FOOTER_USAGE', /^↳ \d+ turns/m.test(clean))
-  console.log('FOOTER_CONTEXT', /^ {2}ctx /m.test(clean))
+  console.log('STATUS_CONTEXT', /(?:Context|ctx) (?:\d+%|—)/u.test(clean))
   console.log('RULE_FULL_BLEED', /^─{10}/m.test(clean))
   console.log('--- TAIL ---')
   console.log(clean.slice(-5000))

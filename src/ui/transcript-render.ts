@@ -16,6 +16,7 @@ import { BarText } from './bar-text.js'
 import { ToolCard } from './tool-card.js'
 import { clip } from './tool-preview.js'
 import type { TranscriptBlock, TranscriptOptions } from './transcript.js'
+import { MessageBody } from './transcript-chrome.js'
 
 export { isCodeExecutionTool } from './code-execution-card.js'
 
@@ -28,16 +29,13 @@ export { isCodeExecutionTool } from './code-execution-card.js'
 export function renderTranscriptBlock(block: TranscriptBlock, options: TranscriptOptions): Component {
   const palette = options.palette
   const band = (component: Component, background: (text: string) => string): Component => {
-    const box = new Box(1, 0, background)
+    const box = new Box(0, 0, background)
     box.addChild(component)
     return box
   }
   switch (block.kind) {
     case 'user': {
-      const container = new Container()
-      container.addChild(new Text(palette.bold(palette.accent('▌ You')), 0, 0))
-      container.addChild(new Text(sanitizeTerminalText(block.text), 0, 0))
-      return band(container, palette.userBand)
+      return band(new MessageBody(new Text(sanitizeTerminalText(block.text), 0, 0), palette, '› '), palette.userBand)
     }
     case 'assistant': return new AssistantMessage(block, options)
     case 'context': {
@@ -85,6 +83,7 @@ export function renderTranscriptBlock(block: TranscriptBlock, options: Transcrip
       const text = sanitizeTerminalText(block.text).replaceAll('\n', '\n  ')
       if (block.tone === 'error') return new Text(palette.error('✕ ' + text), 0, 0)
       if (block.tone === 'warning') return new Text(palette.warning('! ' + text), 0, 0)
+      if (block.tone === 'success') return new Text(palette.success('✓ ' + text), 0, 0)
       return new Text(palette.dim('i ') + text, 0, 0)
     }
   }

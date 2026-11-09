@@ -1,226 +1,189 @@
 import { describe, expect, it } from 'vitest'
-import { Text, visibleWidth } from '@earendil-works/pi-tui'
+import { visibleWidth } from '@earendil-works/pi-tui'
 import { stripVTControlCharacters } from 'node:util'
-import { createPalette, type Palette } from '../src/ui/theme.js'
-import { renderStatusRows, splitContextLine, splitSessionMetrics, terminalWindowTitle, type StatusInput } from '../src/ui/status-line.js'
+import { createPalette } from '../src/ui/theme.js'
+import { StatusBar } from '../src/ui/status-bar.js'
+import { renderStatusRows, splitContextLine, splitSessionMetrics, terminalWindowTitle, workspacePath, type StatusInput } from '../src/ui/status-line.js'
 
-function identity(text: string): string { return text }
-
-const palette = {
-  plain: true,
-  dim: identity,
-  bold: identity,
-  italic: identity,
-  underline: identity,
-  accent: identity,
-  brand: identity,
-  success: identity,
-  warning: identity,
-  error: identity,
-  userBand: identity,
-  toolBand: identity,
-  thinkingBand: identity,
-  dialogBand: identity,
-  dialogBorder: identity,
-  reasoning: () => identity,
-  preset: identity,
-  context: () => identity,
-} as unknown as Palette
+const palette = createPalette('plain')
 
 function rows() {
-  const state = { header: '', status: '', footer: '' }
+  const state = { header: '' }
+  const status = new StatusBar(' · ')
+  const footer = new StatusBar(' · ')
   return {
-    state,
+    state, status, footer,
     rows: {
       header: { setText: (text: string) => { state.header = text } },
-      status: { setText: (text: string) => { state.status = text } },
-      footer: { setText: (text: string) => { state.footer = text } },
+      status, footer,
     },
   }
 }
 
 function inputOf(overrides: Partial<StatusInput> = {}): StatusInput {
   return {
-    title: 'Test TUI',
-    sessionId: 'session-1',
-    cwd: '/tmp/work',
-    running: false,
-    provider: 'provider',
-    model: 'model',
-    reasoningEffort: 'max',
-    preset: 'ptc',
-    attachmentCount: 0,
-    contextWindow: 1_000_000,
-    contextMeter: { tokens: 400_000 },
-    stats: { turns: 2, steps: 3, decodeMs: 2000, decodeTokens: 100 },
-    events: [],
-    ...overrides,
+    title: 'Test TUI', sessionId: 'session-1', cwd: '/tmp/work', running: false,
+    provider: 'provider', model: 'model', reasoningEffort: 'max', preset: 'ptc', attachmentCount: 0,
+    contextWindow: 1_000_000, contextMeter: { tokens: 400_000 },
+    stats: { turns: 2, steps: 3, decodeMs: 2000, decodeTokens: 100 }, events: [], ...overrides,
   }
 }
 
+function painted(overrides: Partial<StatusInput> = {}, theme: 'plain' | 'dark' | 'light' = 'plain') {
+  const result = rows()
+  renderStatusRows(result.rows, createPalette(theme), inputOf(overrides))
+  return result
+}
+
+const full = (bar: StatusBar): string => bar.render(1000)[0]!
+
 describe('renderStatusRows', () => {
-  it('cleans untrusted labels before adding status styling', () => {
-    const escape = String.fromCharCode(27)
-    const label = 'safe' + escape + ']52;c;UFJPT0Y=' + String.fromCharCode(7) + escape + '[2Jend'
-    const { state, rows: target } = rows()
-    renderStatusRows(target, palette, inputOf({ title: label, sessionId: label, cwd: label, provider: label,
-      model: label, preset: label, reasoningEffort: label, permissionPreset: label }))
-    for (const text of Object.values(state)) {
-      expect(text).not.toContain(escape)
-      expect(text).toContain('safeend')
-    }
+  it('keeps the title and session in the header and moves cwd to the status bar', () => {
+    const { state, status } = painted()
+    expect(state.header).toBe('◆ Test TUI\nsession-1')
+    expect(full(status)).toContain('/tmp/work')
   })
 
-  it('puts the title, session, and cwd on separate spaced header lines', () => {
-    const { state, rows: target } = rows()
-    renderStatusRows(target, palette, inputOf())
-    expect(state.header).toBe('◆ Test TUI\nsession-1\n/tmp/work')
+  it('groups model and effort, workspace, state, context and metrics with dots', () => {
+    const { status, footer } = painted({ attachmentCount: 2 })
+    expect(full(status)).toBe('provider/model max · /tmp/work · Ready · Context 40% used · attached 2 · preset ptc · 2 turns · 3 steps · 50 tok/s · 0 tok · cache —')
+    expect(full(footer)).toBe('enter send · shift+tab think · /help · ctrl+d exit')
   })
 
-  it('keeps runtime, model, reasoning, preset and attachments on one primary row', () => {
-    const { state, rows: target } = rows()
-    renderStatusRows(target, palette, inputOf({ attachmentCount: 2 }))
-    expect(state.status).toContain('● idle')
-    expect(state.status).toContain('model provider/model')
-    expect(state.status).toContain('think max')
-    expect(state.status).not.toContain('\n')
-    expect(state.status).toContain('preset ptc')
-    expect(state.status).toContain('attached 2')
-    expect(state.status).not.toContain('enter send')
-    expect(state.footer.split('\n').at(-1)).toBe('enter send · shift+tab think · /help · ctrl+d exit')
+  it.each([['manual', 'manual mode'], ['accept-edits', 'accept edits'], ['plan', 'plan mode'], ['auto', 'auto mode · EXP'], ['custom', 'custom mode'], ['off', 'off']] as const)('keeps %s visible beside the shortcuts', (interactionMode, label) => {
+    const { footer } = painted({ interactionMode })
+    expect(full(footer)).toBe(label + ' · enter send · shift+tab think · /help · ctrl+d exit')
   })
 
-  it.each([['manual', 'manual mode'], ['accept-edits', 'accept edits'], ['plan', 'plan mode'], ['auto', 'auto mode · EXP'], ['custom', 'custom mode'], ['off', 'off']] as const)('shows %s below the editor without confusing Full access with Auto', (interactionMode, label) => {
-    const { state, rows: target } = rows()
-    renderStatusRows(target, palette, inputOf({ interactionMode }))
-    expect(state.footer.startsWith(label + ' · /mode')).toBe(true)
-    expect(state.footer).toContain('2 turns')
+  it.each(['read-only', 'workspace-write', 'danger-full-access', 'custom', 'profile-native'])('preserves native %s permission at normal and narrow widths', permissionPreset => {
+    const { footer } = painted({ interactionMode: 'off', permissionPreset })
+    expect(full(footer)).toContain('off · permission ' + permissionPreset)
+    expect(footer.render(32)[0]).toContain(permissionPreset)
   })
 
-  it.each(['read-only', 'workspace-write', 'danger-full-access', 'custom', 'profile-native'])('shows the selected native %s permission beside off', permissionPreset => {
-    const { state, rows: target } = rows()
-    renderStatusRows(target, palette, inputOf({ interactionMode: 'off', permissionPreset }))
-    expect(state.footer.split('\n')[0]).toBe('off · /mode  │  permission ' + permissionPreset + '  │  ctx 40%  (~400K / 1M · compact at 80%)')
-    expect(state.status).toContain('preset ptc')
+  it('refreshes permissions without retaining the previous selection', () => {
+    const result = painted({ interactionMode: 'off', permissionPreset: 'workspace-write' })
+    renderStatusRows(result.rows, palette, inputOf({ interactionMode: 'off', permissionPreset: 'read-only' }))
+    expect(full(result.footer)).toContain('permission read-only')
+    expect(full(result.footer)).not.toContain('workspace-write')
   })
 
-  it('refreshes native permissions without retaining the previous selection', () => {
-    const { state, rows: target } = rows()
-    renderStatusRows(target, palette, inputOf({ interactionMode: 'off', permissionPreset: 'workspace-write' }))
-    renderStatusRows(target, palette, inputOf({ interactionMode: 'off', permissionPreset: 'read-only' }))
-    expect(state.footer).toContain('permission read-only')
-    expect(state.footer).not.toContain('workspace-write')
-  })
-
-  it('shows native permissions when the mode service is absent without guessing missing values', () => {
-    const { state, rows: target } = rows()
-    renderStatusRows(target, palette, inputOf({ permissionPreset: 'workspace-write' }))
-    expect(state.footer).toContain('permission workspace-write')
-    renderStatusRows(target, palette, inputOf({ interactionMode: 'off' }))
-    expect(state.footer).not.toContain('permission ')
-    expect(state.footer).not.toContain('undefined')
+  it('shows native permissions when the mode service is absent and omits missing values', () => {
+    expect(full(painted({ permissionPreset: 'workspace-write' }).footer)).toContain('permission workspace-write')
+    const footer = full(painted({ interactionMode: 'off' }).footer)
+    expect(footer).not.toContain('permission ')
+    expect(footer).not.toContain('undefined')
   })
 
   it('does not repeat a TUI mode as a native permission', () => {
-    const { state, rows: target } = rows()
-    renderStatusRows(target, palette, inputOf({ interactionMode: 'manual', permissionPreset: 'manual' }))
-    expect(state.footer).toContain('manual mode · /mode')
-    expect(state.footer).not.toContain('permission ')
+    const { footer } = painted({ interactionMode: 'manual', permissionPreset: 'manual' })
+    expect(full(footer)).toContain('manual mode')
+    expect(full(footer)).not.toContain('permission ')
   })
 
-  it('uses the running vocabulary and hides the default thinking label', () => {
-    const { state, rows: target } = rows()
-    renderStatusRows(target, palette, inputOf({ running: true, reasoningEffort: undefined }))
-    expect(state.status).toContain('● working')
-    expect(state.status).toContain('think default')
-    expect(state.status).not.toContain('enter steer')
-    expect(state.footer.split('\n').at(-1)).toContain('enter steer · esc cancel')
+  it('shows Working and running shortcuts while omitting an unset reasoning level', () => {
+    const { status, footer } = painted({ running: true, reasoningEffort: undefined })
+    expect(full(status)).toContain('provider/model · /tmp/work · Working')
+    expect(full(status)).not.toContain('default')
+    expect(full(footer)).toBe('enter steer · esc cancel · ctrl+c cancel · ctrl+d exit')
   })
 
-  it('colors the thinking label through the reasoning palette hook', () => {
-    const seen: Array<string | undefined> = []
-    const colored = {
-      ...palette,
-      reasoning: (effort: string | undefined) => {
-        seen.push(effort)
-        return (text: string) => '[' + (effort ?? 'default') + ']' + text
-      },
-    } as unknown as Palette
-    const { state, rows: target } = rows()
-    renderStatusRows(target, colored, inputOf({ reasoningEffort: 'high' }))
-    expect(seen).toEqual(['high'])
-    expect(state.status).toContain('[high]think high')
+  it('colors model, reasoning, workspace, preset, attachments and context', () => {
+    const { status } = painted({ attachmentCount: 2, contextMeter: { tokens: 700_000 } }, 'dark')
+    const line = full(status)
+    expect(line).toContain('\u001B[34mprovider')
+    expect(line).toContain('\u001B[36mmodel')
+    expect(line).toContain('\u001B[38;5;196mmax')
+    expect(line).toContain('\u001B[32m/tmp/work')
+    expect(line).toContain('\u001B[38;5;141mptc')
+    expect(line).toContain('\u001B[36mattached 2')
+    expect(line).toContain('\u001B[33mContext 70% used')
+    expect(full(painted({ interactionMode: 'off', permissionPreset: 'danger-full-access' }, 'dark').footer))
+      .toContain('\u001B[33mdanger-full-access')
   })
 
-  it('colors the model pair, preset, attachments, and context head', () => {
-    const colored = createPalette('dark')
-    const { state, rows: target } = rows()
-    renderStatusRows(target, colored, inputOf({ attachmentCount: 2, contextMeter: { tokens: 700_000 } }))
-    expect(state.status).toContain('\u001B[34mprovider')
-    expect(state.status).toContain('\u001B[36mmodel')
-    expect(state.status).toContain('\u001B[38;5;141mptc')
-    expect(state.status).toContain('\u001B[36m2')
-    expect(state.footer).toContain('\u001B[36m↳ ')
-    expect(state.footer).toContain('\u001B[33mctx 70%')
-    expect(state.footer).toContain('\u001B[2m  (~700K / 1M · compact at 80%)')
+  it('uses the actual compaction trigger for the context warning color', () => {
+    expect(full(painted({ contextMeter: { tokens: 800_000 } }, 'dark').status)).toContain('\u001B[31mContext 80% used')
+    const { status } = painted({ contextMeter: { tokens: 400_000, reservedTokens: 600_000 } }, 'dark')
+    expect(full(status)).toContain('\u001B[31mContext 40% used')
   })
 
-  it('turns the context head to error at the compaction trigger', () => {
-    const { state, rows: target } = rows()
-    renderStatusRows(target, createPalette('dark'), inputOf({ contextMeter: { tokens: 800_000 } }))
-    expect(state.footer).toContain('\u001B[31mctx 80%')
+  it('distinguishes unknown context from a measured zero', () => {
+    expect(full(painted({ contextMeter: {} }).status)).toContain('Context —')
+    expect(full(painted({ contextWindow: undefined, contextMeter: undefined }).status)).toContain('Context —')
+    expect(full(painted({ contextMeter: { tokens: 0 } }).status)).toContain('Context 0% used')
   })
 
-  it('puts context ahead of usage and keeps help on its own final row', () => {
-    const { state, rows: target } = rows()
-    renderStatusRows(target, palette, inputOf())
-    expect(state.footer).toContain('↳ 2 turns')
-    expect(state.footer).toContain('50 tok/s')
-    const lines = state.footer.split('\n')
-    expect(lines[0]).toBe('ctx 40%  (~400K / 1M · compact at 80%)')
-    expect(lines[1]).toContain('↳ 2 turns')
-    expect(lines[2]).toContain('enter send')
+  it('cleans terminal instructions and flattens multiline labels before adding styling', () => {
+    const label = 'safe\u001B]52;c;UFJPT0Y=\u0007\u001B[2Jend\nnext\tline'
+    const { state, status, footer } = painted({ title: label, sessionId: label, cwd: label, provider: label,
+      model: label, preset: label, reasoningEffort: label, permissionPreset: label })
+    for (const text of [state.header, full(status), full(footer)]) {
+      expect(text).not.toContain('\u001B')
+      expect(text).toContain('safeend next line')
+    }
+    expect(full(status)).not.toMatch(/[\n\r\t]/u)
+    expect(full(footer)).not.toMatch(/[\n\r\t]/u)
+    expect(state.header.split('\n')).toHaveLength(2)
   })
 })
 
 describe('status layout', () => {
-  it('groups mode and context above metrics and help without blank rows', () => {
-    const { state, rows: target } = rows()
-    renderStatusRows(target, palette, inputOf({ interactionMode: 'manual' }))
-    expect(state.status).toBe('● idle  │  model provider/model  │  think max  │  preset ptc')
-    const lines = state.footer.split('\n')
-    expect(lines).toHaveLength(3)
-    expect(lines[0]).toBe('manual mode · /mode  │  ctx 40%  (~400K / 1M · compact at 80%)')
-    expect(lines[1]).toContain('2 turns  ·  3 steps  ·  50 tok/s')
-    expect(lines[2]).toBe('enter send · shift+tab think · /help · ctrl+d exit')
-    expect(lines.every(line => line.trim() !== '')).toBe(true)
-  })
-
-  it('does not leave separators for an absent preset or context', () => {
-    const { state, rows: target } = rows()
-    renderStatusRows(target, palette, inputOf({ preset: undefined, contextWindow: undefined, contextMeter: undefined }))
-    expect(state.status).toBe('● idle  │  model provider/model  │  think max')
-    expect(state.footer.split('\n').filter(line => line.trim() === '')).toEqual([])
-    expect(state.footer).not.toMatch(/^\s*│|│\s*$/m)
-  })
-
-  it.each([32, 60, 100, 160])('preserves every field when the terminal resizes to %i columns', width => {
-    for (const theme of ['plain', 'dark'] as const) {
+  it.each([1, 16, 32, 60, 100, 160, 240])('stays exactly two rows at %i columns and restores fields on expansion', width => {
+    for (const theme of ['plain', 'dark', 'light'] as const) {
       for (const interactionMode of ['auto', 'off'] as const) {
-        const { state, rows: target } = rows()
-        renderStatusRows(target, createPalette(theme), inputOf({
-          interactionMode, permissionPreset: 'danger-full-access', provider: '路由', model: 'long-model-' + 'x'.repeat(70), attachmentCount: 2,
-        }))
-        const compact = (text: string) => stripVTControlCharacters(text).replaceAll(' ', '').replaceAll('\n', '')
-        for (const text of [state.status, state.footer]) {
-          const block = new Text(text, 0, 0)
-          block.render(160)
-          const rendered = block.render(width)
-          expect(rendered.every(line => visibleWidth(line) <= width)).toBe(true)
-          expect(compact(rendered.join('\n'))).toBe(compact(text))
+        const { status, footer } = painted({ interactionMode, permissionPreset: 'danger-full-access',
+          provider: '路由', model: '长模型🧑‍💻-' + 'x'.repeat(70), cwd: '/tmp/中文目录/项目', attachmentCount: 2 }, theme)
+        for (const bar of [status, footer]) {
+          const before = full(bar)
+          const rendered = bar.render(width)
+          expect(rendered).toHaveLength(1)
+          expect(visibleWidth(rendered[0]!)).toBeLessThanOrEqual(width)
+          if (theme === 'plain') expect(rendered[0]).not.toContain('\u001B')
+          expect(full(bar)).toBe(before)
         }
       }
     }
+  })
+
+  it('reserves narrow-screen space for state, context and attachments beside a long model', () => {
+    const { status } = painted({ model: 'long-model-' + 'x'.repeat(70), attachmentCount: 2 })
+    const line = status.render(60)[0]!
+    expect(line).toContain('Ready')
+    expect(line).toContain('ctx 40%')
+    expect(line).toContain('attached 2')
+    expect(line).not.toContain('turns')
+    expect(line).not.toContain('/tmp/work')
+    expect(line).toContain('…')
+  })
+
+  it('keeps steer and cancel shortcuts ahead of exit shortcuts in a narrow running footer', () => {
+    const { footer } = painted({ running: true, interactionMode: 'off', permissionPreset: 'workspace-write' })
+    const text = footer.render(60)[0]!
+    expect(text).toContain('workspace-write')
+    expect(text).toContain('enter steer')
+    expect(text).toContain('esc cancel')
+    expect(text).not.toContain('ctrl+d exit')
+  })
+
+  it('does not leave separators for absent fields', () => {
+    const { status, footer } = painted({ preset: undefined })
+    for (const bar of [status, footer]) {
+      for (const width of [32, 60, 100, 240]) {
+        const text = stripVTControlCharacters(bar.render(width)[0]!)
+        expect(text).not.toMatch(/^\s*·|·\s*$|·\s*·/u)
+      }
+    }
+    expect(full(status)).not.toContain('preset')
+  })
+})
+
+describe('workspacePath', () => {
+  it('abbreviates the home directory only at a full path boundary', () => {
+    expect(workspacePath('/Users/me/work/repo', '/Users/me')).toBe('~/work/repo')
+    expect(workspacePath('/Users/me', '/Users/me')).toBe('~')
+    expect(workspacePath('/Users/me-other/repo', '/Users/me')).toBe('/Users/me-other/repo')
+    expect(workspacePath('/tmp/repo', '/Users/me')).toBe('/tmp/repo')
   })
 })
 

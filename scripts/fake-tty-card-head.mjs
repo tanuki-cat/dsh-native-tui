@@ -130,7 +130,7 @@ child.stdout.on('data', data => {
   out += String(data)
   const text = strip(out)
   if (phase === 0 && text.includes('enter send')) { phase = 1; child.stdin.write('ctx' + String.fromCharCode(13)); return }
-  if (phase === 1 && text.includes('CTXEND') && text.includes('● idle')) {
+  if (phase === 1 && text.includes('CTXEND') && text.includes(' · Ready')) {
     phase = 2
     setTimeout(() => { try { child.stdin.write('tool' + String.fromCharCode(13)) } catch {} }, 1200)
     return
@@ -140,7 +140,7 @@ child.stdout.on('data', data => {
     setTimeout(() => { try { child.stdin.write('answer' + String.fromCharCode(13)) } catch {} }, 1500)
     return
   }
-  if (phase === 3 && text.includes('TOOL LATE DONE') && text.includes('● idle')) {
+  if (phase === 3 && text.includes('TOOL LATE DONE') && text.includes(' · Ready')) {
     phase = 4
     setTimeout(() => { try { child.stdin.write(String.fromCharCode(4)) } catch {} }, 1200)
   }

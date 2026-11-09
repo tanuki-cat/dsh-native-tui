@@ -6,7 +6,6 @@ import {
   Spacer,
   Text,
   TuiAltScreen,
-  TuiMainScreen,
   VStack,
 } from '@earendil-works/pi-tui'
 import type { Context } from '@deepseek-ai/cordis'
@@ -21,10 +20,12 @@ import { assertResumed, reloadArgs, RESUME_ENV } from '../runtime/reload.js'
 import { skillRows } from '../runtime/skill-catalog.js'
 import { createSessionMetricsMemo, type SessionMetrics, type SessionStats } from '../runtime/metrics.js'
 import { showApproval, showQuestionBatch } from './dialogs.js'
+import { approvalArguments, approvalReceipt } from './approval-preview.js'
 import type { PendingAttachment } from '../runtime/attachments.js'
 import { TuiAutocompleteProvider, type SessionReferenceService, type SkillSuggestion } from './autocomplete.js'
 import { currentPreset, renderStatusRows, terminalWindowTitle } from './status-line.js'
 import { createStatusRows } from './status-rows.js'
+import { StatusBar } from './status-bar.js'
 import { createPalette, editorTheme, markdownTheme, type Palette } from './theme.js'
 import { debug } from '../debug.js'
 import { globalShortcut } from './keymap.js'
@@ -40,6 +41,7 @@ import { subscribeSessionEvents } from './session-events.js'
 import { streamingRowKey, type TranscriptBlock, type TranscriptEntry } from './transcript.js'
 import { frameCostMs, frameOverrunMs, nextFrameDelay, nextStreamInterval, STREAM_MIN_INTERVAL_MS, transcriptFrameChanged } from './stream-pacing.js'
 import { TranscriptRenderer } from './transcript-renderer.js'
+import { TranscriptMainScreen } from './transcript-main-screen.js'
 import { WAIT_ROW_TICK_MS, WaitStatusLine, waitingText, type WaitRetry } from './waiting.js'
 import { holdProcessWarnings, type WarningGuard } from './warnings.js'
 import { consoleTone, holdConsoleOutput, type ConsoleGuard } from './console-guard.js'
@@ -126,15 +128,15 @@ export async function startTerminalApp(
       // is away from its end, and resumes following on a click.
       scrollToEndIndicator: () => scrollToEndLabel(palette),
     })
-    : new TuiMainScreen(terminal, false)
+    : new TranscriptMainScreen(terminal, false)
   // Every row uses the width the terminal reports: no stored horizontal inset,
   // so transcript, status, prompt, and the divider rules share one left edge
   // and stay aligned through a resize.
   const header = new Text('', 0, 0)
   const headerRule = new Rule(text => palette.dim(text))
   const statusRule = new Rule(text => palette.reasoning(reasoningEffort)(text))
-  const status = new Text('', 0, 0)
-  const footer = new Text('', 0, 0)
+  const status = new StatusBar(palette.dim(' · '))
+  const footer = new StatusBar(palette.dim(' · '))
   const waitStatus = new WaitStatusLine(palette)
   // The native padding reserves the prompt gutter without shifting the full-width borders.
   const editor = new PromptEditor(tui, editorTheme(palette, () => reasoningEffort))
@@ -165,9 +167,9 @@ export async function startTerminalApp(
         minSize: 1,
       },
       { component: statusRule, basis: 'auto' },
-      { component: status, basis: 'auto' },
       { component: waitStatus, basis: 'auto' },
       { component: editor, basis: 'auto' },
+      { component: status, basis: 'auto' },
       { component: footer, basis: 'auto' },
     ]))
   } else {
@@ -176,9 +178,9 @@ export async function startTerminalApp(
     tui.addChild(new Spacer(1))
     tui.addChild(transcript)
     tui.addChild(statusRule)
-    tui.addChild(status)
     tui.addChild(waitStatus)
     tui.addChild(editor)
+    tui.addChild(status)
     tui.addChild(footer)
   }
   tui.setFocus(editor)
@@ -425,7 +427,7 @@ export async function startTerminalApp(
     return { kind: 'waiting', text: waitingText(waitSince, waitRetry, now) }
   }
 
-  const pushNotice = (tone: 'info' | 'warning' | 'error', text: string): void => {
+  const pushNotice = (tone: 'info' | 'warning' | 'error' | 'success', text: string): void => {
     const streamKey = streamingRowKey(entries)
     localNotices.push({
       kind: 'notice',
@@ -599,9 +601,15 @@ export async function startTerminalApp(
     interactionDisposers = [
       agent.ctx.on('approval/request', async (request, next) => {
         if (request.agent !== agent) return next()
-        return showApproval(tui, palette, request, request.signal === undefined
+        const args = approvalArguments(agent.session.snapshotEvents(), request.toolName, request.callId)
+        const outcome = await showApproval(tui, palette, request, request.signal === undefined
           ? interactionAbort.signal
           : AbortSignal.any([request.signal, interactionAbort.signal]))
+        if (!disposed && active.agent === agent) {
+          const receipt = approvalReceipt(request.toolName, args, outcome)
+          pushNotice(receipt.tone, receipt.text)
+        }
+        return outcome
       }),
       agent.ctx.on('user-questions/request', async (request, next) => {
         if (request.agent !== agent) return next()

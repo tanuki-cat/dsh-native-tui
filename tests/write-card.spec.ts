@@ -106,7 +106,7 @@ describe('write content cards', () => {
     expect(renderer.container.children.at(-1)).toBe(editComponent)
     expect(output()).toContain('CODE_LINE_29')
     expect(output()).toContain('edit edit.ts')
-    expect(output()).toContain('+ 1 new')
+    expect(output()).toContain('1 + new')
     renderer.toggleToolPreviews()
     expect(output()).not.toContain('CODE_LINE_29')
     expect(output()).toContain('ctrl+o to expand')

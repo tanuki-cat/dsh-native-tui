@@ -15,6 +15,14 @@ export interface DiffLine {
   readonly text: string
 }
 
+/** A final newline terminates the preceding source line; it is not another line. */
+export function diffSourceLines(text: string): string[] {
+  if (text === '') return []
+  const lines = text.replace(/\r\n?/gu, '\n').split('\n')
+  if (lines.at(-1) === '') lines.pop()
+  return lines
+}
+
 function isFileDiff(value: unknown): value is FileDiff {
   if (value === null || typeof value !== 'object') return false
   const candidate = value as { path?: unknown; oldText?: unknown; newText?: unknown }
@@ -93,8 +101,8 @@ export function resultFileDiffs(meta: unknown, args: string): FileDiff[] | undef
  */
 export function diffLines(oldText: string | null, newText: string, maxLines = 120): DiffLine[] {
   if (!Number.isSafeInteger(maxLines) || maxLines <= 0) throw new Error('diff maxLines must be a positive safe integer')
-  const before = oldText === null ? [] : oldText.split('\n')
-  const after = newText.split('\n')
+  const before = oldText === null ? [] : diffSourceLines(oldText)
+  const after = diffSourceLines(newText)
   const rows: DiffLine[] = []
   if (oldText === null) {
     for (const line of after) rows.push({ kind: 'add', text: line })

@@ -147,7 +147,7 @@ try {
       retrySeen = true
       recover()
     }
-    if (!exitSent && text.includes(answer) && text.lastIndexOf('● idle') > text.lastIndexOf('● working')) {
+    if (!exitSent && text.includes(answer) && text.lastIndexOf(' · Ready') > text.lastIndexOf(' · Working')) {
       exitSent = true
       child.stdin.write('\x04')
     }

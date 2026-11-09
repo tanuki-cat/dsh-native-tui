@@ -6,6 +6,7 @@ import type { TranscriptBlock, TranscriptEntry } from '../src/ui/transcript.js'
 import { TranscriptRenderer } from '../src/ui/transcript-renderer.js'
 import { WaitStatusLine } from '../src/ui/waiting.js'
 import { PromptEditor } from '../src/ui/prompt-editor.js'
+import { TranscriptMainScreen } from '../src/ui/transcript-main-screen.js'
 
 /**
  * The renderer under test needs a terminal, but the assertion is about pi-tui's
@@ -191,6 +192,61 @@ describe('main-screen card lifecycle', () => {
     tui.renderNow()
     expect(tui.fullRedraws - baseline).toBeGreaterThan(0)
     tui.stop()
+  })
+})
+
+describe('main-screen tool marker colors', () => {
+  const palette = createPalette('dark')
+  const colored = { ...options, palette, markdown: markdownTheme(palette), toolsExpanded: true }
+
+  it.each([false, true])('settles with the tool heading offscreen=%s without clearing native history', offscreen => {
+    const terminal = new FakeTerminal(100, 30)
+    const output: string[] = []
+    terminal.write = (text?: string) => { if (text !== undefined) output.push(text) }
+    const tui = new TranscriptMainScreen(terminal as never, false)
+    const root = new Container()
+    const block: TranscriptBlock = { kind: 'tool', callId: 'color', name: 'write',
+      args: JSON.stringify({ file_path: 'a.ts', content: offscreen ? 'source\n'.repeat(80) : 'source' }), pending: true }
+    root.addChild(new Text(FILLER, 0, 0))
+    root.addChild(renderTranscriptBlock(block, colored))
+    root.addChild(new Text(TRAILING, 0, 0))
+    tui.addChild(root)
+    try {
+      tui.start()
+      tui.renderNow()
+      const baseline = tui.fullRedraws
+      output.splice(0)
+      const before = tui.captureRenderState()
+      const index = before.previousLines.findIndex(line => line.includes('write'))
+      expect(index < before.previousViewportTop).toBe(offscreen)
+      root.children[1] = renderTranscriptBlock({ ...block, pending: false, result: '' }, colored)
+      tui.renderNow()
+      expect(tui.fullRedraws).toBe(baseline)
+      expect(output.join('')).not.toContain('\x1b[3J')
+      const after = tui.captureRenderState().previousLines[index]!
+      expect(after).toContain((offscreen ? palette.warning : palette.success)('• '))
+      if (offscreen) {
+        Object.defineProperty(terminal, 'columns', { value: 80 })
+        tui.renderNow()
+        expect(tui.captureRenderState().previousLines[index]).toContain(palette.success('• '))
+      }
+    } finally { tui.stop() }
+  })
+
+  it.each(['text', 'link'])('keeps ordinary redraw behavior for changed offscreen heading %s', change => {
+    const tui = new TranscriptMainScreen(new FakeTerminal(100, 30) as never, false)
+    const link = (target: string): string => '\x1b]8;;https://example.test/' + target + '\x07original command\x1b]8;;\x07'
+    const head = new Text(palette.warning('• ') + (change === 'text' ? 'original command' : link('before')), 0, 0)
+    tui.addChild(head)
+    tui.addChild(new Text(FILLER, 0, 0))
+    try {
+      tui.start()
+      tui.renderNow()
+      const baseline = tui.fullRedraws
+      head.setText(palette.success('• ') + (change === 'text' ? 'different command' : link('after')))
+      tui.renderNow()
+      expect(tui.fullRedraws).toBeGreaterThan(baseline)
+    } finally { tui.stop() }
   })
 })
 

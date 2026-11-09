@@ -134,18 +134,17 @@ child.on('exit', (code, signal) => {
   clearInterval(tick); clearTimeout(hard); server.close()
   const clean = strip(out)
   const checks = {
-    'run_code head': clean.includes('⚙ run_code'),
-    'read a': clean.includes('├ read ' + readA),
-    'read b': clean.includes('├ read ' + readB),
-    'dedup': (clean.match(new RegExp('├ read ' + readA.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) ?? []).length === 1,
+    'run_code head': clean.includes('• Ran run_code'),
+    'read a': clean.includes('└ read ' + readA),
+    'read b': clean.includes('    read ' + readB),
+    'dedup': (clean.match(new RegExp('└ read ' + readA.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) ?? []).length === 1,
     'no program source': !clean.includes('await tools.read'),
     'no args dump': !clean.includes('├ args'),
     'assistant reply': clean.includes('PTC COMPACT DONE'),
-    // A failed program reads `error` on the tail and keeps its message; a
-    // successful one reads `done` and shows no failure row at all.
+    // Failed programs retain their error message; successful programs need no status tail.
     ...(expectFailure
-      ? { 'error tail': clean.includes('└ error'), 'failure message': /├ ✕ Error: [^\n]{10}/u.test(clean) }
-      : { 'done tail': clean.includes('└ done'), 'no failure row': !clean.includes('├ ✕') }),
+      ? { 'error tail': clean.includes('└ error'), 'failure message': / {4}Error: [^\n]{10}/u.test(clean) }
+      : { 'no redundant success tail': !clean.includes('└ done'), 'no failure row': !clean.includes('└ error') }),
   }
   const pass = code === 0 && signal === null && phase === 3 && Object.values(checks).every(Boolean)
   console.log('EXIT', code, signal, 'phase', phase, 'pass', pass)

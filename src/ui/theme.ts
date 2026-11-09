@@ -26,6 +26,8 @@ export interface Palette {
   readonly userBand: (text: string) => string
   readonly toolBand: (text: string) => string
   readonly thinkingBand: (text: string) => string
+  readonly diffAddBand: (text: string) => string
+  readonly diffRemoveBand: (text: string) => string
   readonly dialogBand: (text: string) => string
   readonly dialogBorder: (text: string) => string
   /** Color one reasoning-effort label and the matching divider lines. */
@@ -71,6 +73,8 @@ export function createPalette(theme: Config['theme']): Palette {
       userBand: identity,
       toolBand: identity,
       thinkingBand: identity,
+      diffAddBand: identity,
+      diffRemoveBand: identity,
       dialogBand: identity,
       dialogBorder: identity,
       reasoning: () => identity,
@@ -154,6 +158,8 @@ export function createPalette(theme: Config['theme']): Palette {
     userBand: sgr(bands.user, '49'),
     toolBand: sgr(bands.tool, '49'),
     thinkingBand: sgr(bands.thinking, '49'),
+    diffAddBand: sgr(theme === 'light' ? '48;5;194' : '48;5;22', '49'),
+    diffRemoveBand: sgr(theme === 'light' ? '48;5;224' : '48;5;52', '49'),
     dialogBand: sgr(theme === 'light' ? '48;5;255' : '48;5;236', '49'),
     dialogBorder: sgr(theme === 'light' ? '38;5;24' : '38;5;39', '39'),
     reasoning,

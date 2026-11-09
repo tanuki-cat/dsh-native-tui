@@ -15,6 +15,7 @@ import {
 import type { ApprovalOutcome, ApprovalRequest } from '@deepseek-ai/dsh-user-approval'
 import { approvalArguments, approvalRequestDetails } from './approval-preview.js'
 import { showApprovalDetails } from './approval-details.js'
+import { showApprovalChoice } from './approval-choice.js'
 import { showPermissionQuestion } from './question-approval.js'
 import { ptcCallLine } from './tool-preview.js'
 import { literalToolText } from './tool-output.js'
@@ -622,21 +623,19 @@ export async function showApproval(
   const reason = localeText(request.displayReason) ?? request.reason
   const args = approvalArguments(request.agent?.session.snapshotEvents() ?? [], request.toolName, request.callId)
   const cwd = request.agent?.session.header.cwd
-  const title = [
-    'Approval required · ' + literalToolText(request.toolName),
-    args === undefined ? 'Arguments unavailable for this request' : literalToolText(ptcCallLine(request.toolName, args)),
-    ...(typeof cwd === 'string' ? [palette.dim('session cwd ' + literalToolText(cwd))] : []),
-    ...(reason === undefined ? [] : [palette.dim(literalToolText(clip(reason, 800)))]),
-    ...(request.callId === undefined ? [] : [palette.dim('call ' + literalToolText(request.callId))]),
-  ].join('\n')
+  const summary = {
+    heading: 'Approval required · ' + request.toolName,
+    action: args === undefined ? 'Arguments unavailable for this request' : ptcCallLine(request.toolName, args),
+    detail: reason === undefined ? undefined : clip(reason, 800),
+    cwd: typeof cwd === 'string' ? cwd : undefined,
+  }
   while (!activeSignal.aborted) {
-    const choice = await showChoice(tui, palette, title, [
+    const choice = await showApprovalChoice(tui, palette, summary, [
       { value: 'allow', label: 'Allow once', description: 'Approve this exact request only' },
       { value: 'reject', label: 'Reject', description: 'Fail the request closed' },
       { value: 'cancel', label: 'Cancel', description: 'Withdraw the request without a decision' },
       { value: 'details', label: 'View full request details', description: 'Inspect arguments without approving' },
-    ], 'Enter selects · Esc cancels', activeSignal,
-    () => Math.max(1, Math.min(10, Math.floor((tui.terminal?.rows ?? 30) * 0.8) - 8)))
+    ], activeSignal)
     if (choice === 'details') {
       await showApprovalDetails(tui, palette, approvalRequestDetails(request.toolName, request.callId, reason, args, typeof cwd === 'string' ? cwd : undefined), dialogFrame, activeSignal)
       continue
@@ -833,7 +832,7 @@ async function answerOne(
   // explicit row, so the rest of the batch still runs.
   const title = questionTitle(question, index, total)
   if (question.intent?.kind === 'approval') {
-    const choice = await showPermissionQuestion(tui, palette, { ...question, intent: question.intent }, index, total, showChoice, dialogFrame, signal)
+    const choice = await showPermissionQuestion(tui, palette, { ...question, intent: question.intent }, index, total, showApprovalChoice, dialogFrame, signal)
     if (choice === undefined) throw abortedQuestion()
     return { id: question.id, selected: [choice] }
   }

@@ -1,4 +1,4 @@
-import { Box, Container, Spacer, Text, type Component } from '@earendil-works/pi-tui'
+import { Container, Spacer, type Component } from '@earendil-works/pi-tui'
 import { clipGraphemes } from './grapheme-preview.js'
 import { reasoningPreview, reasoningText } from './reasoning-text.js'
 import { sanitizeTerminalText } from '../runtime/terminal-text.js'
@@ -6,6 +6,7 @@ import type { TranscriptBlock, TranscriptOptions } from './transcript.js'
 import type { AssistantPart } from './transcript-stream.js'
 import { StreamMarkdown } from './stream-markdown.js'
 import { StreamText } from './stream-text.js'
+import { MessageBody } from './transcript-chrome.js'
 
 type AssistantBlock = Extract<TranscriptBlock, { kind: 'assistant' }>
 
@@ -23,12 +24,10 @@ interface PartComponent {
 /** One message keeps its completed parts and only updates the streaming leaf. */
 export class AssistantMessage extends Container {
   private parts: PartComponent[] = []
-  private readonly header: Text
   private readonly gap = new Spacer(1)
 
   constructor(block: AssistantBlock, private readonly options: TranscriptOptions) {
     super()
-    this.header = new Text(options.palette.bold(options.palette.accent('◆ assistant')), 0, 0)
     this.update(block)
   }
 
@@ -61,20 +60,19 @@ export class AssistantMessage extends Container {
       }
       if (part.type === 'text') {
         const body = new StreamMarkdown(part.text, this.options.markdown)
-        return { ...part, component: body, body }
+        return { ...part, component: new MessageBody(body, palette, '• '), body }
       }
       // Reasoning is styled per rendered line, so no ANSI state has to cross a
       // line boundary when the tail is re-wrapped on its own.
-      const body = new StreamText(part.text, line => palette.dim(line))
-      if (mode === 'compact') return { ...part, component: body, body }
-      const box = new Box(1, 0, palette.thinkingBand)
-      box.addChild(new Text(palette.dim('thinking'), 0, 0))
-      box.addChild(body)
-      return { ...part, component: box, body }
+      const body = new StreamText(part.text, line => palette.dim(palette.italic(line)))
+      return { ...part, component: new MessageBody(body, palette, '  '), body }
     })
     if (next.length !== this.parts.length || next.some((part, index) => part.component !== this.parts[index]?.component)) {
-      this.children = [this.header]
-      for (const part of next) this.children.push(this.gap, part.component)
+      this.children = []
+      for (const [index, part] of next.entries()) {
+        if (index > 0) this.children.push(this.gap)
+        this.children.push(part.component)
+      }
     }
     this.parts = next
   }

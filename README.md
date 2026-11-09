@@ -92,30 +92,32 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 - 工具卡片按来源区分，两条路径共用同一套 diff 渲染，不按预设分支：
   - `ptc` 预设的 `run_code` 内嵌子调用由 `tool/ptc-dispatch-start` / `tool/ptc-dispatch` 建卡片。
   - `standard` / `cordis` 等 native 预设直接走 `tool/call` / `tool/result` 顶层卡片；`minimal` 不暴露 `write`/`edit`。
-- `write`/`edit` 渲染 ± diff 行，卡片头显示产生它的工具与文件，如 `⚙ edit · src/file.ts`。
-- 审批与问答 waterfall。所有独立 overlay（Choice / TextInput / Approval、Markdown / Text Pager、Image）统一使用带边框和全宽背景的 opaque dialog frame，长内容自动换行 / 补齐。审批按 toolName 与 callId 精确读取本次原生或 PTC 调用的参数，展示实际命令、目标路径或 MCP 方法；无法匹配时明确显示参数不可用，不借用相邻调用。`View full request details` 可查看完整 JSON，按视觉行翻页并随窗口缩放；Esc 返回原审批，查看详情本身不批准请求。长预览会标记截断，为批准、拒绝与取消保留空间。
+- `write` 展示编号源码预览，`edit` 展示带行号和增删统计的 diff；标题显示产生它的工具与文件，如 `• edit src/file.ts`，圆点颜色表示执行状态。
+- 审批与问答 waterfall。普通选择、输入、分页和图片 overlay 使用带边框的不透明背景；审批使用屏幕下方的编号选项与分隔线，突出实际调用和原因。审批按 toolName 与 callId 精确读取本次原生或 PTC 调用的参数，展示实际命令、目标路径或 MCP 方法；无法匹配时明确显示参数不可用，不借用相邻调用。`View full request details` 可查看完整 JSON，按视觉行翻页并随窗口缩放；Esc 返回原审批，查看详情本身不批准请求。长预览会标记截断，为批准、拒绝与取消保留空间。
 - 权限问答（`approval` intent）只提供调用方声明的批准、拒绝及可选持久授权，默认选中拒绝，不显示 Other 或跳过。动作保持可见，完整权限说明可分页查看，查看详情不会授权。展示标签与授权答案值分离；Esc 或请求中止不会批准。
 - 普通问答面板支持单选与多选：Space 勾选、Enter 提交，Other 提供自由文本（多选时会与已勾选项一并返回）；每题都有 `Skip this question` 行（无选项文本题为 `Answer… / Skip this question` 菜单），跳过只返回 `{ id, selected: [] }` 并继续批次；Esc 或请求 signal 中止会以 `UserQuestionError(ASK_ABORTED)` 取消整批。
 - 运行中 `Esc` / `Ctrl+C` 取消 turn；输入框有草稿时 `Esc` 先清空草稿，空输入才取消（overlay 聚焦时不触发）。
 
 ### 渲染与显示
 
-- Transcript 层次：全宽背景带（用户消息、reasoning、tool 输出）、assistant/context 标签、notice 图标、turn 分隔线；本地命令输出按 durable event sequence 插入。
+- Transcript 使用轻量的圆点和缩进层次：用户消息以 `›` 开头并保留背景带，正文直接渲染 Markdown，以 `•` 标记消息；thinking 使用灰色斜体，不添加背景块和重复的 assistant 标题。工具标题以 `•` 开头，结果缩进到 `└` 下方；本地命令输出和审批回执按 durable event sequence 插入。
 - 流式内容直接跟随 provider：每帧显示已收到的全部 text/reasoning，`block-end` 与 `assistant/message` 立即采用完整内容，没有额外逐字动画、播放队列或 settle grace。reasoning、正文、工具卡片按 provider/event 顺序展示，可以落在同一帧。
 - 执行状态独立于内容渲染：turn 开始后显示 `⟳ working · Ns`；收到文本、reasoning、工具调用或 stream/end 都不清除它，直到 `turn/end` 或切换会话。Host 调度自动重试时显示 `⟳ retry N/M after CODE (automatic) · Ns`，新 attempt 或恢复收流后回到 working。断流检测、超时与重试策略归 Host/provider，TUI 不根据画面是否变化判断网络状态。
 - 显示密度可配置：`thinkingDisplay` 与 `runCodeDisplay` 均为 `hidden | compact | detailed`，见[配置](#配置)。reasoning 若以 provider 的 `<signature>` 块开头，显示层会剥掉签名与随后的换行，纯签名块不渲染 thinking 卡片；`compact` 的预览在流式时取最后一个已完成段落的首行，结束后取首行，并去掉 `**` 标记。
-- PTC 的 `run_code` 卡片在 `compact` 下列出实际子调用：`skill` 显示实际技能名，如 `skill daily-log-writer`；文件工具显示路径；bash/pwsh 优先显示实际命令及显式 workdir，多行命令用 `↵` 标记；MCP 显示服务、方法与目标，如 `mcp idea.get_file_problems src/a.ts`；`todo_write` 显示任务数量、进行中/完成数量和当前任务，不虚构文件路径。同一摘要只出现一次，长值标记截断，路径优先保留文件名；超过 10 行折叠为 `├ … N more`，失败时保留错误首行。
+- PTC 的 `run_code` 卡片在 `compact` 下列出实际子调用：`skill` 显示实际技能名，如 `skill daily-log-writer`；文件工具显示路径；bash/pwsh 优先显示实际命令及显式 workdir，多行命令用 `↵` 标记；MCP 显示服务、方法与目标，如 `mcp idea.get_file_problems src/a.ts`；`todo_write` 显示任务数量、进行中/完成数量和当前任务，不虚构文件路径。同一摘要只出现一次，长值标记截断，路径优先保留文件名；超过 10 行折叠为 `+ N more calls`，失败时保留错误首行。
 - 上下文压缩：默认 preset 启用 `compaction-basic` 与 tool-result pruner。TUI 渲染 compaction start/summary/end；prune 隐藏对应 tool 卡片并保留 prune notice；session 级 tool memory 会忽略同一 callId 的晚到 / 重复 call/result，即使原始事件已离开 retained window。进程在 compaction 中途崩溃后 resume，卡片尾行显示 `⚠ interrupted` 而不是一直停在 `⟳ compacting…`。`/compact` 作为 Host command 可手动触发。
 - 终端窗口标题：启动后写入 `<产品标题> · <workspace 目录名>`（OSC 0），标签页能直接看出是哪个 checkout 的会话，例如 `DeepSeek Harness · dsh-native-tui`。控制字符会被压平（BEL 会截断 OSC 序列），目录名超过 48 字符截断；只在标题变化时写入。
-- 页面骨架：header 展示产品标题、Session id、cwd；transcript 只保留上下留白。输入框上方将运行状态、model、think、preset 和附件数合为一行，用细分隔符分组，不额外插入空行。transcript、状态区、输入框与边框共用满宽列，窄终端自然换行，不截掉字段。
-- reasoning effort 同时决定 `think` 标签、状态栏分隔线和编辑器上下边框的颜色，覆盖 `PROVIDER_REASONING_LEVELS` 的全部 7 档（off 灰 / minimal 青绿 / low 暗绿 / medium 浅蓝 / high 粉红 / xhigh 洋红 / max 红；未设置或未知 effort 保持 dim，`plain` 主题不着色）。颜色表按档位做了穷尽类型约束，新增档位却不给颜色会编译失败，不会再静默退化成 dim。provider 蓝、model 青、preset 紫、attached 数量青。
-- 输入框下方依次显示三组信息：模式与 `ctx` 同行（模式旁保留 `/mode` 入口）、`↳ turns · steps · tok/s · tok · cache`、弱化的快捷键提示。`ctx` 读 token meter 的 `contextPressure` 投影（最近一次 provider 采样 + 此后 surface 增减，compaction 影响已含在内），渲染为 `ctx 42%  (~420K / 1M · compact at 80%)`；`compact at` 是按 `compaction-basic` 的 `thresholdRatio`、`headroomTokens` 与该请求预留输出复算的触发点。首次 provider 采样前显示 `ctx —`，不猜占用。
+- 页面骨架：header 展示产品标题和 Session id，transcript 保留上下留白；执行等待/重试行位于输入框上方。输入框下方固定两行：`provider/model effort · ~/workspace · Ready · Context 42% used`，以及模式、原生权限与快捷键。字段以低对比度的 ` · ` 分隔，工作目录会将 home 简写为 `~`。
+- 状态栏按终端显示列宽自适应：宽屏补充 preset、附件数与 turns/steps/tok/s/tok/cache；窄屏缩短目录和字段标签、隐藏辅助字段，优先保留模型、Ready/Working、上下文和附件提示。模式与原生权限优先于快捷键。两行均不自动折行，极窄窗口截断；放大终端会恢复被隐藏的信息，中文、emoji 和 ANSI 着色均按实际列宽计算。
+- reasoning effort 直接跟在模型名后面，并与分隔线、编辑器上下边框共用颜色，覆盖全部 7 档（off 灰 / minimal 青绿 / low 暗绿 / medium 浅蓝 / high 粉红 / xhigh 洋红 / max 红；未知 effort 保持 dim，未设置时省略，`plain` 主题不着色）。provider 蓝、model 青、目录绿、preset 紫、附件青；Ready 绿、Working 黄。
+- 上下文读 token meter 的 `contextPressure` 投影（最近一次 provider 采样 + 此后 surface 增减，包含 compaction 影响），首次 provider 采样前显示 `Context —`。接近自动压缩阈值时用黄色、达到阈值用红色；阈值按 `compaction-basic` 的 `thresholdRatio`、`headroomTokens` 与请求预留输出复算。`/context` 查看完整 token 数、容量、压缩阈值和构成明细。
 - token 用量与 cache 命中率按 Web 口径：总量取四桶之和、部分命中不会显示成 100%，数字格式与 Web 统计 pill 一致。`tok/s` 是整段 Session 的累计 decode 速率（`decodeTokens / (decodeMs / 1000)`），不是瞬时速率，低于 10 时保留一位小数。
 - 可选 `fullscreen`：TuiAltScreen + ScrollView，header/status/editor 固定，鼠标滚轮滚动、文本选择复制。向上滚动离开末尾后，视口末行显示可点击的 `↓ jump to latest`，点击回到最新消息并恢复自动跟随（也可 `Ctrl+End`）。
 - 长会话渲染优化：每个行组件按宽度缓存结果（`MemoBlock`），`maxTranscriptEntries` 默认 600 限制每帧保留的行组件数；帧间隔按上次绘制时刻对齐并按实测帧成本自适应，内容签名未变的帧跳过重绘。
-- 工具卡片按类型展示：shell 为 `$ command` / `PS> command`，文件工具为 `read path` / `write path` / `edit path`，MCP 为 `mcp service/tool`，PTC 保留 `⚙ run_code`。shell 首行最多 120 字符，多行命令标记省略行数；路径与查询等标签最多 160 字符，路径保留末尾。展开后查看原命令，正文仍有安全预览上限。
-- 成功的 read 默认收起，write 显示源码预览，shell 保留末尾 5 个视觉行，通用结果保留前 10 个视觉行；折叠状态仍预览错误正文。edit 使用 Host 实际变更元数据，展示行号与改动附近上下文，整文件替换的折叠预览同时保留删除和新增样本。
-- 卡片首行在 pending 到结算期间保持稳定，运行状态放在尾行或底部状态行。默认 main-screen 不支持点击卡片；fullscreen 下点击卡片首行可单独展开/收起。`Ctrl+O` 在两种模式下均切换所有保留工具卡片。
+- 工具按类型展示：shell 为 `• Ran command` / `• Ran PS> command`，文件工具为 `• read path` / `• write path` / `• edit path`，MCP 为 `• mcp service/tool`，PTC 为 `• Ran run_code`。shell 首行最多 120 字符，多行命令标记省略行数；路径与查询等标签最多 160 字符，路径保留末尾。展开后查看原命令，正文仍有安全预览上限。
+- 成功的 read 默认收起，write 显示带行号的源码预览；shell 保留末尾 5 个视觉行，通用结果保留前 10 个视觉行，随后显示省略行数与 Ctrl+O 提示。折叠状态仍展示错误正文。edit 使用 Host 实际变更元数据，展示 `(+N -N)`、行号、红绿增删行和附近上下文，默认最多 24 个 diff 行；超出计算预算的变更范围用 `~` 标记估算计数，整文件替换保留删除和新增两侧样本。空文件、行尾换行不虚增行数；`/diff` 可分页查看会话记录的 diff，仍受预览上限约束。
+- 工具首行的 `•` 用颜色区分状态：黄色运行、绿色完成、红色失败、灰色停止，不额外增加完成提示行；标题文字和尺寸保持不变，错误/停止原因继续展示，`plain` 主题不着色。main-screen 已进入终端滚动历史的圆点延后到必要的完整重绘再刷新颜色，避免为变色清空历史；fullscreen 直接使用最新颜色。默认 main-screen 不支持点击卡片；fullscreen 下点击卡片首行可单独展开/收起。`Ctrl+O` 在两种模式下均切换所有保留工具卡片。
+- 审批在屏幕下方突出实际命令、原因与 cwd，所有操作带编号：方向键或编号键移动选择，Enter 才确认，Esc 取消；详情页完整展示调用参数。单次允许显示 `✓ You approved … this time`，拒绝和取消分别显示真实结果。只提供 Host 声明的操作和授权范围，原生单次审批不会增加长期授权选项。
 - **main-screen 手动全局展开的代价**：视口上方的历史卡片高度变化时，pi-tui 会整屏重绘并清除终端 scrollback；Session 日志不受影响。这不属于自动结算零重绘的保证范围。只查看单次完整输出时，可使用 `/tools`、`/tool <index>` 的独立预览，避免全局重排。
 
 ### 输入与补全

@@ -103,8 +103,8 @@ try {
     if (phase === 'reject' && fresh.includes('Approval required')) { input('\x1b[B\r'); baseline = text.length; phase = 'rejected'; return }
     if (phase === 'rejected' && fresh.includes('DONE reject') && fresh.lastIndexOf('enter send') > fresh.lastIndexOf('DONE reject')) {
       checks.rejection = !existsSync(deniedFile) && /rejected/i.test(results.get('reject') ?? '')
-      checks.skillSummary = text.includes('├ skill fixture-alpha') && text.includes('├ skill fixture-beta')
-      checks.cardSummary = text.includes('mcp fixture.lookup src/mcp-target.ts') && text.includes('├ bash printf TOOL_DETAILS_DENIED') && text.includes('├ todo_write 2 tasks')
+      checks.skillSummary = text.includes('└ skill fixture-alpha') && text.includes('    skill fixture-beta')
+      checks.cardSummary = text.includes('mcp fixture.lookup src/mcp-target.ts') && text.includes('    bash printf TOOL_DETAILS_DENIED') && text.includes('    todo_write 2 tasks')
       baseline = text.length; input('DETAILSPROBE:allow\r'); phase = 'allow'; return
     }
     if (phase === 'allow' && fresh.includes('Approval required')) {

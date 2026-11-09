@@ -104,14 +104,14 @@ describe('TranscriptRenderer', () => {
     renderer.set(entries, [])
     const detailed = renderer.container.render(100).join('\n')
     expect(detailed).toContain('second thought')
-    expect(detailed).toContain('⚙ run_code · Press AC')
-    expect(detailed).toContain('│ long code body')
+    expect(detailed).toContain('• Ran run_code · Press AC')
+    expect(detailed).toContain('1  long code body')
     expect(detailed).not.toContain('├ args')
 
     renderer.setDisplayModes('detailed', 'compact')
     const compactRunCode = renderer.container.render(100).join('\n')
     expect(compactRunCode).not.toContain('├ args')
-    expect(compactRunCode).toContain('⚙ run_code')
+    expect(compactRunCode).toContain('• Ran run_code')
     expect(compactRunCode).toContain('Press AC')
     expect(compactRunCode).not.toContain('long code body')
 
@@ -119,8 +119,8 @@ describe('TranscriptRenderer', () => {
     const compactThinking = renderer.container.render(100).join('\n')
     expect(compactThinking).toContain('thinking · first thought')
     expect(compactThinking).not.toContain('second thought')
-    expect(compactThinking).toContain('⚙ run_code · Press AC')
-    expect(compactThinking).toContain('│ long code body')
+    expect(compactThinking).toContain('• Ran run_code · Press AC')
+    expect(compactThinking).toContain('1  long code body')
   })
 
   it('keeps tool and compaction head rows identical across their lifecycle', () => {
@@ -168,12 +168,12 @@ describe('TranscriptRenderer', () => {
       args: JSON.stringify({ description: 'Press AC', code: 'const x = 1\nconsole.log(x)' }),
       result: '1',
     }, options).render(100).join('\n')
-    expect(output).toContain('⚙ run_code · Press AC')
-    expect(output).toContain('│ const x = 1')
-    expect(output).toContain('│ console.log(x)')
-    expect(output).toContain('├ result')
-    expect(output).toContain('│ 1')
-    expect(output).toContain('└ done')
+    expect(output).toContain('• Ran run_code · Press AC')
+    expect(output).toContain('1  const x = 1')
+    expect(output).toContain('2  console.log(x)')
+    expect(output).not.toContain('├ result')
+    expect(output).toMatch(/\n {4}1\s*$/u)
+    expect(output).not.toContain('└ done')
     expect(output).not.toContain('├ args')
   })
 
@@ -186,7 +186,7 @@ describe('TranscriptRenderer', () => {
       args: JSON.stringify({ command: 'pnpm check', description: 'run repository gate' }),
       result: 'ok',
     }, options).render(100).join('\n')
-    expect(output).toContain('$ pnpm check')
+    expect(output).toContain('Ran pnpm check')
     expect(output).toContain('run repository gate')
     expect(output).not.toContain('└ done')
   })
@@ -220,7 +220,7 @@ describe('TranscriptRenderer', () => {
       pending: false,
       args: JSON.stringify({ command: 'ls -la' }),
     }, options).render(100).join('\n')
-    expect(output).toContain('$ ls -la')
+    expect(output).toContain('Ran ls -la')
     expect(output).not.toContain('├ args')
   })
 
@@ -274,8 +274,8 @@ describe('TranscriptRenderer', () => {
     }, options).render(120).join('\n')
     expect(output).toContain('line 11')
     expect(output).not.toContain('line 12')
-    expect(output).toContain('… (3 more lines, 15 total)')
-    expect(output).toContain('└ done')
+    expect(output).toContain('+ 3 more lines · ctrl+o to expand')
+    expect(output).not.toContain('└ done')
   })
 
   it('falls back to the argument dump for an unknown payload', () => {
@@ -299,9 +299,9 @@ describe('TranscriptRenderer', () => {
     ]
     renderer.set([], blocks)
     const output = renderer.container.render(80).join('\n')
-    expect(output).toContain('▌ You')
-    expect(output).toContain('◆ assistant')
-    expect(output).toContain('thinking')
+    expect(output).toContain('› ')
+    expect(output).not.toContain('◆ assistant')
+    expect(output).toContain('  inspect the request')
     expect(output).toContain('inspect the request')
     expect(output).toContain('final answer')
     expect(output).toContain('read a.ts')
@@ -320,7 +320,7 @@ describe('TranscriptRenderer notice ordering', () => {
       { kind: 'notice', tone: 'info', text: 'after turn', afterSeq: 2 },
     ])
     const output = renderer.container.render(80).join('\n')
-    expect(output.indexOf('before turn')).toBeLessThan(output.indexOf('▌ You'))
+    expect(output.indexOf('before turn')).toBeLessThan(output.indexOf('› '))
     expect(output.indexOf('after turn')).toBeGreaterThan(output.indexOf('answer'))
   })
 

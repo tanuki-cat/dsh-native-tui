@@ -183,7 +183,7 @@ child.on('exit', (code, signal) => {
   const sawToolPhase = toolPhaseAt !== undefined
   const ordered = sawRequest && sawToolPhase && toolPhaseAt >= requestAt
   const completed = finalAt !== undefined
-  const settled = text.lastIndexOf('● idle') > text.lastIndexOf('● working')
+  const settled = text.lastIndexOf(' · Ready') > text.lastIndexOf(' · Working')
   const pass = code === 0 && signal === null && ordered && completed && settled
   console.log('EXIT', code, signal, 'phase', phase)
   console.log('requestAt', requestAt, 'toolPhaseAt', toolPhaseAt, 'finalAt', finalAt)

@@ -183,12 +183,12 @@ describe('incremental transcript folding', () => {
 
   it('reuses completed thinking components while the answer grows', () => {
     const component = new AssistantMessage({ kind: 'assistant', text: 'hello', reasoning: 'THOUGHT', live: true }, options)
-    const thinking = component.children[2]!
+    const thinking = component.children[0]!
     const body = component.children.at(-1)!
     component.render(80)
     const paint = vi.spyOn(thinking, 'render')
     component.update({ kind: 'assistant', text: 'hello world', reasoning: 'THOUGHT', live: true })
-    expect(component.children[2]).toBe(thinking)
+    expect(component.children[0]).toBe(thinking)
     expect(component.children.at(-1)).toBe(body)
     component.render(80)
     expect(paint).toHaveBeenCalledOnce()

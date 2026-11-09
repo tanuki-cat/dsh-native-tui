@@ -58,8 +58,8 @@ const tick = setInterval(() => {
   const text = out.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
   if (phase === 0 && text.includes('enter send')) { phase = 1; try { child.stdin.write('/model mock/mock-model\r') } catch {} }
   else if (phase === 1 && text.includes('Model selected: mock/mock-model')) { phase = 2; try { child.stdin.write('hello\r') } catch {} }
-  else if (phase === 2 && text.includes('● working')) { phase = 3; escAt = Date.now(); try { child.stdin.write('\x1b') } catch {} }
-  else if (phase === 3 && Date.now() - escAt > 500 && (text.includes('Turn cancelled') || text.includes('● idle'))) {
+  else if (phase === 2 && text.includes(' · Working')) { phase = 3; escAt = Date.now(); try { child.stdin.write('\x1b') } catch {} }
+  else if (phase === 3 && Date.now() - escAt > 500 && (text.includes('Turn cancelled') || text.includes(' · Ready'))) {
     phase = 4
     setTimeout(() => { try { child.stdin.write('\x04') } catch {} }, 800)
   }

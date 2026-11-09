@@ -124,7 +124,7 @@ describe('palette bands', () => {
     expect(palette.toolBand('x')).toBe('x')
   })
 
-  it('renders a tool card on the neutral dark surface', () => {
+  it('renders tools without a full-width background', () => {
     const palette = createPalette('dark')
     const options = { showReasoning: true, maxEntries: 100, palette, markdown: markdownTheme(palette) }
     const entries: TranscriptEntry[] = [
@@ -143,7 +143,7 @@ describe('palette bands', () => {
     ]
     const blocks = reduceTranscript(entries, options)
     const output = renderTranscriptBlock(blocks[0]!, options).render(80).join('\n')
-    expect(output).toContain('48;5;237')
+    expect(output).not.toContain('48;5;237')
     expect(output).not.toContain('48;5;22')
   })
 })
