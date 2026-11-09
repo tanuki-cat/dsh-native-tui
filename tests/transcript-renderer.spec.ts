@@ -514,7 +514,7 @@ describe('TranscriptRenderer component reuse', () => {
     const output = renderer.container.render(80).join('\n')
     expect(output).toContain('⟳ working · 3s')
     renderer.set([user(1, 'question')], [{ kind: 'waiting', text: waitingText(0, { retry: 1, maxRetries: 3, code: 'TRANSPORT' }, 3_000) }])
-    expect(renderer.container.render(80).join('\n')).toContain('retry 1/3 after TRANSPORT')
+    expect(renderer.container.render(80).join('\n')).toContain('retry 1/3 after TRANSPORT (automatic) · 3s')
     // The row is transient, so it leaves no cached component behind.
     expect(renderer.container.children).toHaveLength(3)
   })

@@ -31,8 +31,11 @@ export interface WaitRetry {
 /** Describe execution until the turn ends, including while content or tools are streaming. */
 export function waitingText(since: number, retry: WaitRetry | undefined, now: number): string {
   const seconds = Math.max(0, Math.round((now - since) / 1000))
+  const elapsed = (seconds >= 3600 ? String(Math.floor(seconds / 3600)) + 'h ' : '')
+    + (seconds >= 60 ? String(Math.floor(seconds / 60) % 60) + 'm ' : '')
+    + String(seconds % 60) + 's'
   const state = retry === undefined
     ? 'working'
     : 'retry ' + String(retry.retry) + '/' + String(retry.maxRetries) + ' after ' + retry.code + ' (automatic)'
-  return state + ' · ' + String(seconds) + 's'
+  return state + ' · ' + elapsed
 }

@@ -139,11 +139,11 @@ try {
       partialSeen = true
       firstFrameComplete = text.includes(endMark)
     }
-    if (!dropped && text.includes(endMark) && /⟳ working · [1-9]\d*s/.test(text)) {
+    if (!dropped && text.includes(endMark) && /⟳ working · (?!0s)(?:\d+h )?(?:\d+m )?\d+s/.test(text)) {
       dropped = true
       firstResponse.destroy()
     }
-    if (/⟳ retry \d+\/\d+ after/.test(text)) {
+    if (/⟳ retry \d+\/\d+ after [^\n]+ \(automatic\) · (?:\d+h )?(?:\d+m )?\d+s/.test(text)) {
       retrySeen = true
       recover()
     }

@@ -4,7 +4,7 @@ import { createPalette, editorTheme, markdownTheme } from '../src/ui/theme.js'
 import { renderTranscriptBlock } from '../src/ui/transcript-render.js'
 import type { TranscriptBlock, TranscriptEntry } from '../src/ui/transcript.js'
 import { TranscriptRenderer } from '../src/ui/transcript-renderer.js'
-import { WaitStatusLine } from '../src/ui/waiting.js'
+import { WaitStatusLine, waitingText } from '../src/ui/waiting.js'
 import { PromptEditor } from '../src/ui/prompt-editor.js'
 import { TranscriptMainScreen } from '../src/ui/transcript-main-screen.js'
 
@@ -312,7 +312,7 @@ describe('main-screen chrome stability', () => {
       } } } as unknown as TranscriptEntry
       const entries = [first]
       renderer.setEntries(entries)
-      wait.setText('working · 1s')
+      wait.setText(waitingText(0, undefined, 1_000))
       tui.addChild(renderer.container)
       tui.addChild(new Text('CHROME STATUS\n\nCHROME HINT', 0, 0))
       tui.addChild(wait)
@@ -346,7 +346,8 @@ describe('main-screen chrome stability', () => {
       tui.renderNow()
       expect(renderer.container.render(100).join('\n')).toContain('NEXT STEP')
       expect(rows()).toEqual(before)
-      for (const label of ['working · 3s', 'retry 2/5 after TRANSPORT', '']) {
+      for (const label of [waitingText(0, undefined, 65_000),
+        waitingText(0, { retry: 2, maxRetries: 5, code: 'TRANSPORT' }, 3_723_000), '']) {
         wait.setText(label)
         tui.renderNow()
         expect(rows()).toEqual(before)

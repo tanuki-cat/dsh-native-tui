@@ -19,6 +19,28 @@ describe('waitingText', () => {
   it('does not count backwards when the clock jumps', () => {
     expect(waitingText(5_000, undefined, 1_000)).toBe('working · 0s')
   })
+
+  it.each([
+    [0, '0s'],
+    [9_000, '9s'],
+    [59_499, '59s'],
+    [59_500, '1m 0s'],
+    [60_000, '1m 0s'],
+    [65_000, '1m 5s'],
+    [213_000, '3m 33s'],
+    [3_599_499, '59m 59s'],
+    [3_599_500, '1h 0m 0s'],
+    [3_600_000, '1h 0m 0s'],
+    [3_601_000, '1h 0m 1s'],
+    [3_723_000, '1h 2m 3s'],
+    [90_061_000, '25h 1m 1s'],
+    [360_000_000, '100h 0m 0s'],
+  ])('formats %i elapsed milliseconds consistently for working and retry', (elapsed, expected) => {
+    const since = 123_456_789
+    expect(waitingText(since, undefined, since + elapsed)).toBe('working · ' + expected)
+    expect(waitingText(since, { retry: 2, maxRetries: 5, code: 'TRANSPORT' }, since + elapsed))
+      .toBe('retry 2/5 after TRANSPORT (automatic) · ' + expected)
+  })
 })
 
 describe('WaitStatusLine', () => {
@@ -27,6 +49,8 @@ describe('WaitStatusLine', () => {
     const labels = [
       '',
       waitingText(0, undefined, 2_000),
+      waitingText(0, undefined, 65_000),
+      waitingText(0, undefined, 360_000_000),
       waitingText(0, { retry: 2, maxRetries: 5, code: 'TRANSPORT' }, 4_000),
       'retry 2/5 after ' + 'LONG_FAILURE_CODE_'.repeat(20),
       '',
