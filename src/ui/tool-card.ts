@@ -7,6 +7,7 @@ import { renderCodeExecutionCard } from './code-execution-card.js'
 import { formatToolArguments } from './tool-preview.js'
 import { literalToolText, toolLabel, ToolOutput } from './tool-output.js'
 import { ToolBody, toolHeading } from './transcript-chrome.js'
+import { isWriteUpdate, toolActionLabel } from './tool-label.js'
 
 type ToolBlock = Extract<TranscriptBlock, { kind: 'tool' }>
 type Arguments = Readonly<Record<string, unknown>>
@@ -60,13 +61,10 @@ export class ToolCard implements Component {
     const container = new Container()
     const addBody = (component: Component): void => { container.addChild(new ToolBody(component, palette)) }
     const diffs = block.diffs ?? []
-    const writeUpdate = block.operation === 'update'
-      || (block.operation === undefined && diffs.some(diff => diff.oldText !== null))
-    if (block.name === 'write' && (block.pending || !writeUpdate || diffs.length === 0)) return renderWriteCard(block, palette, expanded)
+    if (block.name === 'write' && (!isWriteUpdate(block) || diffs.length === 0)) return renderWriteCard(block, palette, expanded)
     const path = stringArg(args, 'file_path') ?? stringArg(args, 'path')
     const shell = block.name === 'bash' || block.name === 'pwsh'
-    const mcp = /^mcp__(.+?)__(.+)$/u.exec(block.name)
-    const name = mcp === null ? block.name : 'mcp ' + mcp[1] + '/' + mcp[2]
+    const name = toolActionLabel(block)
     const pathLabel = (path: string): string => palette.accent(toolLabel(path, 160, 'end'))
     if (diffs.length > 0) {
       for (const diff of diffs) {
@@ -99,7 +97,7 @@ export class ToolCard implements Component {
     } else {
       const pattern = stringArg(args, 'pattern')
       const search = ['grep', 'glob', 'find'].includes(block.name) && pattern !== undefined
-      let head = search ? palette.bold(block.name) + ' ' + palette.accent(inline(JSON.stringify(pattern))) : palette.bold(toolLabel(name, 120))
+      let head = search ? palette.bold(name) + ' ' + palette.accent(inline(JSON.stringify(pattern))) : palette.bold(toolLabel(name, 120))
       let tail = path === undefined ? undefined : pathLabel(path)
       if (block.name === 'read' && (typeof args?.offset === 'number' || typeof args?.limit === 'number')) {
         const start = typeof args.offset === 'number' ? args.offset : 1

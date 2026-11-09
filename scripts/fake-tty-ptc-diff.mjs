@@ -123,8 +123,8 @@ child.on('exit', (code, signal) => {
   clearInterval(tick); clearTimeout(hard); server.close()
   const clean = strip(out)
   const pass = code === 0 && signal === null && phase === 3
-    && clean.includes('write ' + file)
-    && clean.includes('edit ' + file)
+    && clean.includes('Write ' + file)
+    && clean.includes('Edit ' + file)
     && !clean.includes('⚙ write')
     && !clean.includes('1 + before')
     && clean.includes('1 - before')

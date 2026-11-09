@@ -64,6 +64,6 @@ describe('tool identity index', () => {
     renderer.setEntries([call('same', 1)])
     renderer.clear()
     renderer.setEntries([call('same', 2)])
-    expect(renderer.container.render(80).join('\n')).toContain('read')
+    expect(renderer.container.render(80).join('\n')).toContain('Read')
   })
 })

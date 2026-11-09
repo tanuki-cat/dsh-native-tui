@@ -5,6 +5,7 @@ import { languageForPath } from './code-preview.js'
 import { literalToolText, toolLabel, ToolOutput } from './tool-output.js'
 import { ToolBody, toolHeading } from './transcript-chrome.js'
 import { SourcePreview } from './source-preview.js'
+import { toolActionLabel } from './tool-label.js'
 
 type ToolBlock = Extract<TranscriptBlock, { kind: 'tool' }>
 const PREVIEW_LINES = 10
@@ -22,7 +23,7 @@ export function renderWriteCard(block: ToolBlock, palette: Palette, expanded = f
   const content = typeof args.content === 'string' ? args.content : block.diffs?.[0]?.newText
   const container = new Container()
   const displayPath = path === undefined ? undefined : toolLabel(literalToolText(path).replaceAll('\n', '\\x0a'), 160, 'end')
-  container.addChild(toolHeading(palette.bold('write'), palette, block, displayPath === undefined ? undefined : palette.accent(displayPath)))
+  container.addChild(toolHeading(palette.bold(toolActionLabel(block)), palette, block, displayPath === undefined ? undefined : palette.accent(displayPath)))
   const body = new Container()
   container.addChild(new ToolBody(body, palette))
   if (content !== undefined) {

@@ -217,7 +217,7 @@ describe('main-screen tool marker colors', () => {
       const baseline = tui.fullRedraws
       output.splice(0)
       const before = tui.captureRenderState()
-      const index = before.previousLines.findIndex(line => line.includes('write'))
+      const index = before.previousLines.findIndex(line => line.includes('Write'))
       expect(index < before.previousViewportTop).toBe(offscreen)
       root.children[1] = renderTranscriptBlock({ ...block, pending: false, result: '' }, colored)
       tui.renderNow()

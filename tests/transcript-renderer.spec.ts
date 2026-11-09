@@ -304,7 +304,7 @@ describe('TranscriptRenderer', () => {
     expect(output).toContain('  inspect the request')
     expect(output).toContain('inspect the request')
     expect(output).toContain('final answer')
-    expect(output).toContain('read a.ts')
+    expect(output).toContain('Read a.ts')
     expect(output).toContain('ctrl+o to expand')
   })
 })

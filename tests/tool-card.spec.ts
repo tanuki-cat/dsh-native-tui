@@ -90,7 +90,7 @@ describe('pi-style tool cards', () => {
 
   it('keeps successful reads collapsed, then shows the Host result without rereading files', () => {
     const card = new ToolCard(tool({ args: '{"file_path":"missing-file.ts","offset":3,"limit":10}' }), options)
-    expect(output(card)).toContain('read missing-file.ts:3-12')
+    expect(output(card)).toContain('Read missing-file.ts:3-12')
     expect(output(card)).not.toContain('READ_CONTENT')
     expect(card.handleMouse(click())).toEqual({ handled: true })
     expect(output(card)).toContain('READ_CONTENT')
@@ -151,7 +151,7 @@ describe('pi-style tool cards', () => {
   it('folds generic and MCP results without opaque args/result labels', () => {
     const result = Array.from({ length: 20 }, (_, i) => 'MODEL_' + i).join('\n')
     const card = new ToolCard(tool({ name: 'mcp__idea__search_symbol', args: '{"q":"Service"}', result }), options)
-    expect(output(card)).toContain('mcp idea/search_symbol')
+    expect(output(card)).toContain('MCP idea/search_symbol')
     expect(output(card)).toContain('q=Service')
     expect(output(card)).toContain('MODEL_9')
     expect(output(card)).not.toContain('MODEL_10')
@@ -163,7 +163,7 @@ describe('pi-style tool cards', () => {
 
   it('names a search by its pattern even when its scope path is present', () => {
     const text = output(new ToolCard(tool({ name: 'grep', args: '{"pattern":"TODO","path":"src"}' }), options))
-    expect(text).toContain('grep "TODO" src')
+    expect(text).toContain('Grep "TODO" src')
   })
 
   it('keeps local expansion through pending, partial and final updates', () => {
@@ -254,7 +254,7 @@ describe('pi-style tool cards', () => {
     expect(output(card)).toContain('Invalid args')
     const code = Array.from({ length: 20 }, (_, i) => 'const item' + i + ' = ' + i).join('\n')
     const ptc = new ToolCard(tool({ name: 'run_code', args: JSON.stringify({ code }), callLines: ['read a.ts'], result: 'result\n'.repeat(20) + 'FINAL_RESULT' }), { ...options, runCodeDisplay: 'compact' })
-    expect(output(ptc)).toContain('└ read a.ts')
+    expect(output(ptc)).toContain('└ Read a.ts')
     expect(output(ptc)).not.toContain('const item19')
     ptc.setExpanded(true)
     expect(output(ptc)).toContain('const item19')

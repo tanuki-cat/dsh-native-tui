@@ -144,8 +144,8 @@ child.on('close', async (code, signal) => {
   const clean = strip(out)
   const pass = code === 0 && signal === null && phase === 5
     && collapsedInitially && expanded && collapsedAgain
-    && clean.includes('write ' + file)
-    && clean.includes('edit ' + file)
+    && clean.includes('Write ' + file)
+    && clean.includes('Edit ' + file)
     && !clean.includes('⚙ write')
     && !clean.includes('├ args') && !clean.includes('├ result')
     && !clean.includes('1 + before')

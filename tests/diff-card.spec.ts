@@ -17,7 +17,7 @@ const render = (block: TranscriptBlock, width = 100): string => renderTranscript
 describe('file diff cards', () => {
   it.each(['edit', 'custom-tool'])('renders only file and diff rows for %s', name => {
     const output = render(card({ name }))
-    expect(output).toContain(name + ' src/example.ts')
+    expect(output).toContain(name.charAt(0).toUpperCase() + name.slice(1) + ' src/example.ts')
     expect(output).toContain('1 - before')
     expect(output).toContain('1 + after')
     for (const hidden of ['├ args', '├ result', '├ diff', 'Successfully updated', '└ done', 'old_string', 'new_string']) {
@@ -64,16 +64,16 @@ describe('file diff cards', () => {
       { path: 'one.ts', oldText: null, newText: Array.from({ length: 100 }, (_, index) => 'line ' + index).join('\n') },
       { path: 'two.ts', oldText: 'old', newText: 'new' },
     ] }))
-    expect(output).toContain('edit one.ts')
-    expect(output).toContain('edit two.ts')
+    expect(output).toContain('Edit one.ts')
+    expect(output).toContain('Edit two.ts')
     expect(output).toContain('lines omitted')
     expect(output).toContain('1 + new')
-    expect(output).not.toContain('edit src/example.ts')
+    expect(output).not.toContain('Edit src/example.ts')
   })
 
   it('leaves non-file tools and malformed-argument fallbacks readable', () => {
     const generic = render(card({ name: 'read', diffs: undefined, result: 'file contents' }))
-    expect(generic).toContain('read src/example.ts')
+    expect(generic).toContain('Read src/example.ts')
     expect(generic).not.toContain('├ args')
     expect(generic).not.toContain('file contents')
     expect(generic).toContain('ctrl+o')

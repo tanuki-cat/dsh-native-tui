@@ -94,9 +94,10 @@ async function run(preset, fullscreen) {
     await waitFor(() => frames().some(frame => frame.status.includes('Ready') && frame.lines.some(line => line.includes('WRITE DIFF DONE'))), 'answer')
     for (const call of calls.filter(call => call.name === 'write')) assert.equal(readFileSync(join(workspace, call.args.file_path), 'utf8'), call.args.content)
     const records = frames(), transcript = records.flatMap(frame => frame.lines).join('\n')
-    assert.ok(transcript.includes('• write demo.ts') && transcript.includes('1 - const value = 1') && transcript.includes('1 + const value = 2'))
-    assert.ok(transcript.includes('• write empty.ts') && transcript.includes('1 + EMPTY_INSERTION'))
-    assert.ok(transcript.includes('• write created.ts') && transcript.includes('1  CREATED_SOURCE') && !transcript.includes('1 + CREATED_SOURCE'))
+    assert.ok(transcript.includes('• Edit demo.ts') && transcript.includes('1 - const value = 1') && transcript.includes('1 + const value = 2'))
+    assert.ok(transcript.includes('• Edit empty.ts') && transcript.includes('1 + EMPTY_INSERTION'))
+    assert.ok(transcript.includes('• Write created.ts') && transcript.includes('1  CREATED_SOURCE') && !transcript.includes('1 + CREATED_SOURCE'))
+    assert.ok(!transcript.includes('• write ') && !transcript.includes('• edit ') && !transcript.includes('• read '))
     assert.ok(!records.some(frame => frame.overflow))
     const inspect = async (command, expected) => {
       const offset = out.length
@@ -121,7 +122,7 @@ async function run(preset, fullscreen) {
     const [code, signal] = exit
     assert.equal(signal, null, 'probe must exit without a signal')
     assert.equal(code, 0)
-    console.log(label, 'PASS: write update -old/+new; empty update +insertion; create source; /diff latest and indexed')
+    console.log(label, 'PASS: Edit update -old/+new; Edit empty +insertion; Write create source; /diff latest and indexed')
   } catch (error) {
     console.error(label, 'stdout', strip(out).slice(-6000), 'stderr', err.slice(-3000))
     throw error

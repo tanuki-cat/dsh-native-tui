@@ -222,7 +222,7 @@ describe('reduceTranscript', () => {
       diffs: [{ path: 'a.ts', oldText: 'old', newText: 'new' }],
     })
     const output = renderTranscriptBlock(blocks[1]!, options).render(100).join('\n')
-    expect(output).toContain('edit a.ts')
+    expect(output).toContain('Edit a.ts')
     expect(output).not.toContain('├ args')
     expect(output).not.toContain('updated a.ts')
     expect(output).toContain('1 - old')
@@ -275,8 +275,8 @@ describe('reduceTranscript', () => {
       const parent = reduceTranscript(input, compactOptions).find(block => block.kind === 'tool' && block.callId === 'call-outer')!
       expect(parent).toMatchObject({ callLines: ['skill daily-log-writer', 'skill dsh-doc'] })
       const text = renderTranscriptBlock(parent, compactOptions).render(100).join('\n')
-      expect(text).toContain('└ skill daily-log-writer')
-      expect(text).toContain('    skill dsh-doc')
+      expect(text).toContain('└ Skill daily-log-writer')
+      expect(text).toContain('    Skill dsh-doc')
     }
   })
 
@@ -296,9 +296,9 @@ describe('reduceTranscript', () => {
         'job_output bash-build · wait',
       ] })
       const text = renderTranscriptBlock(parent, compactOptions).render(100).join('\n')
-      expect(text).toContain('└ job_output bash-build · poll')
-      expect(text).toContain('    job_output bash-test · wait · timeout 90s')
-      expect(text).toContain('    job_output bash-build · wait')
+      expect(text).toContain('└ Job_output bash-build · poll')
+      expect(text).toContain('    Job_output bash-test · wait · timeout 90s')
+      expect(text).toContain('    Job_output bash-build · wait')
     }
   })
 
@@ -330,12 +330,12 @@ describe('reduceTranscript', () => {
     })
     const output = renderTranscriptBlock(parent!, compactOptions).render(100).join('\n')
     expect(output).toContain('• Ran run_code')
-    expect(output).toContain('└ read src/a.ts')
-    expect(output).toContain('    bash ls -la')
-    expect(output).toContain('    mcp idea')
+    expect(output).toContain('└ Read src/a.ts')
+    expect(output).toContain('    Bash ls -la')
+    expect(output).toContain('    MCP idea')
     expect(output).not.toContain('└ done')
     expect(output).not.toContain('const files = 1')
-    expect(output).not.toContain('├ edit')
+    expect(output).not.toContain('├ Edit')
 
     const detailedParent = reduceTranscript(entries, options)
       .find(block => block.kind === 'tool' && block.callId === 'call-outer')
@@ -389,7 +389,7 @@ describe('reduceTranscript', () => {
     const parent = reduceTranscript(entries, compactOptions)
       .find(block => block.kind === 'tool' && block.callId === 'call-outer')
     const output = renderTranscriptBlock(parent!, compactOptions).render(100).join('\n')
-    expect(output).toContain('└ read missing.ts')
+    expect(output).toContain('└ Read missing.ts')
     expect(output).toContain('    Error: ENOENT: no such file or directory, open missing.ts')
     expect(output).toContain('└ error')
     expect(output).not.toContain('await tools.read')
@@ -424,7 +424,7 @@ describe('reduceTranscript', () => {
       diffs: [{ path: 'c.ts', oldText: null, newText: 'hello' }],
     })
     const output = renderTranscriptBlock(blocks[0]!, options).render(100).join('\n')
-    expect(output).toContain('write c.ts')
+    expect(output).toContain('Write c.ts')
     expect(output).toContain('hello')
     expect(output).not.toContain('│ + hello')
   })

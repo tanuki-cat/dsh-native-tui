@@ -55,9 +55,9 @@ it('routes SGR press/release through fullscreen layout and a scrolled transcript
     }
   }
   const clickTitle = (screen: string[]): void => {
-    const row = screen.findIndex(line => line.includes('read src/a.ts'))
+    const row = screen.findIndex(line => line.includes('Read src/a.ts'))
     expect(row).toBeGreaterThan(1)
-    const column = screen[row]!.indexOf('read src/a.ts')
+    const column = screen[row]!.indexOf('Read src/a.ts')
     const position = (column + 1) + ';' + (row + 1)
     terminal.onInput?.('\x1b[<0;' + position + 'M')
     terminal.onInput?.('\x1b[<0;' + position + 'm')

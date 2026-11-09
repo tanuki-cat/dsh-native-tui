@@ -4,6 +4,7 @@ import { SourcePreview } from './source-preview.js'
 import { compactCodeExecutionPreview, compactErrorPreview, formatToolArguments } from './tool-preview.js'
 import type { TranscriptBlock, TranscriptOptions } from './transcript.js'
 import { literalToolText, toolLabel, ToolOutput } from './tool-output.js'
+import { compactToolLabel } from './tool-label.js'
 
 /** Tools whose cards follow the code-execution density setting. */
 const CODE_EXECUTION_TOOLS: ReadonlySet<string> = new Set(['run_code', 'bash', 'pwsh'])
@@ -132,7 +133,7 @@ export function renderCodeExecutionCard(block: Extract<TranscriptBlock, { kind: 
     const calls = block.callLines ?? []
     const shown = new Set(calls)
     if (calls.length > 0) {
-      for (const line of calls) body.addChild(new Text(palette.dim(literalToolText(line)), 0, 0))
+      for (const line of calls) body.addChild(new Text(palette.dim(literalToolText(compactToolLabel(line))), 0, 0))
       if (block.callLinesOmitted) body.addChild(new Text(palette.dim('+ ' + block.callLinesOmitted + ' more calls'), 0, 0))
     } else {
       const preview = compactCodeExecutionPreview(block)

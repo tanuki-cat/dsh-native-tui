@@ -66,6 +66,8 @@ async function run(fullscreen, decision, preset = 'standard', display = 'detaile
   served = []
   const label = (fullscreen ? 'fullscreen' : 'main-screen') + '-' + decision + (preset === 'ptc' ? '-ptc-' + display : '')
   const home = join(root, label), profile = join(home, 'profiles/tui'), workspace = join(home, 'workspace'), log = join(home, 'frames.jsonl')
+  const pendingAck = join(home, 'pending-frame-ack')
+  const shellHeading = preset === 'ptc' ? '• Ran run_code · bash' : '• Ran printf'
   mkdirSync(join(profile, 'node_modules'), { recursive: true })
   for (const dir of [workspace, join(home, 'agents'), join(home, 'bundled')]) mkdirSync(dir)
   writeFileSync(join(workspace, 'package.json'), '{"private":true}')
@@ -85,7 +87,8 @@ async function run(fullscreen, decision, preset = 'standard', display = 'detaile
     '- id: agent-default-model', '  config:', '    provider: mock', '    model: presentation-model', '',
   ].join('\n'))
   const env = { ...process.env, DSH_HOME: home, DSH_AGENTS_HOME: join(home, 'agents'), DSH_BUNDLED_SKILL_DIR: join(home, 'bundled'),
-    MOCK_API_KEY: 'dummy', TERM: 'xterm-256color', FAKE_TTY_COLUMNS: '100', FAKE_TTY_GEOMETRY_LOG: log, FAKE_TTY_FRAME_SNAPSHOT: '1' }
+    MOCK_API_KEY: 'dummy', TERM: 'xterm-256color', FAKE_TTY_COLUMNS: '100', FAKE_TTY_GEOMETRY_LOG: log, FAKE_TTY_FRAME_SNAPSHOT: '1',
+    DSH_PROBE_PENDING_ACK: pendingAck }
   delete env.DSH_PERMISSION_MODE; delete env.DSH_TOOLS_MODE
   const child = spawn(process.execPath, ['--import', join(repo, 'scripts/fake-tty-chrome-trace.mjs'), join(repo, 'scripts/fake-tty-entry.mjs'), '--profile', 'tui'],
     { cwd: workspace, env, stdio: ['pipe', 'pipe', 'pipe'] })
@@ -103,6 +106,9 @@ async function run(fullscreen, decision, preset = 'standard', display = 'detaile
   try {
     await waitFor(text => text.includes('enter send'), 'startup')
     child.stdin.write('run the presentation probe\r')
+    await waitFor((_text, records) => records.some(frame => frame.rawLines.some(line => strip(line).includes(shellHeading)
+      && line.includes('\x1b[33m• '))), 'pending shell frame')
+    writeFileSync(pendingAck, '')
     await waitFor(text => text.includes('1. Allow once') && text.includes('Reason:'), 'approval')
     child.stdin.write((decision === 'allow' ? '1' : '2') + '\r')
     await waitFor((_text, records) => records.some(frame => frame.status.includes('Ready')
@@ -110,7 +116,7 @@ async function run(fullscreen, decision, preset = 'standard', display = 'detaile
     assert.equal(readFileSync(join(workspace, 'demo.ts'), 'utf8'), content.replace('const before = 1', 'const after = 2'))
     assert.equal(existsSync(join(workspace, 'shell-ran.txt')), decision === 'allow')
     const records = frames(), transcript = records.flatMap(frame => frame.lines).join('\n')
-    assert.ok(transcript.includes('• write demo.ts') && transcript.includes('• edit demo.ts'))
+    assert.ok(transcript.includes('• Write demo.ts') && transcript.includes('• Edit demo.ts'))
     assert.ok(transcript.includes('(+1 -1)') && transcript.includes('1 - const before = 1') && transcript.includes('1 + const after = 2'))
     assert.ok(transcript.includes(preset === 'ptc' ? '• Ran run_code' : '• Ran printf') && transcript.includes('PRESENTATION THOUGHT'))
     assert.ok(transcript.includes('• PRESENTATION DONE'))
@@ -118,9 +124,8 @@ async function run(fullscreen, decision, preset = 'standard', display = 'detaile
     assert.ok(!records.some(frame => frame.overflow))
     assert.ok(!transcript.includes('◆ assistant'))
     const marker = (heading, color) => records.some(frame => frame.rawLines.some(line => strip(line).includes(heading) && line.includes('\x1b[' + color + 'm• ')))
-    const shellHeading = preset === 'ptc' ? '• Ran run_code · bash' : '• Ran printf'
     assert.ok(marker(shellHeading, 33), 'pending tool must have a yellow marker')
-    assert.ok(marker('• write demo.ts', 32) && marker('• edit demo.ts', 32), 'completed file tools must have green markers')
+    assert.ok(marker('• Write demo.ts', 32) && marker('• Edit demo.ts', 32), 'completed file tools must have green markers')
     assert.ok(marker(shellHeading, decision === 'allow' ? 32 : 31), 'settled tool marker must reflect the Host outcome')
     assert.ok(!transcript.includes('✓ done'), 'completion uses the marker, with no extra status row')
     if (decision === 'allow') {

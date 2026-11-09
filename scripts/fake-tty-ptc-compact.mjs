@@ -135,9 +135,9 @@ child.on('exit', (code, signal) => {
   const clean = strip(out)
   const checks = {
     'run_code head': clean.includes('• Ran run_code'),
-    'read a': clean.includes('└ read ' + readA),
-    'read b': clean.includes('    read ' + readB),
-    'dedup': (clean.match(new RegExp('└ read ' + readA.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) ?? []).length === 1,
+    'read a': clean.includes('└ Read ' + readA),
+    'read b': clean.includes('    Read ' + readB),
+    'dedup': (clean.match(new RegExp('└ Read ' + readA.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) ?? []).length === 1,
     'no program source': !clean.includes('await tools.read'),
     'no args dump': !clean.includes('├ args'),
     'assistant reply': clean.includes('PTC COMPACT DONE'),

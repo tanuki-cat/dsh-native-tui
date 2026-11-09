@@ -24,7 +24,7 @@ export class ToolBody implements Component {
   invalidate(): void { this.body.invalidate?.() }
 }
 
-/** Only the marker color changes with tool state; the heading text stays fixed. */
+/** Keep headings on one row and encode execution state in the marker color. */
 export function toolHeading(text: string, palette: Palette, state: ToolState, tail?: string): Component {
   const marker = state.isError ? palette.error : state.stopped ? palette.dim : state.pending ? palette.warning : palette.success
   return {

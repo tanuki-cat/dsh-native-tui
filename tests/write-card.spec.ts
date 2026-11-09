@@ -18,7 +18,7 @@ const render = (block: ToolBlock, expanded = false): string => renderTranscriptB
 describe('write content cards', () => {
   it('shows a file header and source preview, not a diff or duplicate success output', () => {
     const text = render(write('const answer = 42'))
-    expect(text).toContain('write example.ts')
+    expect(text).toContain('Write example.ts')
     expect(text).toContain('const answer = 42')
     for (const hidden of ['diff ', '│ +', '│ -', 'previous content', '├ args', '├ result', 'Created file', '└ done']) expect(text).not.toContain(hidden)
   })
@@ -68,16 +68,16 @@ describe('write content cards', () => {
     expect(error).toContain('└ error')
     expect(error).not.toContain('│ +')
     const empty = render(write(''))
-    expect(empty).toContain('write example.ts')
+    expect(empty).toContain('Write example.ts')
     expect(empty).not.toContain('more lines')
   })
 
   it('uses durable content when call arguments are unavailable and reports invalid content otherwise', () => {
     const fallback = render(write('recovered', { args: 'invalid JSON' }))
-    expect(fallback).toContain('write example.ts')
+    expect(fallback).toContain('Write example.ts')
     expect(fallback).toContain('recovered')
     const invalid = render(write('', { args: '{"file_path":"bad.ts","content":42}', diffs: undefined }))
-    expect(invalid).toContain('write bad.ts')
+    expect(invalid).toContain('Write bad.ts')
     expect(invalid).toContain('expected string')
   })
 
@@ -105,7 +105,7 @@ describe('write content cards', () => {
     renderer.toggleToolPreviews()
     expect(renderer.container.children.at(-1)).toBe(editComponent)
     expect(output()).toContain('CODE_LINE_29')
-    expect(output()).toContain('edit edit.ts')
+    expect(output()).toContain('Edit edit.ts')
     expect(output()).toContain('1 + new')
     renderer.toggleToolPreviews()
     expect(output()).not.toContain('CODE_LINE_29')

@@ -87,7 +87,7 @@ describe('compact transcript presentation', () => {
     const file = tool({ name: 'edit', args: '{"file_path":"src/a.ts"}',
       diffs: [{ path: 'src/a.ts', oldText: 'before\n', newText: 'after\n' }] })
     const text = render(file).join('\n')
-    expect(text).toContain('• edit src/a.ts')
+    expect(text).toContain('• Edit src/a.ts')
     expect(text).toContain('(+1 -1)')
     expect(text).toContain('1 - before')
     expect(text).toContain('1 + after')

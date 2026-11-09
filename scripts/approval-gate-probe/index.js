@@ -8,12 +8,24 @@
  * approval overlay can be exercised against a real Host without a reviewer
  * model or real credentials.
  */
+import { existsSync } from 'node:fs'
+import { setTimeout as delay } from 'node:timers/promises'
+
 export const name = 'approval-gate-probe'
 export const inject = ['tools']
 
 export function apply(ctx) {
-  ctx.on('tools/pre-execute', (exec, next) => {
+  ctx.on('tools/pre-execute', async (exec, next) => {
     if (exec.name !== 'bash') return next()
+    // Wait for the parent to capture the pending card before an overlay can cover it.
+    const acknowledgement = process.env.DSH_PROBE_PENDING_ACK
+    if (acknowledgement !== undefined) {
+      const until = Date.now() + 20_000
+      while (!existsSync(acknowledgement)) {
+        if (Date.now() > until) throw new Error('Pending tool frame was not acknowledged')
+        await delay(20)
+      }
+    }
     return { kind: 'ask', reason: 'Approval gate probe: approve this bash call?' }
   })
 }
