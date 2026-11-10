@@ -72,6 +72,13 @@ function ptcSettle(
 }
 
 describe('reduceTranscript', () => {
+  it('numbers images in user messages without exposing attachment paths or changing tool content', () => {
+    const image = { type: 'image', attachment: { name: '/private/long/screenshot.png', mediaType: 'image/png' } } as const
+    const content = [image, { type: 'text' as const, text: 'compare these' }, image]
+    const entries = [durable('user/message', { content, source: { kind: 'user' } }, 1)]
+    expect(reduceTranscript(entries, options)[0]).toMatchObject({ kind: 'user', text: '[Image #1]\ncompare these\n[Image #2]' })
+    expect(contentText(content as never)).toContain('[image /private/long/screenshot.png]')
+  })
   it('renders user, assistant, and completed tool rows', () => {
     const entries: TranscriptEntry[] = [
       durable('user/message', { content: [{ type: 'text', text: 'hello' }], source: { kind: 'user' } }),

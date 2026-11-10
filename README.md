@@ -138,6 +138,7 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 - `/preview` 渲染 PNG/JPEG/GIF/WebP；终端不支持时显示文本占位。
 - `/files` 浏览目录并预览文件（Enter 进入目录 / 预览，Esc 退出，含 `../`）。
 - `/attach` 暂存文件 / 图片 / 剪贴板图片并随下一条 prompt 发送（8 MiB 上限），`/attach preview <i>` 可内联预览，`/attachments` 打开暂存附件管理器。
+- 粘贴本地图片路径或文字中的 `@图片路径` 会自动暂存为图片，输入框上方以 `[Image #1] [Image #2]` 展示，长路径不占用草稿。支持引号、shell 转义与 `file://`；读取失败保留原文。空输入框按 Backspace 移除最后一张图片，`/attachments` 可预览或移除，`/attach clear` 清空。发送成功清除标签，发送失败保留图片与文字草稿；历史用户消息也使用编号图片标签。
 - `/deliverables` 列出、打开 panel、预览或用系统文件管理器定位 `present` 交付文件。
 - `/changes` 查看最近一轮 workspace 变更文件与单文件 diff。
 - `/tools` / `/tool <index>` 列出工具调用或分页查看完整参数与结果；`/diff [index]` 查看 write/edit 的独立 diff。三者使用相同的最近 50 次调用索引，包含原生调用和 PTC 子调用；`/diff` 无参数时打开其中最近一次有实际 diff 的调用。

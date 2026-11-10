@@ -1,4 +1,5 @@
-import { Editor, sliceByColumn, stripTerminalSequences, truncateToWidth, visibleWidth, type AutocompleteProvider, type EditorTheme, type TUI, type TuiMouseEvent, type TuiMouseEventResult } from '@earendil-works/pi-tui'
+import { Editor, matchesKey, sliceByColumn, stripTerminalSequences, truncateToWidth, visibleWidth, type AutocompleteProvider, type EditorTheme, type TUI, type TuiMouseEvent, type TuiMouseEventResult } from '@earendil-works/pi-tui'
+import { PasteInput } from './paste-input.js'
 
 // Header, dividers, waiting/status rows and one transcript row stay visible.
 const COMPLETION_CHROME_ROWS = 9
@@ -9,9 +10,36 @@ export class PromptEditor extends Editor {
   private nativeInputHeight = 0
   private menuRows: number[] = []
   private renderedPadding = 0
+  private attachmentRows = 0
+  private readonly pasteInput: PasteInput
+  attachmentRow?: (width: number) => string | undefined
+  onPaste?: (text: string) => string | Promise<string>
+  onRemoveAttachment?: () => boolean
 
   constructor(tui: TUI, theme: EditorTheme, private readonly highlightSuggestion = theme.selectList.selectedText) {
     super(tui, theme, { paddingX: 2 })
+    this.pasteInput = new PasteInput(text => this.onPaste?.(text) ?? text,
+      data => this.handleNativeInput(data), () => tui.requestRender())
+  }
+
+  override handleInput(data: string): void {
+    this.pasteInput.handleInput(data)
+  }
+
+  whenInputIdle(): Promise<void> { return this.pasteInput.whenIdle() }
+
+  get isProcessingPaste(): boolean { return this.pasteInput.busy }
+
+  deferInput(action: () => void): void { this.pasteInput.defer(action) }
+
+  cancelPendingInput(): void { this.pasteInput.cancel() }
+
+  private handleNativeInput(data: string): void {
+    if (this.getText() === '' && matchesKey(data, 'backspace') && this.onRemoveAttachment?.()) {
+      this.tui.requestRender()
+      return
+    }
+    super.handleInput(data)
   }
 
   override setAutocompleteProvider(provider: AutocompleteProvider): void {
@@ -32,6 +60,13 @@ export class PromptEditor extends Editor {
   }
 
   override render(width: number): string[] {
+    const row = this.attachmentRow?.(width)
+    this.attachmentRows = row === undefined ? 0 : 1
+    const lines = this.renderEditor(width)
+    return row === undefined ? lines : [row, ...lines]
+  }
+
+  private renderEditor(width: number): string[] {
     const lines = super.render(width)
     // Match the native padding clamp so cursor, wrapping, mouse and menus keep their offsets.
     const padding = Math.min(this.getPaddingX(), Math.max(0, Math.floor((width - 1) / 2)))
@@ -49,7 +84,7 @@ export class PromptEditor extends Editor {
     this.nativeInputHeight = input.length
     const hasScrollInfo = /^\s*\(\d+\/\d+\)\s*$/u.test(stripTerminalSequences(menu.at(-1)!))
     const itemCount = menu.length - (hasScrollInfo ? 1 : 0)
-    const budget = Math.max(1, this.tui.terminal.rows - input.length - COMPLETION_CHROME_ROWS)
+    const budget = Math.max(1, this.tui.terminal.rows - input.length - COMPLETION_CHROME_ROWS - this.attachmentRows)
     const keepScrollInfo = hasScrollInfo && budget > 1
     const itemBudget = Math.max(1, budget - (keepScrollInfo ? 1 : 0))
     const selected = Math.max(0, menu.findIndex(line => stripTerminalSequences(line).slice(padding).startsWith('→ ')))
@@ -61,6 +96,8 @@ export class PromptEditor extends Editor {
   }
 
   override handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    if (event.y < this.attachmentRows) return undefined
+    event = { ...event, y: event.y - this.attachmentRows }
     if (this.menuRows.length === 0) return super.handleMouse(event)
     const nativeRow = this.menuRows[event.y]
     return super.handleMouse({ ...event,

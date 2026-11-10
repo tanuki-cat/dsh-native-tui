@@ -150,14 +150,16 @@ export interface TranscriptOptions {
 }
 
 /** Read visible assistant/user text from content blocks. */
-export function contentText(content: readonly ContentBlock[] | undefined): string {
+export function contentText(content: readonly ContentBlock[] | undefined, numberedImages = false): string {
   if (content === undefined) return ''
   const parts: string[] = []
+  let imageIndex = 0
   for (const block of content) {
     if (block.type === 'text') parts.push(block.text)
     else if (block.type === 'reasoning') continue
     else if (block.type === 'tool-call' || block.type === 'tool-addition' || block.type === 'tool-removal') continue
-    else if (block.type === 'image') parts.push('[image ' + (block.attachment.name ?? block.attachment.mediaType) + ']')
+    else if (block.type === 'image') parts.push(numberedImages ? '[Image #' + (++imageIndex) + ']'
+      : '[image ' + (block.attachment.name ?? block.attachment.mediaType) + ']')
     else if (block.type === 'file') parts.push('[file ' + block.attachment.name + ']')
     else parts.push('[content]')
   }
@@ -533,7 +535,7 @@ export function createTranscriptReducer(options: TranscriptOptions) {
         case 'user/message': {
           const source = event.data.source
           if (source.kind === 'user') {
-            blocks.push({ kind: 'user', text: contentText(event.data.content), seq })
+            blocks.push({ kind: 'user', text: contentText(event.data.content, true), seq })
           }
           else if (String(source.kind) === 'compact-checkpoint') {
             // The Host injects the checkpoint as model context as well as emitting

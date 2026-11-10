@@ -26,7 +26,7 @@ import { NL, errorMessage, sessionCwd } from './shared.js'
  * become placeholder text at request time instead of reaching the model.
  * @param ctx - command context carrying the routed model and the LLM catalog.
  */
-async function warnIfModelTextOnly(ctx: CommandContext): Promise<void> {
+export async function warnIfModelTextOnly(ctx: CommandContext): Promise<void> {
   const current = ctx.modelSelection.current
   if (current === undefined) return
   const llm = ctx.host.get('llm') as LLM | undefined

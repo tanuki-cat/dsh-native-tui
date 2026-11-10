@@ -48,6 +48,7 @@ import { consoleTone, holdConsoleOutput, type ConsoleGuard } from './console-gua
 import { Rule } from './rule.js'
 import { scrollToEndLabel } from './scroll-indicator.js'
 import { PromptEditor } from './prompt-editor.js'
+import { wireImageInput } from './image-input.js'
 import { SessionDrafts } from './session-drafts.js'
 import { enqueuePrompt, submitDraft } from './prompt-submission.js'
 import { pickStoredSession } from './commands/sessions.js'
@@ -628,6 +629,7 @@ export async function startTerminalApp(
   let reasoningCycle = Promise.resolve()
 
   const switchTo = async (next: () => Promise<HostSession>): Promise<void> => {
+    await editor.whenInputIdle()
     if (switching || disposed) return
     switching = true
     editor.disableSubmit = true
@@ -829,6 +831,7 @@ export async function startTerminalApp(
   const dispose = async (reportSession = true): Promise<void> => {
     if (disposed) return
     disposed = true
+    editor.cancelPendingInput()
     interactionAbort.abort(new Error('native-tui: terminal disposed'))
     disposeInteractions()
     clearSubscriptions()
@@ -875,13 +878,18 @@ export async function startTerminalApp(
     await active.dispose()
   }
 
+  wireImageInput(editor, commandContext)
   editor.onSubmit = handleSubmit
-  tui.addInputListener(data => {
+  const handleGlobalInput = (data: string): { consume: true } | undefined => {
     const shortcut = globalShortcut(data, {
       running: active.agent.status === 'running',
       editorFocused: tui.getFocusedComponent() === editor,
       editorHasText: editor.getText() !== '',
     })
+    if (shortcut !== undefined && editor.isProcessingPaste && shortcut !== 'exit' && shortcut !== 'cancel-turn') {
+      editor.deferInput(() => { if (!disposed) handleGlobalInput(data) })
+      return { consume: true }
+    }
     if (switching && shortcut !== 'exit' && shortcut !== 'cancel-turn') return { consume: true }
     if (shortcut === undefined) return undefined
     if (shortcut === 'new-session' || shortcut === 'pick-session') {
@@ -921,7 +929,8 @@ export async function startTerminalApp(
     }
     requestExit(0)
     return { consume: true }
-  })
+  }
+  tui.addInputListener(handleGlobalInput)
   process.once('SIGTERM', onSignal)
   process.once('SIGHUP', onSignal)
   try {

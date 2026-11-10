@@ -368,6 +368,13 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - 验证：`pnpm check` 通过（98 个文件 / 1383 项测试、类型检查、构建）；状态栏四组与对话展示六组真实 Host + 本机 mock 探针全部 PASS；17 个相关探针语法检查通过。原生/PTC 事件归并增加 6 项空结果成功、失败和部分停止回归。
 - 方案与完整验证边界：[状态栏](design-task-optimize-statusline-rendering.md)、[工具与对话展示](design-task-optimize-transcript-presentation.md)；使用说明见 [README](../README.md#渲染与显示)。
 
+## 2026-11-10：图片输入紧凑展示
+
+- 粘贴图片路径或文字中的 `@图片路径` 自动保存为 Host 图片附件，输入框上方显示 `[Image #1] [Image #2]`，历史用户消息也使用编号标签。支持引号、shell 转义、相对路径、home 和 `file://`；普通文字和命令参数保持原有语义。
+- 复用 `/attach`、`/attachments` 的附件状态、预览、移除与每会话草稿。空输入框 Backspace 移除末张图片；校验失败保留原文，Host 拒收保留文字和附件。图片读取期间顺序处理后续键盘输入和快捷键，普通大段文字粘贴保持同步展开、撤销行为。
+- 验证：`pnpm check` 通过（103 个文件 / 1497 项测试，类型检查与构建通过）；`node scripts/fake-tty-image-input.mjs` 主屏、全屏两组真实 Host + 本地 mock 探针均 PASS，验证标签、移除、清空、历史回看、实际发送原始 PNG 字节与无行宽溢出。未连接外部视觉模型。
+- 方案：[图片输入展示](design-task-optimize-image-input-presentation.md)。
+
 ## 2026-11-10：模型目录失败告警去重
 
 - 现象：MacBook 盒盖休眠再唤醒后，transcript 连续出现 4 条黄色 notice，分别是 `[llm-deepseek-account]` 与 `[llm-deepseek-api-key]` 的 `model listing from https://api.deepseek.com/models failed (…); keeping the previous catalog` 各两行。定位：休眠期间定时器冻结，唤醒瞬间两个 provider 的 10 分钟目录刷新（`modelsMaxAgeMs = 600000`）同时到期，而网络/连接池尚未就绪 → `fetch` 传输失败；宿主对同一 scope 的连续失败只记一次，因此每轮「成功后再失败」两个 route 各出一行，4 行对应两轮（通常是两次开合盖）。宿主行为本身正确：失败保留上一份目录并在下一次刷新自愈，与插件无关；插件只是按既有设计把 `console.warn` 转成了 notice。
