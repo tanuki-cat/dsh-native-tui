@@ -35,14 +35,16 @@ try {
   let out = '', err = '', sent = false, exiting = false, timedOut = false
   const traced = () => ['llm-deepseek-api-key', 'llm-deepseek-account']
     .every(owner => err.includes('[native-tui] console.info: [' + owner + '] model listing'))
+  const repeats = () => err.includes('[native-tui] console.warn (repeat): [llm-deepseek-account] model listing')
   const notices = () => out.includes('! [llm-deepseek-account] probe warning line')
     && out.includes('✕ [llm-deepseek-account] probe error line')
+    && out.includes('! [llm-deepseek-account] model listing')
   const advance = () => {
     if (!sent && out.includes('enter send')) {
       sent = true
       child.send('native-tui-console-probe')
     }
-    if (!exiting && notices() && traced()) {
+    if (!exiting && notices() && traced() && repeats()) {
       exiting = true
       child.stdin.write(String.fromCharCode(4))
     }
@@ -59,13 +61,16 @@ try {
   assert.equal(signal, null)
   assert.equal(code, 0, err.slice(-2000))
   const result = {
-    infoOnScreen: out.includes('model listing from'),
+    infoOnScreen: out.includes('loaded 2 model(s), skipped 0 row(s)'),
     warningAsNotice: out.includes('! [llm-deepseek-account] probe warning line'),
     errorAsNotice: out.includes('✕ [llm-deepseek-account] probe error line'),
+    catalogueFailureAsNotice: out.includes('! [llm-deepseek-account] model listing'),
+    catalogueRepeatTraced: repeats(),
     rawDiagnosticWrite: /(^|[\r\n])\[llm-deepseek-(?:account|api-key)\]/.test(out),
     infoTraced: traced(),
   }
   assert(sent && exiting && !result.infoOnScreen && result.warningAsNotice && result.errorAsNotice
+    && result.catalogueFailureAsNotice && result.catalogueRepeatTraced
     && !result.rawDiagnosticWrite && result.infoTraced, JSON.stringify(result))
   console.log('PASS console diagnostics ' + JSON.stringify(result))
 } finally {

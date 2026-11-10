@@ -13,6 +13,13 @@
  * notices, routine info goes to the opt-in debug trace. This mirrors
  * `warnings.ts`, which does the same for `process.emitWarning`.
  *
+ * A catalogue failure is the one line that repeats while the network is down:
+ * the Host announces it per route, again on every failed retry, and a laptop
+ * that slept announces the same batch on every wake. The first copy of a
+ * distinct failure is delivered as a notice; later copies carry
+ * {@link ConsoleLine.repeat} so the caller can trace them instead of showing
+ * the same row again.
+ *
  * Scope: `console` only. A dependency that writes to `process.stdout` itself
  * still reaches the terminal; the mounted Host plugins only use `console`.
  *
@@ -28,6 +35,8 @@ export type ConsoleLevel = 'log' | 'info' | 'debug' | 'trace' | 'warn' | 'error'
 export interface ConsoleLine {
   readonly level: ConsoleLevel
   readonly text: string
+  /** The line repeats a catalogue failure this guard already delivered. */
+  readonly repeat?: true
 }
 
 /** Console output held while the terminal is owned by the UI. */
@@ -48,6 +57,11 @@ const CAPTURED = ['log', 'info', 'debug', 'trace', 'warn', 'error', 'dir'] as co
 // Host listing success uses console.error only to keep diagnostics on stderr.
 const LISTING_SUCCESS = /^\[llm-deepseek-(?:api-key|account)\] model listing from https?:\/\/[^\s]+ loaded \d+ model\(s\), skipped \d+ row\(s\)$/u
 
+// A refresh that failed at the same URL for the same reason is the same
+// advisory, whichever route announced it and whichever catalog it fell back to;
+// the captured body is that identity.
+const LISTING_FAILURE = /^\[llm-deepseek-(?:api-key|account)\] (model listing from https?:\/\/[^\s]+ failed \(.*\)); (?:using the bundled catalog|keeping the previous catalog)$/u
+
 /** One console method this guard can replace. */
 type CapturedMethod = (typeof CAPTURED)[number]
 
@@ -63,13 +77,17 @@ interface Replacement {
  * A line repeated at the same level is dropped: a catalogue that re-announces
  * the same listing would otherwise repeat one notice forever. A line
  * produced while the sink is still handling the previous one is dropped too, so
- * a sink that logs cannot recurse into itself.
+ * a sink that logs cannot recurse into itself. A catalogue failure that the
+ * Host re-announces for every route and every retry is delivered on its first
+ * copy and marked `repeat` afterwards, so one outage costs one notice.
  * @param options - sink for each captured line.
  * @returns the guard the caller releases when the terminal is restored.
  */
 export function holdConsoleOutput(options: ConsoleGuardOptions): ConsoleGuard {
   const target = console as unknown as Record<string, ((...data: unknown[]) => void) | undefined>
   const replacements: Replacement[] = []
+  // One advisory per distinct catalogue failure for this guard's lifetime.
+  const announcedFailures = new Set<string>()
   let previousText: string | undefined
   let previousLevel: ConsoleLevel | undefined
   let delivering = false
@@ -84,9 +102,12 @@ export function holdConsoleOutput(options: ConsoleGuardOptions): ConsoleGuard {
       if (text === '' || text === previousText && level === previousLevel || delivering) return
       previousText = text
       previousLevel = level
+      const failure = LISTING_FAILURE.exec(text)?.[1]
+      const repeat = failure !== undefined && announcedFailures.has(failure)
+      if (failure !== undefined) announcedFailures.add(failure)
       delivering = true
       try {
-        options.onLine({ level, text })
+        options.onLine(repeat ? { level, text, repeat: true } : { level, text })
       }
       finally {
         delivering = false

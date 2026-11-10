@@ -932,11 +932,13 @@ export async function startTerminalApp(
     // the screen and goes to the opt-in debug trace.
     consoleGuard = holdConsoleOutput({
       onLine: (line) => {
-        if (line.level === 'warn' || line.level === 'error') {
+        // A catalogue failure the Host repeats per route and per retry stays a
+        // single notice; the copies after it are worth a trace, not a row.
+        if (line.repeat !== true && (line.level === 'warn' || line.level === 'error')) {
           pushNotice(consoleTone(line.level), line.text)
           return
         }
-        debug('console.' + line.level + ': ' + line.text)
+        debug('console.' + line.level + (line.repeat === true ? ' (repeat)' : '') + ': ' + line.text)
       },
     })
     registerInteractions()

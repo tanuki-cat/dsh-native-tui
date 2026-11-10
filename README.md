@@ -152,6 +152,7 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 ### 终端卫生
 
 - Host / 插件日志不会覆盖画面：TUI 占用终端期间接管 `console`（与 `warnings.ts` 接管 `process.emitWarning` 同一思路），`warn`/`error` 转成 transcript notice，`log`/`info`/`debug`/`trace` 只进 `DSH_NATIVE_TUI_DEBUG=1` 的 stderr 追踪，退出时恢复原方法。
+- 模型目录刷新失败（`[llm-deepseek-*] model listing … failed`）按「URL + 原因」只播报一次：宿主会按 route、按重试重放同一行，合盖休眠再唤醒时尤其集中；重复副本只进 `DSH_NATIVE_TUI_DEBUG=1` 的追踪并标注 `(repeat)`，不再多占 transcript 行。
 - 非 TTY 显式失败；Ctrl+C / Ctrl+D / SIGTERM / SIGHUP 安全退出，退出后恢复终端。
 
 ## 命令

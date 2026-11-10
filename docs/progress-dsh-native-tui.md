@@ -367,3 +367,9 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - 审批使用编号选项，编号只移动选择、Enter 才确认，保留详情页、拒绝/取消语义和 Host 声明的授权范围；原生审批结果显示真实本地回执。
 - 验证：`pnpm check` 通过（98 个文件 / 1383 项测试、类型检查、构建）；状态栏四组与对话展示六组真实 Host + 本机 mock 探针全部 PASS；17 个相关探针语法检查通过。原生/PTC 事件归并增加 6 项空结果成功、失败和部分停止回归。
 - 方案与完整验证边界：[状态栏](design-task-optimize-statusline-rendering.md)、[工具与对话展示](design-task-optimize-transcript-presentation.md)；使用说明见 [README](../README.md#渲染与显示)。
+
+## 2026-11-10：模型目录失败告警去重
+
+- 现象：MacBook 盒盖休眠再唤醒后，transcript 连续出现 4 条黄色 notice，分别是 `[llm-deepseek-account]` 与 `[llm-deepseek-api-key]` 的 `model listing from https://api.deepseek.com/models failed (…); keeping the previous catalog` 各两行。定位：休眠期间定时器冻结，唤醒瞬间两个 provider 的 10 分钟目录刷新（`modelsMaxAgeMs = 600000`）同时到期，而网络/连接池尚未就绪 → `fetch` 传输失败；宿主对同一 scope 的连续失败只记一次，因此每轮「成功后再失败」两个 route 各出一行，4 行对应两轮（通常是两次开合盖）。宿主行为本身正确：失败保留上一份目录并在下一次刷新自愈，与插件无关；插件只是按既有设计把 `console.warn` 转成了 notice。
+- 处理：`src/ui/console-guard.ts` 新增 `LISTING_FAILURE` 识别 `[llm-deepseek-*] model listing from <url> failed (<原因>); <fallback>`，按「URL + 原因」作为同一告警的身份（route 与 `keeping the previous catalog`/`using the bundled catalog` 不参与身份），首次投递照旧成为 notice，之后的副本带 `repeat: true`；`src/ui/app.ts` 对 `repeat` 只写 `DSH_NATIVE_TUI_DEBUG=1` 追踪（`console.warn (repeat): …`），不再占 transcript 行。其它 `warn`/`error` 的去重语义不变，仍只合并相邻重复行。
+- 验证：`pnpm check` 通过（102 个文件 / 1467 项测试、类型检查、构建）；`tests/console-guard.spec.ts` 18 → 21 例，覆盖跨 route/跨重试只播报一次、成功行不重置身份、bundled 与 previous 两种 fallback 同族、无关告警不误判为重复；真实 Host 探针 `scripts/fake-tty-console-lines.mjs` 注入「故障行 → 普通告警 → 同一故障行」后输出 `{"infoOnScreen":false,"warningAsNotice":true,"errorAsNotice":true,"catalogueFailureAsNotice":true,"catalogueRepeatTraced":true,"rawDiagnosticWrite":false,"infoTraced":true}`，PASS。

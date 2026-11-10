@@ -6,4 +6,11 @@ process.once('message', message => {
   }
   console.warn('[llm-deepseek-account] probe warning line')
   console.error('[llm-deepseek-account] probe error line')
+  // One advisory per distinct catalogue failure: the Host repeats this line per
+  // route and per retry, so the copy after another line must not repaint.
+  const failure = '[llm-deepseek-account] model listing from https://api.deepseek.com/models failed'
+    + ' (llmError: could not reach https://api.deepseek.com/models); keeping the previous catalog'
+  console.warn(failure)
+  console.warn('[llm-deepseek-account] probe warning line')
+  console.warn(failure)
 })

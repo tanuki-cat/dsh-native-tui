@@ -66,6 +66,73 @@ describe('holdConsoleOutput', () => {
     })
   })
 
+  const failure = (owner: string, reason: string, fallback = 'keeping the previous catalog'): string =>
+    '[' + owner + '] model listing from https://api.deepseek.com/models failed (' + reason + '); ' + fallback
+
+  it('announces a catalogue failure once, across routes and retries', () => {
+    withRealConsole(() => {
+      const lines: unknown[] = []
+      const guard = holdConsoleOutput({ onLine: line => { lines.push(line) } })
+      const reach = failure('llm-deepseek-account', 'llmError: could not reach https://api.deepseek.com/models')
+      const routed = failure('llm-deepseek-api-key', 'llmError: could not reach https://api.deepseek.com/models')
+      const rejected = failure('llm-deepseek-account', 'llmError: https://api.deepseek.com/models answered HTTP 503')
+      try {
+        console.warn(reach)
+        console.warn('[llm-deepseek-account] probe warning line')
+        console.warn(routed)
+        console.warn(reach)
+        console.warn(rejected)
+      }
+      finally { guard.restore() }
+      expect(lines).toEqual([
+        { level: 'warn', text: reach },
+        { level: 'warn', text: '[llm-deepseek-account] probe warning line' },
+        { level: 'warn', text: routed, repeat: true },
+        { level: 'warn', text: reach, repeat: true },
+        { level: 'warn', text: rejected },
+      ])
+    })
+  })
+
+  it('keeps one failure family across a success and both fallbacks', () => {
+    withRealConsole(() => {
+      const lines: unknown[] = []
+      const guard = holdConsoleOutput({ onLine: line => { lines.push(line) } })
+      const loaded = '[llm-deepseek-account] model listing from https://api.deepseek.com/models loaded 2 model(s), skipped 0 row(s)'
+      const reach = failure('llm-deepseek-account', 'llmError: could not reach https://api.deepseek.com/models')
+      const bundled = failure('llm-deepseek-account', 'llmError: could not reach https://api.deepseek.com/models', 'using the bundled catalog')
+      try {
+        console.warn(reach)
+        console.error(loaded)
+        console.warn(bundled)
+      }
+      finally { guard.restore() }
+      expect(lines).toEqual([
+        { level: 'warn', text: reach },
+        { level: 'info', text: loaded },
+        { level: 'warn', text: bundled, repeat: true },
+      ])
+    })
+  })
+
+  it('does not mark an unrelated warning repeated later as a repeat', () => {
+    withRealConsole(() => {
+      const lines: unknown[] = []
+      const guard = holdConsoleOutput({ onLine: line => { lines.push(line) } })
+      try {
+        console.warn('same')
+        console.warn('other')
+        console.warn('same')
+      }
+      finally { guard.restore() }
+      expect(lines).toEqual([
+        { level: 'warn', text: 'same' },
+        { level: 'warn', text: 'other' },
+        { level: 'warn', text: 'same' },
+      ])
+    })
+  })
+
   it('routes console.info to the sink instead of the terminal', () => {
     withRealConsole((sink) => {
       const lines: unknown[] = []
