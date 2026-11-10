@@ -51,7 +51,7 @@
 
 - 使用 pi-tui 已有 `queryTerminalColors` 读取终端前景/背景，启动查询限时，未响应使用现有回退；晚到的颜色回复也应用。`auto` 根据实际背景判定深浅主题，混合生成面板背景和次级文本颜色，并遵循终端色深。面板采用 Codex CLI 的背景混合方式，终端主题色不再被纯灰覆盖。
 - 保持 Palette 样式函数引用稳定，收到颜色后刷新已有渲染缓存并保留工具/context 的展开状态。关闭后忽略迟到回复，控制序列不进入编辑框。
-- 模型和 effort 统一为柔和暖色，目录使用绿色、Ready 使用紫色；错误、危险权限与上下文告警仍使用已有语义。未产生的 turns/steps/tok 等统计不占主状态行。保留所有实际权限信息，不补造分支、任务标题或账户额度。
+- 模型和 effort 统一为柔和暖色，目录使用绿色、Ready 使用紫色；错误、危险权限与上下文告警仍使用已有语义。未产生的 turns/steps/tok 等统计不占主状态行，已产生的上下文与统计字段整段着色，按类别使用强调蓝、绿色、暖色和紫色。保留所有实际权限信息，不补造分支、任务标题或账户额度。
 - 空输入显示 `Ask DeepSeek Harness to do anything` 的次级提示，不写入草稿、不影响硬件光标、提交、补全与图片附件。输入后立即消失。
 - 增加按截图终端背景和前景响应的真实 Host 探针，覆盖深浅主题、颜色超时与晚到、长模型和目录、placeholder、光标、鼠标、换行及 resize。记录实际生成的色值与渲染帧，再运行相关回归。
 
@@ -131,3 +131,20 @@
 - `node scripts/fake-tty-tool-keywords.mjs`：8 组 PASS，覆盖原生/PTC × 主屏/全屏 × 100 列 dark / 50 列 light；关键字高亮、PTC Ran 标题、真实工具结果与列宽正常。
 - 复验边界：该探针的 PTC 组需要可用的内层 sandbox；在 DSH 沙箱内复跑时 `run_code` 报 `sandbox-unavailable`（`sandbox-exec: sandbox_apply: Operation not permitted`），standard 4 组仍 PASS，PTC 组需在沙箱外执行。
 - 5 个同步探针语法检查及 `git diff --check` 通过。探针使用已授权的本地 mock 与真实 Host；终端滚动历史内的旧标题按上述边界延迟到重绘更新，未做物理终端窗口的人工验收。
+
+## 状态行字段高亮（2026-11-10）
+
+目标：状态行右半段的 `Context`、turns/steps/tok/s/tok、cache 此前统一使用次级文本，与左侧 model、目录、Ready、preset 的语义配色不协调。按 Codex CLI 的做法整段着色，同时保留上下文阈值的警示语义。
+
+实施：
+
+- 参考 Codex CLI `codex-rs/tui/src/bottom_pane/status_line_style.rs`：每个 `StatusLineItem` 按用途归到 Model/Path/Branch/State/Usage/Limit 等 accent，整段文本着色，`STATUS_LINE_SEPARATOR` 保持次级文本。本实现按 usage 子类分配：上下文与 turns/steps 用蓝，`tok/s` 用绿，`tok` 用暖色，`cache` 用紫色。
+- `Palette.context` 的健康区间由 `dim` 改为 `accent`，接近/达到自动压缩阈值时整段转 warning/error。
+- `Context N% used` 与窄屏 `ctx N%` 整段着色，标签和数值同色；空值 `Context —` 仍为次级文本。
+- turns/steps 使用 accent，`tok/s` 使用 success 绿，`tok` 使用 model 暖色，`cache` 使用 preset 紫；全部整段着色，不拆分值与单位。
+- 只改变视图，`plain` 主题仍不输出 ANSI；窄屏压缩和裁剪按去除 ANSI 的可见宽度计算。
+
+验证：
+
+- `tests/status-line.spec.ts` 断言上下文与统计字段在健康/告警/阈值三档的实际 ANSI、字段整体着色、分隔符保持 dim，以及深浅主题下四类 accent 的分配；`tests/theme.spec.ts` 更新健康区间断言。`pnpm check` 通过：109 个测试文件 / 1595 项测试，类型检查与构建成功。
+- `node scripts/fake-tty-statusline.mjs` 四组 PASS（主屏/全屏 × 160/60 列，深/浅主题），真实帧确认 `Context N% used` 与 turns 使用 accent、`tok/s` 使用 success、`cache` 使用 preset，状态行文本、宽窄布局、权限和失败/取消回执不变。

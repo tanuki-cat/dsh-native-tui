@@ -99,9 +99,24 @@ describe('renderStatusRows', () => {
     expect(line).not.toContain(palette.error('max'))
     expect(line).toContain('\u001B[38;5;141mptc')
     expect(line).toContain('\u001B[38;5;117mattached 2')
-    expect(line).toContain('\u001B[33mContext 70% used')
+    expect(line).toContain(palette.warning('Context 70% used'))
     expect(full(painted({ interactionMode: 'off', permissionPreset: 'danger-full-access' }, 'dark').footer))
       .toContain('\u001B[33mdanger-full-access')
+  })
+
+  it.each(['dark', 'light'] as const)('gives each usage field its category accent in %s', theme => {
+    const palette = createPalette(theme)
+    const metrics = { turns: 4, steps: 51, tokensPerSecond: 136, totalTokens: 7_100_000,
+      cacheHit: '95', contextPercent: 19, contextCompactPercent: 80 }
+    const result = rows()
+    renderStatusRows(result.rows, palette, inputOf(), () => metrics)
+    const line = full(result.status)
+    expect(line).toContain(palette.accent('Context 19% used'))
+    expect(line).toContain(palette.accent('4 turns'))
+    expect(line).toContain(palette.accent('51 steps'))
+    expect(line).toContain(palette.success('136 tok/s'))
+    expect(line).toContain(palette.model('7.1M tok'))
+    expect(line).toContain(palette.preset('cache 95%'))
   })
 
   it('omits empty usage statistics before a model has run without inventing context', () => {
@@ -111,9 +126,10 @@ describe('renderStatusRows', () => {
   })
 
   it('uses the actual compaction trigger for the context warning color', () => {
-    expect(full(painted({ contextMeter: { tokens: 800_000 } }, 'dark').status)).toContain('\u001B[31mContext 80% used')
+    const dark = createPalette('dark')
+    expect(full(painted({ contextMeter: { tokens: 800_000 } }, 'dark').status)).toContain(dark.error('Context 80% used'))
     const { status } = painted({ contextMeter: { tokens: 400_000, reservedTokens: 600_000 } }, 'dark')
-    expect(full(status)).toContain('\u001B[31mContext 40% used')
+    expect(full(status)).toContain(dark.error('Context 40% used'))
   })
 
   it('distinguishes unknown context from a measured zero', () => {

@@ -137,6 +137,18 @@ async function run(fullscreen, width, theme) {
     const ready = records.find(frame => frame.status.includes('Ready'))
     assert.match(ready.status, /(?:Context|ctx) —/u)
     const settled = records.at(-1)
+    const accent = '\u001b[' + (theme === 'light' ? '38;5;25' : '38;5;117') + 'm'
+    const accented = value => records.some(frame => frame.rawLines.some(line => line.includes(accent + value + '\u001b[39m')))
+    const turns = records.map(frame => /(\d+) turns/u.exec(frame.status)).find(match => match !== null)
+    const share = records.map(frame => /(?:Context \d+% used|ctx \d+%)/u.exec(frame.status)).find(match => match !== null)
+    const throughput = records.map(frame => /[\d.]+ tok\/s/u.exec(frame.status)).find(match => match !== null)
+    const cache = records.map(frame => /cache [\d.]+%/u.exec(frame.status)).find(match => match !== null)
+    const preset = '\u001b[' + (theme === 'light' ? '38;5;91' : '38;5;141') + 'm'
+    // Narrow layouts drop the counts before the state and context share.
+    if (turns !== undefined) assert.ok(accented(turns[1] + ' turns'), 'turn counts use the accent color')
+    assert.ok(share !== undefined && accented(share[0]), 'context field uses the accent color')
+    if (throughput !== undefined) assert.ok(records.some(frame => frame.rawLines.some(line => line.includes('\u001b[32m' + throughput[0] + '\u001b[39m'))), 'throughput uses the success color')
+    if (cache !== undefined) assert.ok(records.some(frame => frame.rawLines.some(line => line.includes(preset + cache[0] + '\u001b[39m'))), 'cache uses the preset color')
     assert.ok(records.every(frame => frame.statusRow === frame.editorRow + 2), 'status must follow the input panel')
     assert.ok(records.every(frame => !frame.overflow), 'no rendered row may exceed terminal width')
     assert.ok(records.every(frame => frame.footer.startsWith('off · ')), 'mode stays on the second status row')

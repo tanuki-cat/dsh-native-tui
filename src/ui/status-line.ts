@@ -64,6 +64,14 @@ export function splitSessionMetrics(text: string): { readonly usage: string; rea
   return { usage: text, context: undefined }
 }
 
+/** One accent per usage category, mirroring Codex's per-field status-line accents. */
+function metricAccent(text: string, palette: Palette): (text: string) => string {
+  if (text.endsWith(' tok/s')) return palette.success
+  if (text.endsWith(' tok')) return palette.model
+  if (text.startsWith('cache ')) return palette.preset
+  return palette.accent
+}
+
 /** Fold the status-bar metrics from one repaint's inputs. */
 export type MetricsFold = (
   events: readonly never[],
@@ -123,7 +131,7 @@ export function renderStatusRows(
   if (input.attachmentCount > 0) status.push({ text: palette.accent('attached ' + String(input.attachmentCount)) })
   if (input.preset !== undefined) status.push({ text: palette.dim('preset ') + palette.preset(label(input.preset)), priority: 3 })
   status.push(...split.usage.split('  ·  ').flatMap((text, index) => text.startsWith('0 ') || text.includes('—') ? [] : [{
-    text: palette.dim(text), priority: index < 2 ? 6 : index === 2 ? 4 : 5,
+    text: metricAccent(text, palette)(text), priority: index < 2 ? 6 : index === 2 ? 4 : 5,
   }]))
   rows.status.setSegments(status)
   const mode = input.interactionMode

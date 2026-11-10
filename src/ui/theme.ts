@@ -39,7 +39,7 @@ export interface Palette {
   readonly reasoning: (effort: string | undefined) => (text: string) => string
   /** Color one preset id. */
   readonly preset: (text: string) => string
-  /** Color the context-meter head by occupancy and the compaction trigger. */
+  /** Color the context-meter share by occupancy and the compaction trigger. */
   readonly context: (percent: number | undefined, triggerPercent?: number) => (text: string) => string
   /**
    * Color one composition bucket, keyed by the same names the Web meter's panel
@@ -148,12 +148,14 @@ export function createPalette(theme: Config['theme'], colors: TerminalColors = {
     const code = Object.hasOwn(reasoningCodes, key) ? reasoningCodes[key] : undefined
     return code === undefined ? dim : sgr(code, '39')
   }
+  const accent = sgr(light ? '38;5;25' : '38;5;117', '39')
   const warning = sgr('33', '39')
   const error = sgr('31', '39')
-  // A calm footer until the context meter approaches the automatic compaction
-  // point: normal occupancy stays dim, the last 20 points before the trigger
-  // turn to warning, and the trigger itself turns to error. The meter owns the
-  // numbers; the default trigger only covers a composition that omits it.
+  // The context share stays calm below the compaction point but is never left
+  // unreadable: healthy occupancy uses the accent, the last 20 points before
+  // the trigger turn to warning, and the trigger itself turns to error. The
+  // meter owns the numbers; the default trigger only covers a composition that
+  // omits it.
   const context = (percent: number | undefined, triggerPercent?: number): ((text: string) => string) => {
     if (percent === undefined) return dim
     const trigger = triggerPercent !== undefined && Number.isFinite(triggerPercent) && triggerPercent > 0
@@ -161,7 +163,7 @@ export function createPalette(theme: Config['theme'], colors: TerminalColors = {
       : 80
     if (percent >= trigger) return error
     if (percent >= Math.max(0, trigger - 20)) return warning
-    return dim
+    return accent
   }
   // The Web meter tints its three legend rows with grey-blue, #a78bfa, and
   // blue-450. The terminal has no static brand palette, so these are the closest
@@ -178,7 +180,7 @@ export function createPalette(theme: Config['theme'], colors: TerminalColors = {
     bold: sgr('1', '22'),
     italic: sgr('3', '23'),
     underline: sgr('4', '24'),
-    accent: sgr(light ? '38;5;25' : '38;5;117', '39'),
+    accent,
     brand: sgr('34', '39'),
     success: sgr('32', '39'),
     warning,

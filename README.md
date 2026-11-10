@@ -113,9 +113,9 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 - 终端窗口标题：启动后写入 `<产品标题> · <workspace 目录名>`（OSC 0），标签页能直接看出是哪个 checkout 的会话，例如 `DeepSeek Harness · dsh-native-tui`。控制字符会被压平（BEL 会截断 OSC 序列），目录名超过 48 字符截断；只在标题变化时写入。
 - 页面骨架：header 展示产品标题和 Session id，区域之间使用留白。输入框以 `›` 开头，空输入时显示 `Ask DeepSeek Harness to do anything`；提示不进入草稿或请求。面板通过终端实际背景混色，滚动时保留隐藏行数提示；执行等待/重试行位于输入框上方。输入框下方固定两行：`provider/model effort · ~/workspace · Ready · Context 42% used`，以及模式、原生权限与快捷键。字段以低对比度的 ` · ` 分隔，工作目录会将 home 简写为 `~`。
 - 状态栏按终端显示列宽自适应：宽屏补充 preset、附件数与已产生的 turns/steps/tok/s/tok/cache，零值计数和未知统计不占主状态行；窄屏缩短目录和字段标签、隐藏辅助字段，优先保留模型、Ready/Working、上下文和附件提示。模式与原生权限优先于快捷键。两行均不自动折行，极窄窗口截断；放大终端会恢复被隐藏的信息，中文、emoji 和 ANSI 着色均按实际列宽计算。
-- 模型名与 reasoning effort 统一使用柔和暖色，目录绿色、Ready 紫色；provider 和统计使用次级文本。推理选择控件保留 7 档颜色（off 灰 / minimal 青绿 / low 暗绿 / medium 浅蓝 / high 粉红 / xhigh 洋红 / max 红）；preset 保留紫色，附件和交互强调使用蓝色。Working、告警、危险权限和上下文阈值保留警示色；`plain` 主题不着色。
+- 模型名与 reasoning effort 统一使用柔和暖色，目录绿色、Ready 紫色；provider 使用次级文本；上下文与统计字段整段着色：上下文按阈值由强调蓝转黄/红，turns/steps 强调蓝、tok/s 绿色、tok 暖色、cache 紫色。推理选择控件保留 7 档颜色（off 灰 / minimal 青绿 / low 暗绿 / medium 浅蓝 / high 粉红 / xhigh 洋红 / max 红）；preset 保留紫色，附件和交互强调使用蓝色。Working、告警、危险权限和上下文阈值保留警示色；`plain` 主题不着色。
 - 启动时限时查询终端前景与背景；`auto` 随实际背景选择深浅配色。支持真彩色及 256 色降级，收到迟到的颜色回复或终端主题变化通知时刷新画面，并保留工具/context 展开状态；终端不响应时继续使用回退配色。
-- 上下文读 token meter 的 `contextPressure` 投影（最近一次 provider 采样 + 此后 surface 增减，包含 compaction 影响），首次 provider 采样前显示 `Context —`。接近自动压缩阈值时用黄色、达到阈值用红色；阈值按 `compaction-basic` 的 `thresholdRatio`、`headroomTokens` 与请求预留输出复算。`/context` 查看完整 token 数、容量、压缩阈值和构成明细。
+- 上下文读 token meter 的 `contextPressure` 投影（最近一次 provider 采样 + 此后 surface 增减，包含 compaction 影响），首次 provider 采样前显示 `Context —`。接近自动压缩阈值时整段转黄色、达到阈值转红色；阈值按 `compaction-basic` 的 `thresholdRatio`、`headroomTokens` 与请求预留输出复算。`/context` 查看完整 token 数、容量、压缩阈值和构成明细。
 - token 用量与 cache 命中率按 Web 口径：总量取四桶之和、部分命中不会显示成 100%，数字格式与 Web 统计 pill 一致。`tok/s` 是整段 Session 的累计 decode 速率（`decodeTokens / (decodeMs / 1000)`），不是瞬时速率，低于 10 时保留一位小数。
 - 可选 `fullscreen`：TuiAltScreen + ScrollView，header/status/editor 固定，鼠标滚轮滚动、文本选择复制。向上滚动离开末尾后，视口末行显示可点击的 `↓ jump to latest`，点击回到最新消息并恢复自动跟随（也可 `Ctrl+End`）。
 - 长会话渲染优化：每个行组件按宽度缓存结果（`MemoBlock`），`maxTranscriptEntries` 默认 600 限制每帧保留的行组件数；帧间隔按上次绘制时刻对齐并按实测帧成本自适应，内容签名未变的帧跳过重绘。

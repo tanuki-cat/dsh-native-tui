@@ -375,6 +375,12 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - 验证：`pnpm check` 通过（105 个文件 / 1539 项测试，类型检查与构建通过）；四组状态栏、断流恢复与工具参数等待共六组真实 Host + 本地 mock 探针均 PASS。工具等待探针改为隔离临时 profile，无需预先安装。
 - 方案：[等待和完成展示](design-task-optimize-turn-status-presentation.md)。
 
+## 2026-11-10：状态行字段高亮
+
+- 状态行的上下文与统计字段整段着色并按类别分配强调色（参考 Codex CLI 按字段整段着色、分隔符次级的做法）：上下文与 turns/steps 用蓝、tok/s 绿、tok 暖色、cache 紫，不再拆分标签与数值；接近或达到自动压缩阈值时上下文整段转黄/红。`plain` 主题不输出 ANSI，窄屏压缩与行宽不变。
+- 验证：`pnpm check` 通过（109 个文件 / 1595 项测试，类型检查与构建成功）；`node scripts/fake-tty-statusline.mjs` 四组真实 Host + 本地 mock 探针 PASS，实际帧确认字段整体着色且状态行文本、宽窄布局与权限展示不变。
+- 方案：[Codex CLI 渲染风格](design-task-optimize-codex-rendering-style.md)。
+
 ## 2026-11-10：统一 Codex CLI 风格的渲染层次
 
 - 补齐渲染审查的五类遗漏：Markdown 分页随宽度和主题重绘，`/diff` 复用内联行号和增删背景，模型徽标在安全清理后按语义着色，选择器/设置/审批共用蓝色选中行，压缩状态与多行编辑统一轻量样式。新增 21 项回归；`pnpm check` 通过（108 个文件 / 1560 项测试），差异 4 组、补全及选择/预览 4 组、工具审批 6 组真实 Host + 本地 mock 探针全部 PASS。

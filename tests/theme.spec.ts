@@ -51,11 +51,11 @@ describe('reasoning colors', () => {
     expect(createPalette('light').preset('ptc')).toContain('38;5;91')
 
     expect(dark.context(undefined)('ctx —')).toBe(dark.dim('ctx —'))
-    expect(dark.context(59)('ctx 59%')).toBe(dark.dim('ctx 59%'))
+    expect(dark.context(59)('ctx 59%')).toBe(dark.accent('ctx 59%'))
     expect(dark.context(60)('ctx 60%')).toContain('\u001B[33m')
     expect(dark.context(79)('ctx 79%')).toContain('\u001B[33m')
     expect(dark.context(80)('ctx 80%')).toContain('\u001B[31m')
-    expect(dark.context(50, 75)('ctx 50%')).toBe(dark.dim('ctx 50%'))
+    expect(dark.context(50, 75)('ctx 50%')).toBe(dark.accent('ctx 50%'))
     expect(dark.context(70, 75)('ctx 70%')).toContain('\u001B[33m')
     expect(dark.context(75, 75)('ctx 75%')).toContain('\u001B[31m')
     expect(createPalette('plain').context(90)('x')).toBe('x')
