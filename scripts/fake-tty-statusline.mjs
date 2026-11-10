@@ -11,17 +11,24 @@ import { fileURLToPath } from 'node:url'
 const repo = dirname(dirname(fileURLToPath(import.meta.url)))
 const root = mkdtempSync(join(tmpdir(), 'dsh-native-tui-statusline-'))
 const results = []
+const model = 'deepseek/deepseek-v4.1-flash'
 const server = createServer((req, res) => {
   let body = ''
   req.on('data', chunk => { body += chunk })
   req.on('end', () => {
     if (req.url !== '/v1/chat/completions') { res.writeHead(404); res.end(); return }
     const title = body.includes('Create a concise title')
+    if (!title && body.includes('probe turn failure')) {
+      res.writeHead(400, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: { message: 'Turn status failure probe', type: 'invalid_request_error' } }))
+      return
+    }
     res.writeHead(200, { 'content-type': 'text/event-stream' })
     const send = (choices, usage) => res.write('data: ' + JSON.stringify({
-      id: 'statusline-probe', object: 'chat.completion.chunk', created: 1, model: 'status-model', choices, usage,
+      id: 'statusline-probe', object: 'chat.completion.chunk', created: 1, model, choices, usage,
     }) + '\n\n')
     send([{ index: 0, delta: { role: 'assistant' }, finish_reason: null }])
+    if (!title && body.includes('probe turn cancellation')) return
     setTimeout(() => {
       send([{ index: 0, delta: { content: title ? 'Statusline probe' : 'STATUSLINE DONE' }, finish_reason: null }])
       send([{ index: 0, delta: {}, finish_reason: 'stop' }])
@@ -31,8 +38,8 @@ const server = createServer((req, res) => {
   })
 })
 
-async function run(fullscreen, width) {
-  const label = (fullscreen ? 'fullscreen' : 'main-screen') + '-' + width
+async function run(fullscreen, width, theme) {
+  const label = (fullscreen ? 'fullscreen' : 'main-screen') + '-' + width + '-' + theme
   const home = join(root, label), profile = join(home, 'profiles/tui')
   const workspace = join(root, 'workspace'), log = join(home, 'frames.jsonl')
   mkdirSync(join(profile, 'node_modules'), { recursive: true })
@@ -46,19 +53,32 @@ async function run(fullscreen, width) {
   writeFileSync(join(profile, 'cordis.patch.yml'), [
     '- id: llm-pi-ai', '  config:', '    providers:', '      mock:', '        api: openai-completions',
     '        baseURL: http://127.0.0.1:' + server.address().port + '/v1', '        apiKeyEnv: MOCK_API_KEY',
-    '        models:', '          - id: status-model', '            contextWindow: 128000', '            maxTokens: 4096',
-    '- id: native-tui', '  config:', '    agentPreset: minimal', '    fullscreen: ' + fullscreen,
-    '- id: agent-default-model', '  config:', '    provider: mock', '    model: status-model', '',
+    '        models:', '          - id: ' + model, '            contextWindow: 128000', '            maxTokens: 4096',
+    '- id: native-tui', '  config:', '    agentPreset: minimal', '    theme: auto', '    fullscreen: ' + fullscreen,
+    '- id: agent-default-model', '  config:', '    provider: mock', '    model: ' + model, '',
   ].join('\n'))
   const env = { ...process.env, DSH_HOME: home, DSH_AGENTS_HOME: join(home, 'agents'),
-    DSH_BUNDLED_SKILL_DIR: join(home, 'bundled'), MOCK_API_KEY: 'dummy', TERM: 'xterm-256color',
-    FAKE_TTY_COLUMNS: String(width), FAKE_TTY_GEOMETRY_LOG: log,
+    DSH_BUNDLED_SKILL_DIR: join(home, 'bundled'), MOCK_API_KEY: 'dummy', TERM: 'xterm-256color', COLORTERM: 'truecolor',
+    FAKE_TTY_COLUMNS: String(width), FAKE_TTY_GEOMETRY_LOG: log, FAKE_TTY_FRAME_SNAPSHOT: '1',
   }
   delete env.DSH_PERMISSION_MODE; delete env.DSH_TOOLS_MODE
   const child = spawn(process.execPath, ['--import', join(repo, 'scripts/fake-tty-chrome-trace.mjs'),
     join(repo, 'scripts/fake-tty-entry.mjs'), '--profile', 'tui'], { cwd: workspace, env, stdio: ['pipe', 'pipe', 'pipe'] })
-  let out = '', err = ''
-  child.stdout.on('data', chunk => { out += chunk }); child.stderr.on('data', chunk => { err += chunk })
+  let out = '', err = '', reported = false, keyboardReported = false, colorTimer
+  child.stdout.on('data', chunk => {
+    out += chunk
+    if (!keyboardReported && out.includes('\x1b[?u')) {
+      keyboardReported = true
+      child.stdin.write('\x1b[?1;2c')
+    }
+    if (!reported && out.includes('\x1b]11;?\x07')) {
+      reported = true
+      const reply = theme === 'light' ? '\x1b]10;rgb:1e1e/1e1e/1e1e\x07\x1b]11;rgb:ffff/ffff/ffff\x07'
+        : '\x1b]10;rgb:ebeb/ebeb/ebeb\x07\x1b]11;rgb:2828/2a2a/3636\x07'
+      colorTimer = setTimeout(() => child.stdin.write(reply + '\x1b[?1;2c'), theme === 'light' ? 250 : 0)
+    }
+  })
+  child.stderr.on('data', chunk => { err += chunk })
   const closed = once(child, 'close')
   const frames = () => existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)) : []
   const waitFor = async (predicate, phase) => {
@@ -69,27 +89,69 @@ async function run(fullscreen, width) {
     }
   }
   try {
-    await waitFor(records => records.some(frame => frame.status.includes('Ready')), 'ready')
+    const surface = theme === 'light' ? '48;2;244;244;244' : '48;2;65;67;78'
+    await waitFor(records => records.some(frame => frame.rawLines.some(line => line.includes(surface)) && frame.status.includes('Ready')), 'terminal palette')
+    const initial = frames().find(frame => frame.rawLines.some(line => line.includes(surface)) && frame.status.includes('Ready'))
+    assert.ok(initial.lines.some(line => line.includes('Ask DeepSeek Harness to do anything')), 'empty editor shows its display-only hint')
+    assert.ok(!/0 turns|0 steps|0 tok|— tok\/s|cache —/u.test(initial.status), 'empty usage does not crowd the status line')
+    const readyColor = theme === 'light' ? '38;2;111;66;170' : '38;2;189;147;249'
+    assert.ok(initial.rawLines.some(line => line.includes(readyColor + 'mReady')), 'Ready uses the violet state color')
+    assert.ok(!initial.lines.some(line => line.includes('rgb:')), 'terminal replies never enter the draft')
     child.stdin.write('check statusline\r')
     await waitFor(records => records.some(frame => frame.status.includes('Working') && frame.wait), 'working')
     await waitFor(records => records.some(frame => frame.status.includes('Ready') && /(?:Context \d+% used|ctx \d+%)/u.test(frame.status)), 'settled context')
+    await waitFor(records => records.some(frame => !frame.wait && frame.status.includes('Ready')
+      && frame.lines.some(line => /^Worked for (?:\d+h )?(?:\d+m )?\d+s · \d{2}:\d{2}/u.test(line))), 'completion receipt')
+    const prompt = initial.lines.findLastIndex(line => line.startsWith('› '))
+    assert.ok(prompt > 0 && initial.rawLines[prompt].includes(surface), 'input uses a neutral surface')
+    assert.equal(initial.lines[prompt - 1].trim(), ''); assert.equal(initial.lines[prompt + 1].trim(), '')
+    assert.ok(!initial.lines.some(line => /^─+$/u.test(line)), 'chrome uses spacing instead of stacked rules')
+    const bodyMarker = 'Current working directory:'
+    assert.ok(frames().some(frame => frame.lines.some(line => line.includes('◇ context') && line.includes('ctrl+o to expand'))))
+    assert.ok(!frames().some(frame => frame.lines.some(line => line.includes(bodyMarker))), 'context body starts folded')
+    let offset = frames().length
+    child.stdin.write('\x0f')
+    await waitFor(records => records.slice(offset).some(frame => frame.lines.some(line => line.includes(bodyMarker))), 'expand context')
+    offset = frames().length
+    child.stdin.write('\x0f')
+    await waitFor(records => records.slice(offset).some(frame => frame.lines.some(line => line.includes('ctrl+o to expand'))
+      && !frame.lines.some(line => line.includes(bodyMarker))), 'collapse context')
+    let outcome = 'completed'
+    if (width === 60) {
+      offset = frames().length
+      child.stdin.write('probe turn failure\r')
+      await waitFor(records => records.slice(offset).some(frame => frame.status.includes('Ready') && !frame.wait
+        && frame.lines.some(line => line.startsWith('Failed after '))), 'failure receipt')
+      assert.ok(frames().at(-1).lines.some(line => line.includes('Turn failed:')), 'failure details remain visible')
+      outcome = 'failed'
+    } else if (fullscreen) {
+      offset = frames().length
+      child.stdin.write('probe turn cancellation\r')
+      await waitFor(records => records.slice(offset).some(frame => frame.wait && frame.status.includes('Working')), 'cancellable wait')
+      child.stdin.write('\x1b')
+      await waitFor(records => records.slice(offset).some(frame => frame.status.includes('Ready') && !frame.wait
+        && frame.lines.some(line => line.startsWith('Cancelled after '))), 'cancellation receipt')
+      outcome = 'cancelled'
+    }
     const records = frames()
     const ready = records.find(frame => frame.status.includes('Ready'))
     assert.match(ready.status, /(?:Context|ctx) —/u)
     const settled = records.at(-1)
-    assert.ok(records.every(frame => frame.statusRow === frame.editorRow + 2), 'status must follow the editor bottom border')
+    assert.ok(records.every(frame => frame.statusRow === frame.editorRow + 2), 'status must follow the input panel')
     assert.ok(records.every(frame => !frame.overflow), 'no rendered row may exceed terminal width')
     assert.ok(records.every(frame => frame.footer.startsWith('off · ')), 'mode stays on the second status row')
     assert.ok(records.every(frame => frame.footer.includes('workspace-write')), 'native permissions must stay visible')
-    assert.ok(records.every(frame => frame.status.includes('status-model')), 'model must remain visible')
+    assert.ok(records.every(frame => frame.status.includes('deepseek-v4.1-flash')), 'the long model name remains visible')
     assert.ok(records.some(frame => frame.footer.includes('esc cancel')), 'running shortcut remains visible')
     child.stdin.write('\x04')
     const [code, signal] = await closed
     assert.equal(code, 0); assert.equal(signal, null)
     assert.ok(out.includes('STATUSLINE DONE'))
-    results.push({ label, frames: records.length, status: settled.status, footer: settled.footer })
+    results.push({ label, frames: records.length, surface, lateReply: theme === 'light', outcome,
+      receipt: settled.lines.findLast(line => /^(?:Worked for|Failed after|Cancelled after)/u.test(line))?.trimEnd(), status: settled.status, footer: settled.footer })
     console.log(label, 'PASS', JSON.stringify(results.at(-1)))
   } catch (error) {
+    clearTimeout(colorTimer)
     child.kill('SIGTERM')
     await closed
     console.error(label, 'stdout', out.slice(-3000), 'stderr', err.slice(-3000))
@@ -102,10 +164,11 @@ try {
   mkdirSync(join(root, 'workspace'))
   writeFileSync(join(root, 'workspace/package.json'), '{"private":true}')
   for (const fullscreen of [false, true]) {
-    for (const width of [160, 60]) await run(fullscreen, width)
+    for (const width of [160, 60]) await run(fullscreen, width, width === 60 ? 'light' : 'dark')
   }
   console.log('RESULT PASS', results.length, 'configurations')
 } finally {
+  server.closeAllConnections()
   await new Promise(resolve => server.close(resolve))
   rmSync(root, { recursive: true, force: true })
 }

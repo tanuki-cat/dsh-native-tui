@@ -128,7 +128,7 @@ child.stdout.on('data', data => {
   out += String(data)
   const text = strip(out)
   if (!prompted && text.includes('enter send')) {
-    promptMarkerSeen = text.includes('> ')
+    promptMarkerSeen = text.includes('› ')
     prompted = true
     child.stdin.write('ctx' + String.fromCharCode(13))
     return

@@ -197,7 +197,7 @@ const tick = setInterval(() => {
     historyOutputStart = text.length;
     write("\x1b[A");
   }
-  else if (phase === 11 && text.slice(historyOutputStart).includes("> /skill:exit")) {
+  else if (phase === 11 && text.slice(historyOutputStart).includes("› /skill:exit")) {
     historyRecalled = true;
     phase = 12;
     write("\r");

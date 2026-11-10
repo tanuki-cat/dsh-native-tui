@@ -10,11 +10,11 @@
  */
 
 import { Container, Spacer, type Component, type TuiMouseEvent, type TuiMouseEventResult } from '@earendil-works/pi-tui'
-import { Rule } from './rule.js'
 import type { DisplayMode } from '../config.js'
 import { createTranscriptReducer, type TranscriptBlock, type TranscriptEntry, type TranscriptOptions } from './transcript.js'
 import { AssistantMessage } from './assistant-message.js'
 import { ToolCard } from './tool-card.js'
+import { ContextMessage } from './context-message.js'
 import { isCodeExecutionTool, renderTranscriptBlock } from './transcript-render.js'
 
 /**
@@ -33,7 +33,7 @@ import { isCodeExecutionTool, renderTranscriptBlock } from './transcript-render.
  * component and therefore a cold cache.
  */
 class MemoBlock implements Component {
-  private readonly inner: Component
+  private inner: Component
   private width = -1
   private lines: string[] | undefined
 
@@ -59,8 +59,14 @@ class MemoBlock implements Component {
   }
 
   setExpanded(expanded: boolean): void {
-    if (!(this.inner instanceof ToolCard)) return
+    if (!(this.inner instanceof ToolCard) && !(this.inner instanceof ContextMessage)) return
     this.inner.setExpanded(expanded)
+    this.lines = undefined
+  }
+
+  refreshPalette(block: TranscriptBlock, options: TranscriptOptions): void {
+    const expanded = this.inner instanceof ToolCard || this.inner instanceof ContextMessage ? this.inner.isExpanded : options.toolsExpanded
+    this.inner = renderTranscriptBlock(block, { ...options, toolsExpanded: expanded })
     this.lines = undefined
   }
 
@@ -169,12 +175,11 @@ export class TranscriptRenderer {
   private reducedEntries: TranscriptEntry[] = []
   private entryWindow: readonly TranscriptEntry[] | undefined
   /**
-   * Separators are stateless, so one instance each serves every block. Reusing
-   * them keeps a saturated rebuild from allocating thousands of components per
+   * Spacing is stateless, so one instance serves every block. Reusing it
+   * keeps a saturated rebuild from allocating thousands of components per
    * frame, which is what showed up as GC hitches in the stream probe.
    */
   private readonly gap = new Spacer(1)
-  private readonly separator: Rule
 
   /**
    * Index into the last reduced event window below which no retained block
@@ -219,7 +224,6 @@ export class TranscriptRenderer {
       },
     }
     this.reducer = createTranscriptReducer(this.options)
-    this.separator = new Rule(this.options.palette.dim)
   }
 
   /** Switch reasoning/code-execution density and rebuild the existing event window. */
@@ -241,11 +245,20 @@ export class TranscriptRenderer {
     this.rebuild()
   }
 
-  /** Toggle tool previews while preserving component identity and non-tool caches. */
+  /** Toggle tool and context previews while preserving component identity. */
   toggleToolPreviews(): void {
     this.options = { ...this.options, toolsExpanded: !this.options.toolsExpanded }
     for (const cached of this.cached.values()) {
-      if (cached.block.kind === 'tool' && cached.component instanceof MemoBlock) cached.component.setExpanded(this.options.toolsExpanded ?? false)
+      if ((cached.block.kind === 'tool' || cached.block.kind === 'context') && cached.component instanceof MemoBlock) cached.component.setExpanded(this.options.toolsExpanded ?? false)
+    }
+    this.paintedBlocks = undefined
+    this.rebuild()
+  }
+
+  /** Recreate styled leaves after terminal colors change, preserving local expansion. */
+  refreshPalette(): void {
+    for (const cached of this.cached.values()) {
+      if (cached.component instanceof MemoBlock) cached.component.refreshPalette(cached.block, this.options)
     }
     this.paintedBlocks = undefined
     this.rebuild()
@@ -346,10 +359,6 @@ export class TranscriptRenderer {
     for (const [index, block] of blocks.entries()) {
       if (block.kind === 'assistant' && block.live) liveChars += block.text.length + (block.reasoning?.length ?? 0)
       if (index > 0) this.container.addChild(this.gap)
-      if (index > 0 && block.kind === 'user') {
-        this.container.addChild(this.separator)
-        this.container.addChild(this.gap)
-      }
       const key = blockKey(block)
       const previous = key === undefined ? undefined : this.cached.get(key)
       // Identity survives window shifts; assistant updates retain completed leaves.

@@ -575,8 +575,8 @@ describe('reduceTranscript', () => {
     const renderer = new TranscriptRenderer(options)
     renderer.set(entries, [])
     const output = renderer.container.render(80).join('\n')
-    expect(output).toContain('◆ compaction')
-    expect(output).toContain('✓ done')
+    expect(output).toContain('• Compact context')
+    expect(output).toContain('Context compacted')
     expect(output).toContain('3 item(s)')
     expect(output).toContain('condensed checkpoint')
     expect(output).toContain('Model context: 2 tool result(s) shortened')
@@ -606,9 +606,9 @@ describe('reduceTranscript', () => {
     const renderer = new TranscriptRenderer(options)
     renderer.set(closedByTurn, [])
     const output = renderer.container.render(80).join('\n')
-    expect(output).toContain('⚠ interrupted')
-    expect(output).not.toContain('⟳ compacting…')
-    expect(output).not.toContain('✕ failed')
+    expect(output).toContain('Interrupted while compacting context')
+    expect(output).not.toContain('Compacting…')
+    expect(output).not.toContain('Failed to compact context')
 
     // The resume marker alone closes it too: a log whose turn already ended
     // before the crash still holds the compaction lock until the seed marker.

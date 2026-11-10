@@ -140,8 +140,11 @@ async function run(fullscreen, decision, preset = 'standard', display = 'detaile
       child.stdin.write('\x0f')
       await waitFor((_text, records) => records.slice(offset).some(frame => frame.lines.some(line => line.includes('18 total lines, ctrl+o to collapse'))), 'expand source')
       if (fullscreen) {
-        offset = frames().length
-        child.stdin.write('\x1b[5~')
+        for (let page = 0; page < 12 && !frames().slice(offset).some(frame => frame.lines.some(line => line.includes('source row 18'))); page += 1) {
+          const count = frames().length
+          child.stdin.write('\x1b[5~')
+          await waitFor((_text, records) => records.length > count, 'browse expanded source')
+        }
       }
       await waitFor((_text, records) => records.slice(offset).some(frame => frame.lines.some(line => line.includes('source row 18'))), 'expanded source visibility')
     }

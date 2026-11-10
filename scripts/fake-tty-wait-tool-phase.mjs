@@ -6,31 +6,27 @@
  *
  * Setup:
  *   pnpm build
- *   cp -a /tmp/dsh-native-tui-reasoning-home /tmp/dsh-native-tui-wait-tool-phase-home
  *
  * Run:
- *   DSH_HOME=/tmp/dsh-native-tui-wait-tool-phase-home node scripts/fake-tty-wait-tool-phase.mjs
+ *   node scripts/fake-tty-wait-tool-phase.mjs
  */
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:http'
-import { cpSync, existsSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const repo = dirname(dirname(fileURLToPath(import.meta.url)))
-const home = process.env.DSH_HOME ?? '/tmp/dsh-native-tui-wait-tool-phase-home'
-if (!home.startsWith('/tmp/dsh-native-tui-')) {
-  console.error('Refusing to rewrite a profile outside a disposable /tmp/dsh-native-tui-* home: ' + home)
-  process.exit(2)
-}
+const home = mkdtempSync(join(tmpdir(), 'dsh-native-tui-wait-tool-phase-'))
 const profile = join(home, 'profiles', 'tui')
-if (!existsSync(profile)) {
-  if (!existsSync('/tmp/dsh-native-tui-reasoning-home')) {
-    console.error('Install a TUI profile at ' + home + ' first (or copy the reasoning probe home).')
-    process.exit(2)
-  }
-  cpSync('/tmp/dsh-native-tui-reasoning-home', home, { recursive: true })
-}
+mkdirSync(join(profile, 'node_modules'), { recursive: true })
+mkdirSync(join(home, 'agents')); mkdirSync(join(home, 'bundled'))
+writeFileSync(join(profile, 'cordis.yml'), '[]\n')
+writeFileSync(join(profile, 'package.json'), JSON.stringify({ name: 'wait-tool-phase-probe', private: true,
+  dependencies: { 'dsh-native-tui': 'link:' + repo }, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', 'dsh-native-tui'] } },
+}))
+symlinkSync(repo, join(profile, 'node_modules/dsh-native-tui'), 'dir')
 
 const toolArgs = JSON.stringify({ description: 'Wait phase probe', code: '1 + 1' })
 const holdMs = 2_500
@@ -135,7 +131,8 @@ writeFileSync(join(profile, 'cordis.patch.yml'), `- id: llm-pi-ai
 
 const child = spawn(process.execPath, [join(repo, 'scripts', 'fake-tty-entry.mjs'), '--profile', 'tui'], {
   cwd: repo,
-  env: { ...process.env, DSH_HOME: home, MOCK_API_KEY: 'dummy', COLUMNS: '120', LINES: '40', TERM: 'xterm-256color', COLORTERM: 'truecolor' },
+  env: { ...process.env, DSH_HOME: home, DSH_AGENTS_HOME: join(home, 'agents'), DSH_BUNDLED_SKILL_DIR: join(home, 'bundled'),
+    MOCK_API_KEY: 'dummy', COLUMNS: '120', LINES: '40', TERM: 'xterm-256color', COLORTERM: 'truecolor' },
   stdio: ['pipe', 'pipe', 'pipe'],
 })
 let out = ''
@@ -160,8 +157,8 @@ const tick = setInterval(() => {
     try { child.stdin.write('probe wait phase\r') } catch {}
   }
   else if (phase !== 'done') {
-    if (requestAt === undefined && text.includes('⟳ working ·')) requestAt = Date.now() - started
-    if (toolPhaseAt === undefined && argsOffset !== undefined && text.indexOf('⟳ working ·', argsOffset) !== -1) toolPhaseAt = Date.now() - started
+    if (requestAt === undefined && text.includes('• Working (')) requestAt = Date.now() - started
+    if (toolPhaseAt === undefined && argsOffset !== undefined && text.indexOf('• Working (', argsOffset) !== -1) toolPhaseAt = Date.now() - started
     if (!approved && text.includes('Approval required')) {
       approved = true
       try { child.stdin.write('\r') } catch {}
@@ -184,10 +181,11 @@ child.on('exit', (code, signal) => {
   const ordered = sawRequest && sawToolPhase && toolPhaseAt >= requestAt
   const completed = finalAt !== undefined
   const settled = text.lastIndexOf(' · Ready') > text.lastIndexOf(' · Working')
-  const pass = code === 0 && signal === null && ordered && completed && settled
+  const receipt = /Worked for (?:\d+h )?(?:\d+m )?\d+s · \d{2}:\d{2}/u.test(text)
+  const pass = code === 0 && signal === null && ordered && completed && settled && receipt
   console.log('EXIT', code, signal, 'phase', phase)
   console.log('requestAt', requestAt, 'toolPhaseAt', toolPhaseAt, 'finalAt', finalAt)
-  console.log('sawRequest', sawRequest, 'sawToolPhase', sawToolPhase, 'ordered', ordered, 'settled', settled, 'completed', completed)
+  console.log('sawRequest', sawRequest, 'sawToolPhase', sawToolPhase, 'ordered', ordered, 'settled', settled, 'completed', completed, 'receipt', receipt)
   console.log('RESULT', pass ? 'PASS' : 'FAIL')
   if (!pass) {
     console.log('--- stdout tail ---')
@@ -195,6 +193,8 @@ child.on('exit', (code, signal) => {
     console.log('--- stderr tail ---')
     console.log(err.slice(-4000))
   }
+  server.closeAllConnections()
   server.close()
+  rmSync(home, { recursive: true, force: true })
   process.exit(pass ? 0 : 1)
 })

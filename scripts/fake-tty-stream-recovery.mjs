@@ -139,15 +139,15 @@ try {
       partialSeen = true
       firstFrameComplete = text.includes(endMark)
     }
-    if (!dropped && text.includes(endMark) && /⟳ working · (?!0s)(?:\d+h )?(?:\d+m )?\d+s/.test(text)) {
+    if (!dropped && text.includes(endMark) && /• Working \((?!0s)(?:\d+h )?(?:\d+m )?\d+s · esc to interrupt\)/.test(text)) {
       dropped = true
       firstResponse.destroy()
     }
-    if (/⟳ retry \d+\/\d+ after [^\n]+ \(automatic\) · (?:\d+h )?(?:\d+m )?\d+s/.test(text)) {
+    if (/• Retrying \d+\/\d+ \((?:\d+h )?(?:\d+m )?\d+s · [^\n]+ · automatic · esc to interrupt\)/.test(text)) {
       retrySeen = true
       recover()
     }
-    if (!exitSent && text.includes(answer) && text.lastIndexOf(' · Ready') > text.lastIndexOf(' · Working')) {
+    if (!exitSent && text.includes(answer) && text.includes('Worked for ') && text.lastIndexOf(' · Ready') > text.lastIndexOf(' · Working')) {
       exitSent = true
       child.stdin.write('\x04')
     }
@@ -166,6 +166,7 @@ try {
   assert.equal(retrySeen, true, 'transport retry must be visible')
   assert.ok(requests >= 2, 'Host must retry the dropped stream')
   assert.equal(exitSent, true, 'recovered turn must settle to idle')
+  assert.match(strip(out), /Worked for (?:\d+h )?(?:\d+m )?\d+s · \d{2}:\d{2}/u, 'recovered turn keeps its completion receipt')
   assert.equal(err.includes('reveal text:'), false)
   console.log('PASS', JSON.stringify({ firstFrameComplete, workingDuringStall: dropped, retrySeen, requests, recovered: exitSent }))
 }

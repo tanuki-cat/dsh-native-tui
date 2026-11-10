@@ -103,6 +103,10 @@ async function run(preset, fullscreen) {
       const offset = out.length
       child.stdin.write(command + '\r')
       await waitFor(() => strip(out.slice(offset)).includes('Diff · write') && strip(out.slice(offset)).includes(expected), command)
+      const preview = out.slice(offset)
+      assert.ok(preview.includes('48;5;22m'), command + ': additions must retain their diff background in the pager')
+      if (expected.startsWith('- ')) assert.ok(preview.includes('48;5;52m'), command + ': removals must retain their diff background in the pager')
+      assert.ok(/1 [+-] /u.test(strip(preview)), command + ': changed rows must retain line numbers')
       child.stdin.write('\x1b')
       await waitFor(() => !frames().at(-1)?.lines.some(line => line.includes('Esc closes')), 'close ' + command)
     }
@@ -122,7 +126,7 @@ async function run(preset, fullscreen) {
     const [code, signal] = exit
     assert.equal(signal, null, 'probe must exit without a signal')
     assert.equal(code, 0)
-    console.log(label, 'PASS: Edit update -old/+new; Edit empty +insertion; Write create source; /diff latest and indexed')
+    console.log(label, 'PASS: Edit update -old/+new; Edit empty +insertion; Write create source; /diff latest/indexed with numbered colored rows')
   } catch (error) {
     console.error(label, 'stdout', strip(out).slice(-6000), 'stderr', err.slice(-3000))
     throw error

@@ -23,17 +23,19 @@ if (logPath !== undefined) {
         : { previousLines: this.previousScreen, previousViewportTop: 0 }
       const lines = state.previousLines.map(strip)
       const statusRow = lines.findLastIndex(line => /(?:^| · )(?:Working|Ready)(?: · |\s*$)/u.test(line))
-      const editorRow = lines.findLastIndex(line => line.startsWith('> '))
-      if (statusRow < 0 || editorRow < 0) return
+      const editorRow = lines.findLastIndex(line => line.startsWith('› '))
+      const traceOverlays = process.env.FAKE_TTY_TRACE_OVERLAYS === '1'
+      if ((statusRow < 0 || editorRow < 0) && !traceOverlays) return
       const record = {
         statusRow: statusRow - state.previousViewportTop,
         editorRow: editorRow - state.previousViewportTop,
-        wait: lines.some(line => line.includes('⟳ working ·') || line.includes('⟳ retry ')),
+        wait: lines.some(line => line.includes('• Working (') || line.includes('• Retrying ')),
         mark: marks.filter(mark => lines.some(line => line.includes(mark))).join(','),
         width: this.terminal.columns,
-        status: lines[statusRow].trimEnd(),
+        status: lines[statusRow]?.trimEnd() ?? '',
         footer: lines[statusRow + 1]?.trimEnd(),
         overflow: state.previousLines.some(line => visibleWidth(line) > this.terminal.columns),
+        ...(traceOverlays ? { overlay: this.hasOverlay() } : {}),
         ...(process.env.FAKE_TTY_FRAME_SNAPSHOT === '1' ? { lines, rawLines: state.previousLines } : {}),
       }
       const key = JSON.stringify(record)

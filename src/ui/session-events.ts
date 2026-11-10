@@ -9,7 +9,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import type { SessionId, TurnEndReason } from '@deepseek-ai/dsh-session/types'
 import type { ChangesSummaryView } from '../runtime/changes.js'
 import { formatChangesSummary } from '../runtime/changes.js'
 import { formatDeliverables, type PresentedFileView } from '../runtime/deliverables.js'
@@ -50,8 +50,8 @@ export interface SessionEventsHost {
   readonly beginWait: () => void
   /** A failed attempt scheduled a retry, which is now the reason for waiting. */
   readonly retryScheduled: (retry: WaitRetry) => void
-  /** The turn settled, so execution status can return to idle. */
-  readonly endWait: () => void
+  /** The turn settled; show a receipt for its actual outcome. */
+  readonly endWait: (reason: TurnEndReason) => void
 }
 
 /** Subscribe the transcript to one session's events. */
@@ -103,7 +103,7 @@ export function subscribeSessionEvents(host: SessionEventsHost): () => void {
       })
     }
     if (event.type === 'turn/start') host.beginWait()
-    if (event.type === 'turn/end') host.endWait()
+    if (event.type === 'turn/end') host.endWait(event.data.reason)
     host.scheduleTranscript()
     if (projections === undefined || event.type === 'turn/start' || event.type === 'turn/end') host.renderStatus()
   }))

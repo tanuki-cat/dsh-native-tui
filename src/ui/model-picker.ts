@@ -6,19 +6,19 @@ import { loadModelCatalog, type ProviderListing } from './model-catalog.js'
 
 const HINT = 'Type to filter · ↑/↓ moves · Enter selects · Esc cancels'
 
-function badgeLabel(ctx: CommandContext, badge: LlmModelBadge | undefined): string {
-  if (badge === undefined) return ''
+function modelBadge(ctx: CommandContext, badge: LlmModelBadge | undefined): ChoiceItem['badge'] {
+  if (badge === undefined) return undefined
   const locale = ctx.host.get('locale') as { resolveText(text: LlmModelBadge['text']): string } | undefined
   const text = locale?.resolveText(badge.text) ?? (typeof badge.text === 'string' ? badge.text : badge.text.en)
-  const color = { neutral: ctx.palette.dim, info: ctx.palette.accent, success: ctx.palette.success, warning: ctx.palette.warning }[badge.tone]
-  return ' ' + color('[' + text + ']')
+  return { text, tone: badge.tone }
 }
 
 function choices(ctx: CommandContext, listings: readonly ProviderListing[]): ChoiceItem[] {
   const selected = ctx.modelSelection.current
   return listings.flatMap(({ provider, models }) => models.map(model => ({
     value: provider.id + '/' + model.id,
-    label: (selected?.provider === provider.id && selected.model === model.id ? '* ' : '  ') + provider.id + '/' + model.id + badgeLabel(ctx, model.badge),
+    label: (selected?.provider === provider.id && selected.model === model.id ? '* ' : '  ') + provider.id + '/' + model.id,
+    badge: modelBadge(ctx, model.badge),
     description: model.name + (model.description === undefined ? '' : ' — ' + model.description),
   })))
 }

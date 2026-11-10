@@ -3,6 +3,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { subscribeSessionEvents, type SessionEventsHost } from '../src/ui/session-events.js'
 import type { TranscriptEntry } from '../src/ui/transcript.js'
 import type { WaitRetry } from '../src/ui/waiting.js'
+import type { TurnEndReason } from '@deepseek-ai/dsh-session/types'
 
 /** What one subscribed app observed, in call order. */
 interface Recorded {
@@ -10,6 +11,7 @@ interface Recorded {
   readonly begins: number
   readonly retries: WaitRetry[]
   readonly ends: number
+  readonly endings: TurnEndReason[]
   readonly entries: TranscriptEntry[]
   readonly notices: string[]
 }
@@ -17,7 +19,7 @@ interface Recorded {
 /** Wire the subscriber to a recording stub bus. */
 function harness(projections?: unknown): { emit: (name: string, ...args: unknown[]) => void; seen: Recorded; dispose: () => void } {
   const handlers = new Map<string, Array<(...args: unknown[]) => void>>()
-  const seen = { statuses: 0, begins: 0, retries: [] as WaitRetry[], ends: 0, entries: [] as TranscriptEntry[], notices: [] as string[] }
+  const seen = { statuses: 0, begins: 0, retries: [] as WaitRetry[], ends: 0, endings: [] as TurnEndReason[], entries: [] as TranscriptEntry[], notices: [] as string[] }
   const host: SessionEventsHost = {
     host: {
       on: (name: string, handler: (...args: unknown[]) => void) => {
@@ -40,7 +42,7 @@ function harness(projections?: unknown): { emit: (name: string, ...args: unknown
     attemptPosition: () => undefined,
     beginWait: () => { seen.begins += 1 },
     retryScheduled: retry => { seen.retries.push(retry) },
-    endWait: () => { seen.ends += 1 },
+    endWait: reason => { seen.ends += 1; seen.endings.push(reason) },
   }
   const dispose = subscribeSessionEvents(host)
   return {
@@ -103,6 +105,15 @@ describe('session event execution reporting', () => {
     emit('session/event', { id: 's1' }, { type: 'turn/end', seq: 9, data: { turn: 1, reason: { kind: 'completed' } } })
     expect(seen.ends).toBe(1)
     expect(seen.entries).toHaveLength(1)
+    expect(seen.endings).toEqual([{ kind: 'completed' }])
+  })
+
+  it('forwards an error reason verbatim rather than marking the turn completed', () => {
+    const { emit, seen } = harness()
+    const reason = { kind: 'error', error: { code: 'TRANSPORT', message: 'connection lost' } }
+    emit('session/event', { id: 's1' }, { type: 'turn/end', seq: 9, data: { turn: 1, reason } })
+    expect(seen.endings).toEqual([reason])
+    expect(seen.endings[0]).toBe(reason)
   })
 
   it('keeps working through messages and tool calls until turn/end', () => {

@@ -100,23 +100,28 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 
 ### 渲染与显示
 
-- Transcript 使用轻量的圆点和缩进层次：用户消息以 `›` 开头并保留背景带，正文直接渲染 Markdown，以 `•` 标记消息；thinking 使用灰色斜体，不添加背景块和重复的 assistant 标题。工具标题以 `•` 开头，结果缩进到 `└` 下方；本地命令输出和审批回执按 durable event sequence 插入。
+- Transcript 使用轻量的圆点和缩进层次：用户消息以 `›` 开头，使用中性灰阶背景和上下留白；正文直接渲染 Markdown，以 `•` 标记消息，标题使用字重区分层级；thinking 使用灰色斜体。工具标题以 `•` 开头，结果缩进到 `└` 下方；本地命令输出和审批回执按 durable event sequence 插入。
+- `◇ context` 默认仅显示来源与展开提示，避免上下文正文占满对话。`Ctrl+O` 可展开/收起保留的 context 正文；fullscreen 下也可点击标题单独切换。此设置只影响终端视图，Host 事件、实际模型上下文和导出保留原有内容。
 - 流式内容直接跟随 provider：每帧显示已收到的全部 text/reasoning，`block-end` 与 `assistant/message` 立即采用完整内容，没有额外逐字动画、播放队列或 settle grace。reasoning、正文、工具卡片按 provider/event 顺序展示，可以落在同一帧。
-- 执行状态独立于内容渲染：turn 开始后显示 `⟳ working · 5s`，满一分钟显示 `1m 5s`，满一小时显示 `1h 2m 3s`；省略前导零单位，不补零，超过 24 小时继续累计小时。收到文本、reasoning、工具调用或 stream/end 都不清除它，直到 `turn/end` 或切换会话。Host 调度自动重试时显示 `⟳ retry N/M after CODE (automatic) · 1m 5s`，沿用本轮累计时长；新 attempt 或恢复收流后回到 working。断流检测、超时与重试策略归 Host/provider，TUI 不根据画面是否变化判断网络状态。
+- 执行状态独立于内容渲染：turn 开始后显示 `• Working (5s · esc to interrupt)`，使用中性圆点、清晰标题和次级时间提示；满一分钟显示 `1m 5s`，满一小时显示 `1h 2m 3s`，不补零，超过 24 小时继续累计小时。收到文本、reasoning、工具调用或 stream/end 都不视为完成。自动重试显示 `• Retrying N/M (1m 5s · CODE · automatic · esc to interrupt)`，沿用本轮累计时长；新 attempt 或恢复收流后回到 Working。断流检测、超时与重试策略归 Host/provider。
+- 真正收到 turn/end 后显示 `Worked for 2m 22s · 10:49`，取消、失败、blocked 与 token limit 使用对应的结束词，错误正文继续保留。回执停止计时并保持到下一轮开始或切换/关闭会话；它是当前终端的状态，不写入 Session 历史或导出。等待、重试和完成均占固定一行，按窗口宽度截断。
+- 上下文压缩使用 `• Compact context`、缩进正文和次级状态回执，区分完成、失败与中断，保留摘要和错误详情。普通选择器、审批、设置与命令补全共用 `›` 和整行蓝色选中背景；未选中的模型徽标保留语义色，选中时使用统一对比色并保留徽标文字。
+- Markdown 与差异预览按当前宽度和终端颜色重新绘制；`/diff` 共用内联差异的行号和增删背景。多行输入弹窗使用 `›`、空白边界和原生编辑操作，弹窗外框继续保留。
 - 显示密度可配置：`thinkingDisplay` 与 `runCodeDisplay` 均为 `hidden | compact | detailed`，见[配置](#配置)。reasoning 若以 provider 的 `<signature>` 块开头，显示层会剥掉签名与随后的换行，纯签名块不渲染 thinking 卡片；`compact` 的预览在流式时取最后一个已完成段落的首行，结束后取首行，并去掉 `**` 标记。
 - PTC 的 `run_code` 卡片在 `compact` 下列出实际子调用：`skill` 显示实际技能名，如 `Skill daily-log-writer`；文件工具显示路径；bash/pwsh 优先显示实际命令及显式 workdir，多行命令用 `↵` 标记；MCP 显示服务、方法与目标，如 `MCP idea.get_file_problems src/a.ts`；`todo_write` 显示任务数量、进行中/完成数量和当前任务，不虚构文件路径。同一摘要只出现一次，长值标记截断，路径优先保留文件名；超过 10 行折叠为 `+ N more calls`，失败时保留错误首行。
 - 上下文压缩：默认 preset 启用 `compaction-basic` 与 tool-result pruner。TUI 渲染 compaction start/summary/end；prune 隐藏对应 tool 卡片并保留 prune notice；session 级 tool memory 会忽略同一 callId 的晚到 / 重复 call/result，即使原始事件已离开 retained window。进程在 compaction 中途崩溃后 resume，卡片尾行显示 `⚠ interrupted` 而不是一直停在 `⟳ compacting…`。`/compact` 作为 Host command 可手动触发。
 - 终端窗口标题：启动后写入 `<产品标题> · <workspace 目录名>`（OSC 0），标签页能直接看出是哪个 checkout 的会话，例如 `DeepSeek Harness · dsh-native-tui`。控制字符会被压平（BEL 会截断 OSC 序列），目录名超过 48 字符截断；只在标题变化时写入。
-- 页面骨架：header 展示产品标题和 Session id，transcript 保留上下留白；执行等待/重试行位于输入框上方。输入框下方固定两行：`provider/model effort · ~/workspace · Ready · Context 42% used`，以及模式、原生权限与快捷键。字段以低对比度的 ` · ` 分隔，工作目录会将 home 简写为 `~`。
-- 状态栏按终端显示列宽自适应：宽屏补充 preset、附件数与 turns/steps/tok/s/tok/cache；窄屏缩短目录和字段标签、隐藏辅助字段，优先保留模型、Ready/Working、上下文和附件提示。模式与原生权限优先于快捷键。两行均不自动折行，极窄窗口截断；放大终端会恢复被隐藏的信息，中文、emoji 和 ANSI 着色均按实际列宽计算。
-- reasoning effort 直接跟在模型名后面，并与分隔线、编辑器上下边框共用颜色，覆盖全部 7 档（off 灰 / minimal 青绿 / low 暗绿 / medium 浅蓝 / high 粉红 / xhigh 洋红 / max 红；未知 effort 保持 dim，未设置时省略，`plain` 主题不着色）。provider 蓝、model 青、目录绿、preset 紫、附件青；Ready 绿、Working 黄。
+- 页面骨架：header 展示产品标题和 Session id，区域之间使用留白。输入框以 `›` 开头，空输入时显示 `Ask DeepSeek Harness to do anything`；提示不进入草稿或请求。面板通过终端实际背景混色，滚动时保留隐藏行数提示；执行等待/重试行位于输入框上方。输入框下方固定两行：`provider/model effort · ~/workspace · Ready · Context 42% used`，以及模式、原生权限与快捷键。字段以低对比度的 ` · ` 分隔，工作目录会将 home 简写为 `~`。
+- 状态栏按终端显示列宽自适应：宽屏补充 preset、附件数与已产生的 turns/steps/tok/s/tok/cache，零值计数和未知统计不占主状态行；窄屏缩短目录和字段标签、隐藏辅助字段，优先保留模型、Ready/Working、上下文和附件提示。模式与原生权限优先于快捷键。两行均不自动折行，极窄窗口截断；放大终端会恢复被隐藏的信息，中文、emoji 和 ANSI 着色均按实际列宽计算。
+- 模型名与 reasoning effort 统一使用柔和暖色，目录绿色、Ready 紫色；provider 和统计使用次级文本。推理选择控件保留 7 档颜色（off 灰 / minimal 青绿 / low 暗绿 / medium 浅蓝 / high 粉红 / xhigh 洋红 / max 红）；preset 保留紫色，附件和交互强调使用蓝色。Working、告警、危险权限和上下文阈值保留警示色；`plain` 主题不着色。
+- 启动时限时查询终端前景与背景；`auto` 随实际背景选择深浅配色。支持真彩色及 256 色降级，收到迟到的颜色回复或终端主题变化通知时刷新画面，并保留工具/context 展开状态；终端不响应时继续使用回退配色。
 - 上下文读 token meter 的 `contextPressure` 投影（最近一次 provider 采样 + 此后 surface 增减，包含 compaction 影响），首次 provider 采样前显示 `Context —`。接近自动压缩阈值时用黄色、达到阈值用红色；阈值按 `compaction-basic` 的 `thresholdRatio`、`headroomTokens` 与请求预留输出复算。`/context` 查看完整 token 数、容量、压缩阈值和构成明细。
 - token 用量与 cache 命中率按 Web 口径：总量取四桶之和、部分命中不会显示成 100%，数字格式与 Web 统计 pill 一致。`tok/s` 是整段 Session 的累计 decode 速率（`decodeTokens / (decodeMs / 1000)`），不是瞬时速率，低于 10 时保留一位小数。
 - 可选 `fullscreen`：TuiAltScreen + ScrollView，header/status/editor 固定，鼠标滚轮滚动、文本选择复制。向上滚动离开末尾后，视口末行显示可点击的 `↓ jump to latest`，点击回到最新消息并恢复自动跟随（也可 `Ctrl+End`）。
 - 长会话渲染优化：每个行组件按宽度缓存结果（`MemoBlock`），`maxTranscriptEntries` 默认 600 限制每帧保留的行组件数；帧间隔按上次绘制时刻对齐并按实测帧成本自适应，内容签名未变的帧跳过重绘。
 - 工具卡片与 PTC 摘要的动作标签统一首字母大写，MCP 前缀使用大写缩写；服务名、方法名、命令和路径保持原样。shell 为 `• Ran command` / `• Ran PS> command`，文件工具为 `• Read path` / `• Write path` / `• Edit path`，MCP 为 `• MCP service/tool`，PTC 为 `• Ran run_code`。shell 首行最多 120 字符，多行命令标记省略行数；路径与查询等标签最多 160 字符，路径保留末尾。展开后查看原命令，正文仍有安全预览上限。
 - 成功的 read 默认收起，write 新建文件显示带行号的源码预览；shell 保留末尾 5 个视觉行，通用结果保留前 10 个视觉行，随后显示省略行数与 Ctrl+O 提示。折叠状态仍展示错误正文。edit 和有实际更新 diff 的 write 使用 Host 变更元数据，展示 `(+N -N)`、行号、红绿增删行和附近上下文，默认最多 24 个 diff 行；超出计算预算的变更范围用 `~` 标记估算计数，整文件替换保留删除和新增两侧样本。空文件、行尾换行不虚增行数；没有实际 diff 时不推测旧内容。`/diff` 可分页查看会话记录的 diff，仍受预览上限约束。
-- 工具首行的 `•` 用颜色区分状态：黄色运行、绿色完成、红色失败、灰色停止，不额外增加完成提示行；标题保持单行，错误/停止原因继续展示，`plain` 主题不着色。write 在 Host 确认更新后可由 `Write` 改为 `Edit`。main-screen 已进入终端滚动历史的圆点延后到必要的完整重绘再刷新颜色，避免为变色清空历史；fullscreen 直接使用最新颜色。默认 main-screen 不支持点击卡片；fullscreen 下点击卡片首行可单独展开/收起。`Ctrl+O` 在两种模式下均切换所有保留工具卡片。
+- 工具首行的 `•` 用颜色区分状态：黄色运行、绿色完成、红色失败、灰色停止，不额外增加完成提示行；标题保持单行，错误/停止原因继续展示，`plain` 主题不着色。write 在 Host 确认更新后可由 `Write` 改为 `Edit`。main-screen 已进入终端滚动历史的圆点延后到必要的完整重绘再刷新颜色，避免为变色清空历史；fullscreen 直接使用最新颜色。默认 main-screen 不支持点击卡片；fullscreen 下点击卡片首行可单独展开/收起。`Ctrl+O` 在两种模式下均切换所有保留工具卡片和 context 正文。
 - 审批在屏幕下方突出实际命令、原因与 cwd，所有操作带编号：方向键或编号键移动选择，Enter 才确认，Esc 取消；详情页完整展示调用参数。单次允许显示 `✓ You approved … this time`，拒绝和取消分别显示真实结果。只提供 Host 声明的操作和授权范围，原生单次审批不会增加长期授权选项。
 - **main-screen 手动全局展开的代价**：视口上方的历史卡片高度变化时，pi-tui 会整屏重绘并清除终端 scrollback；Session 日志不受影响。这不属于自动结算零重绘的保证范围。只查看单次完整输出时，可使用 `/tools`、`/tool <index>` 的独立预览，避免全局重排。
 
@@ -162,8 +167,8 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 
 | 快捷键 | 作用 |
 |---|---|
-| `Ctrl+O` | 展开/收起所有保留的工具卡片；main-screen 可能重绘历史并清除终端 scrollback |
-| 点击工具卡片首行 | 仅 fullscreen：切换单张卡片的展开状态 |
+| `Ctrl+O` | 展开/收起保留的工具卡片和 context 正文；main-screen 可能重绘历史并清除终端 scrollback |
+| 点击工具或 context 首行 | 仅 fullscreen：切换该项的展开状态 |
 | `Ctrl+N` | 打开同 workspace、preset 的空白 Session，没有匹配项时新建 |
 | `Alt+S` | 打开 Session 选择器，切换时保留各自的草稿与附件 |
 | `Shift+Tab` | 输入框中循环切换当前模型提供的思考强度，保留草稿；弹窗中不触发 |

@@ -10,8 +10,8 @@ import { fileURLToPath } from 'node:url'
 import { stripTerminalSequences } from '@earendil-works/pi-tui'
 
 const repo = dirname(dirname(fileURLToPath(import.meta.url)))
-const menuRow = frame => frame.lines.findIndex(line => line.startsWith('› '))
-const promptRow = frame => frame.lines.findLastIndex(line => line.startsWith('> '))
+const menuRow = frame => frame.rawLines.findIndex(line => line.includes('\x1b[48;5;75;30m'))
+const promptRow = frame => frame.lines.findLastIndex(line => line.startsWith('› '))
 
 async function run(fullscreen, width) {
   const root = mkdtempSync(join(tmpdir(), 'dsh-native-tui-completion-'))
@@ -23,6 +23,7 @@ async function run(fullscreen, width) {
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
     for (const dir of [join(profile, 'node_modules'), workspace, join(root, 'agents'), join(root, 'bundled')]) mkdirSync(dir, { recursive: true })
     writeFileSync(join(workspace, 'package.json'), '{"private":true}')
+    writeFileSync(join(workspace, 'preview.md'), '# Preview\n\n`PREVIEW_CODE`\n')
     writeFileSync(join(profile, 'cordis.yml'), '[]\n')
     writeFileSync(join(profile, 'package.json'), JSON.stringify({ name: 'completion-profile', private: true,
       dependencies: { 'dsh-native-tui': 'link:' + repo }, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', 'dsh-native-tui'] } } }))
@@ -35,7 +36,8 @@ async function run(fullscreen, width) {
       '- id: agent-default-model', '  config:', '    provider: mock', '    model: completion-model', '',
     ].join('\n'))
     const env = { ...process.env, DSH_HOME: root, DSH_AGENTS_HOME: join(root, 'agents'), DSH_BUNDLED_SKILL_DIR: join(root, 'bundled'),
-      MOCK_API_KEY: 'dummy', TERM: 'xterm-256color', FAKE_TTY_COLUMNS: String(width), FAKE_TTY_GEOMETRY_LOG: log, FAKE_TTY_FRAME_SNAPSHOT: '1' }
+      MOCK_API_KEY: 'dummy', TERM: 'xterm-256color', FAKE_TTY_COLUMNS: String(width), FAKE_TTY_GEOMETRY_LOG: log,
+      FAKE_TTY_FRAME_SNAPSHOT: '1', FAKE_TTY_TRACE_OVERLAYS: '1' }
     delete env.DSH_PERMISSION_MODE; delete env.DSH_TOOLS_MODE
     child = spawn(process.execPath, ['--import', join(repo, 'scripts/fake-tty-chrome-trace.mjs'), join(repo, 'scripts/fake-tty-entry.mjs'), '--profile', 'tui'],
       { cwd: workspace, env, stdio: ['pipe', 'pipe', 'pipe'] })
@@ -55,14 +57,15 @@ async function run(fullscreen, width) {
       return frames().at(-1)
     }
     const draft = frame => frame?.lines[promptRow(frame)]?.trimEnd()
-    const initial = await waitFor(frame => frame?.status.includes('Ready') && draft(frame) === '>', 'startup')
+    const empty = frame => draft(frame) === '› Ask DeepSeek Harness to do anything'
+    const initial = await waitFor(frame => frame?.status.includes('Ready') && empty(frame), 'startup')
     const footerDistance = initial.lines.length - promptRow(initial)
     child.stdin.write('/')
     const menu = await waitFor(frame => frame?.lines[menuRow(frame)]?.startsWith('› /help'), 'command menu')
     assert.ok(menuRow(menu) < promptRow(menu), 'command menu must be above the input')
     assert.equal(menu.lines.length - promptRow(menu), footerDistance, 'input must stay beside the footer')
     assert.ok(menu.rawLines[menuRow(menu)].includes('\x1b[48;5;75;30m'), 'selection must use the full-row blue band')
-    assert.equal(menu.lines.filter(line => /^(?:› | {2})\//u.test(line)).length, 8)
+    assert.equal(menu.lines.slice(0, promptRow(menu) - 1).filter(line => /^(?:› | {2})\//u.test(line)).length, 8)
     if (width >= 80) assert.ok(menu.lines[menuRow(menu)].includes('show local and host commands'))
     if (fullscreen) assert.equal(menu.editorRow, initial.editorRow, 'fullscreen input must stay anchored')
     child.stdin.write('\x1b[B')
@@ -70,30 +73,42 @@ async function run(fullscreen, width) {
     child.stdin.write('\x1b[A')
     await waitFor(frame => frame?.lines[menuRow(frame)]?.startsWith('› /help'), 'up arrow')
     child.stdin.write('\t')
-    await waitFor(frame => draft(frame) === '> /help' && menuRow(frame) < 0, 'Tab insertion')
+    await waitFor(frame => draft(frame) === '› /help' && menuRow(frame) < 0, 'Tab insertion')
     child.stdin.write('\r')
-    await waitFor(frame => draft(frame) === '>' && frame.lines.some(line => line.includes('Host commands:')), 'help command')
+    await waitFor(frame => empty(frame) && frame.lines.some(line => line.includes('Host commands:')), 'help command')
     child.stdin.write('/he')
-    await waitFor(frame => draft(frame) === '> /he' && frame.lines[menuRow(frame)]?.startsWith('› /help'), 'command filtering')
+    await waitFor(frame => draft(frame) === '› /he' && frame.lines[menuRow(frame)]?.startsWith('› /help'), 'command filtering')
     child.stdin.write('\r')
-    await waitFor(frame => draft(frame) === '>' && menuRow(frame) < 0, 'Enter selection')
+    await waitFor(frame => empty(frame) && menuRow(frame) < 0, 'Enter selection')
     child.stdin.write('/provider ')
     await waitFor(frame => frame?.lines[menuRow(frame)]?.startsWith('› add'), 'subcommands')
     child.stdin.write('\x1b[B')
     await waitFor(frame => frame?.lines[menuRow(frame)]?.startsWith('› list'), 'subcommand selection')
     child.stdin.write('\t')
-    await waitFor(frame => draft(frame) === '> /provider list', 'subcommand insertion')
+    await waitFor(frame => draft(frame) === '› /provider list', 'subcommand insertion')
     child.stdin.write('\r')
-    await waitFor(frame => draft(frame) === '>' && frame.lines.some(line => line.includes('Configured third-party providers:')), 'provider list')
+    await waitFor(frame => empty(frame) && frame.lines.some(line => line.includes('Configured third-party providers:')), 'provider list')
     child.stdin.write('/he')
     const filtered = await waitFor(frame => frame?.lines[menuRow(frame)]?.startsWith('› /help'), 'reopen menu')
     if (fullscreen) {
       const position = '4;' + (menuRow(filtered) + 1)
       child.stdin.write('\x1b[<0;' + position + 'M\x1b[<0;' + position + 'm')
-      await waitFor(frame => draft(frame) === '> /help' && menuRow(frame) < 0, 'mouse completion')
+      await waitFor(frame => draft(frame) === '› /help' && menuRow(frame) < 0, 'mouse completion')
     }
     child.stdin.write('\x1b')
-    await waitFor(frame => draft(frame) === '>' && menuRow(frame) < 0, 'Escape clears draft')
+    await waitFor(frame => empty(frame) && menuRow(frame) < 0, 'Escape clears draft')
+    const inspectOverlay = async (command, heading, expected, color) => {
+      const offset = out.length
+      child.stdin.write(command + '\r')
+      await waitFor(frame => frame?.overlay && frame.lines.some(line => line.includes(heading))
+        && frame.lines.some(line => line.includes(expected)) && frame.rawLines.some(line => line.includes(color)), command)
+      assert.ok(out.slice(offset).includes(color), command + ': expected palette style must survive the overlay')
+      child.stdin.write('\x1b')
+      await waitFor(frame => !frame?.overlay && empty(frame) && menuRow(frame) < 0, 'close ' + command)
+    }
+    await inspectOverlay('/model', 'Select model', 'mock/completion-model', '\x1b[48;5;75;30m')
+    await inspectOverlay('/settings', 'TUI settings', 'Thinking display', '\x1b[48;5;75;30m')
+    await inspectOverlay('/open preview.md', 'Markdown ·', 'PREVIEW_CODE', '\x1b[38;5;117m')
     assert.ok(!frames().some(frame => frame.overflow), 'rows must stay within the terminal width')
     assert.equal(requests, 0, 'local command completion must not call the model')
     child.stdin.write('\x04')
@@ -105,7 +120,7 @@ async function run(fullscreen, width) {
     } finally { clearTimeout(deadline) }
     const [code, signal] = exit
     assert.equal(signal, null); assert.equal(code, 0)
-    console.log(label, 'PASS: upward menu; blue selection; keyboard; subcommands; footer anchor' + (fullscreen ? '; mouse' : ''))
+    console.log(label, 'PASS: upward menu; blue selection; keyboard; subcommands; footer anchor; model/settings selection; Markdown preview' + (fullscreen ? '; mouse' : ''))
   } catch (error) {
     console.error(label, 'stdout', stripTerminalSequences(out).slice(-4000), 'stderr', err.slice(-3000))
     throw error

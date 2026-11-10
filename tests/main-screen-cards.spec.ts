@@ -325,7 +325,7 @@ describe('main-screen chrome stability', () => {
         const state = tui.captureRenderState()
         return {
           status: state.previousLines.findIndex(line => line.includes('CHROME STATUS')) - state.previousViewportTop,
-          editor: state.previousLines.findIndex(line => line.startsWith('> ')) - state.previousViewportTop,
+          editor: state.previousLines.findIndex(line => line.startsWith('› ')) - state.previousViewportTop,
         }
       }
       const before = rows()

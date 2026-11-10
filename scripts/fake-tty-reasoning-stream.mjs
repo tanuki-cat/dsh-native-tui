@@ -147,7 +147,7 @@ let firstFrameComplete = false
 const started = Date.now()
 const tick = setInterval(() => {
   const text = strip(out)
-  if (text.includes('⟳ working ·')) waitingSeen = true
+  if (text.includes('• Working (')) waitingSeen = true
   if (phase === 'editor' && text.includes('enter send')) {
     phase = 'model'
     try { child.stdin.write('/model mock/mock-model\r') } catch {}

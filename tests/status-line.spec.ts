@@ -40,13 +40,13 @@ const full = (bar: StatusBar): string => bar.render(1000)[0]!
 describe('renderStatusRows', () => {
   it('keeps the title and session in the header and moves cwd to the status bar', () => {
     const { state, status } = painted()
-    expect(state.header).toBe('◆ Test TUI\nsession-1')
+    expect(state.header).toBe('Test TUI\nsession-1')
     expect(full(status)).toContain('/tmp/work')
   })
 
   it('groups model and effort, workspace, state, context and metrics with dots', () => {
     const { status, footer } = painted({ attachmentCount: 2 })
-    expect(full(status)).toBe('provider/model max · /tmp/work · Ready · Context 40% used · attached 2 · preset ptc · 2 turns · 3 steps · 50 tok/s · 0 tok · cache —')
+    expect(full(status)).toBe('provider/model max · /tmp/work · Ready · Context 40% used · attached 2 · preset ptc · 2 turns · 3 steps · 50 tok/s')
     expect(full(footer)).toBe('enter send · shift+tab think · /help · ctrl+d exit')
   })
 
@@ -88,18 +88,26 @@ describe('renderStatusRows', () => {
     expect(full(footer)).toBe('enter steer · esc cancel · ctrl+c cancel · ctrl+d exit')
   })
 
-  it('colors model, reasoning, workspace, preset, attachments and context', () => {
+  it('distinguishes the warm model, green workspace and violet idle state', () => {
     const { status } = painted({ attachmentCount: 2, contextMeter: { tokens: 700_000 } }, 'dark')
     const line = full(status)
-    expect(line).toContain('\u001B[34mprovider')
-    expect(line).toContain('\u001B[36mmodel')
-    expect(line).toContain('\u001B[38;5;196mmax')
-    expect(line).toContain('\u001B[32m/tmp/work')
+    expect(line).toContain('\u001B[2mprovider')
+    const palette = createPalette('dark')
+    expect(line).toContain(palette.bold(palette.model('model max')))
+    expect(line).toContain(palette.workspace('/tmp/work'))
+    expect(line).toContain(palette.ready('Ready'))
+    expect(line).not.toContain(palette.error('max'))
     expect(line).toContain('\u001B[38;5;141mptc')
-    expect(line).toContain('\u001B[36mattached 2')
+    expect(line).toContain('\u001B[38;5;117mattached 2')
     expect(line).toContain('\u001B[33mContext 70% used')
     expect(full(painted({ interactionMode: 'off', permissionPreset: 'danger-full-access' }, 'dark').footer))
       .toContain('\u001B[33mdanger-full-access')
+  })
+
+  it('omits empty usage statistics before a model has run without inventing context', () => {
+    const { status } = painted({ stats: undefined, events: [], contextMeter: {} })
+    expect(full(status)).toContain('Context —')
+    expect(full(status)).not.toMatch(/0 turns|0 steps|0 tok|— tok\/s|cache —/u)
   })
 
   it('uses the actual compaction trigger for the context warning color', () => {

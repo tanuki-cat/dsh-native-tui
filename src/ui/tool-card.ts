@@ -41,6 +41,8 @@ export class ToolCard implements Component {
     this.component = undefined
   }
 
+  get isExpanded(): boolean { return this.expanded }
+
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
     if (event.type !== 'click' || event.button !== 'left' || event.y !== 0 || event.shift || event.alt || event.ctrl) return undefined
     this.setExpanded(!this.expanded)

@@ -26,7 +26,8 @@ import { TuiAutocompleteProvider, type SessionReferenceService, type SkillSugges
 import { currentPreset, renderStatusRows, terminalWindowTitle } from './status-line.js'
 import { createStatusRows } from './status-rows.js'
 import { StatusBar } from './status-bar.js'
-import { createPalette, editorTheme, markdownTheme, type Palette } from './theme.js'
+import { editorTheme, markdownTheme, type Palette } from './theme.js'
+import { createTerminalTheme } from './terminal-theme.js'
 import { debug } from '../debug.js'
 import { globalShortcut } from './keymap.js'
 import { LOCAL_COMMANDS } from './commands/catalog.js'
@@ -42,10 +43,9 @@ import { streamingRowKey, type TranscriptBlock, type TranscriptEntry } from './t
 import { frameCostMs, frameOverrunMs, nextFrameDelay, nextStreamInterval, STREAM_MIN_INTERVAL_MS, transcriptFrameChanged } from './stream-pacing.js'
 import { TranscriptRenderer } from './transcript-renderer.js'
 import { TranscriptMainScreen } from './transcript-main-screen.js'
-import { WAIT_ROW_TICK_MS, WaitStatusLine, waitingText, type WaitRetry } from './waiting.js'
+import { WAIT_ROW_TICK_MS, WaitStatusLine, TurnStatus, type WaitRetry } from './waiting.js'
 import { holdProcessWarnings, type WarningGuard } from './warnings.js'
 import { consoleTone, holdConsoleOutput, type ConsoleGuard } from './console-guard.js'
-import { Rule } from './rule.js'
 import { scrollToEndLabel } from './scroll-indicator.js'
 import { PromptEditor } from './prompt-editor.js'
 import { wireImageInput } from './image-input.js'
@@ -117,7 +117,8 @@ export async function startTerminalApp(
   config: ResolvedConfig,
   onExit: (code: number) => void,
 ): Promise<TerminalApp> {
-  const palette: Palette = createPalette(config.theme)
+  const terminalTheme = createTerminalTheme(config.theme)
+  const palette: Palette = terminalTheme.palette
   let reasoningEffort: string | undefined
   const terminal = new ProcessTerminal()
   const tui = config.fullscreen
@@ -131,16 +132,17 @@ export async function startTerminalApp(
     })
     : new TranscriptMainScreen(terminal, false)
   // Every row uses the width the terminal reports: no stored horizontal inset,
-  // so transcript, status, prompt, and the divider rules share one left edge
+  // so transcript, status and prompt share one left edge
   // and stay aligned through a resize.
   const header = new Text('', 0, 0)
-  const headerRule = new Rule(text => palette.dim(text))
-  const statusRule = new Rule(text => palette.reasoning(reasoningEffort)(text))
+  const headerGap = new Spacer(1)
+  const composerGap = new Spacer(1)
   const status = new StatusBar(palette.dim(' · '))
   const footer = new StatusBar(palette.dim(' · '))
   const waitStatus = new WaitStatusLine(palette)
-  // The native padding reserves the prompt gutter without shifting the full-width borders.
-  const editor = new PromptEditor(tui, editorTheme(palette, () => reasoningEffort), palette.autocompleteSelection)
+  // Native padding reserves the gutter while the input surface fills the width.
+  const editor = new PromptEditor(tui, editorTheme(palette), palette.autocompleteSelection, palette.dialogBand)
+  editor.placeholder = 'Ask DeepSeek Harness to do anything'
   const markdown = markdownTheme(palette)
   const renderer = new TranscriptRenderer({
     showReasoning: config.showReasoning,
@@ -152,14 +154,14 @@ export async function startTerminalApp(
   })
 
   // Vertical breathing room only: the transcript shares the full-width column
-  // with the header, status, prompt, and rules.
+  // with the header, status and prompt.
   const transcript = new Box(0, 1)
   transcript.addChild(renderer.container)
 
   if (tui instanceof TuiAltScreen) {
     tui.setLayoutRoot(new VStack([
       { component: header, basis: 'auto' },
-      { component: headerRule, basis: 'auto' },
+      { component: headerGap, basis: 'auto' },
       { component: new Spacer(1), basis: 'auto' },
       {
         component: new ScrollView(transcript, { follow: 'end', primary: true, overscroll: 'chain' }),
@@ -167,7 +169,7 @@ export async function startTerminalApp(
         grow: 1,
         minSize: 1,
       },
-      { component: statusRule, basis: 'auto' },
+      { component: composerGap, basis: 'auto' },
       { component: waitStatus, basis: 'auto' },
       { component: editor, basis: 'auto' },
       { component: status, basis: 'auto' },
@@ -175,10 +177,10 @@ export async function startTerminalApp(
     ]))
   } else {
     tui.addChild(header)
-    tui.addChild(headerRule)
+    tui.addChild(headerGap)
     tui.addChild(new Spacer(1))
     tui.addChild(transcript)
-    tui.addChild(statusRule)
+    tui.addChild(composerGap)
     tui.addChild(waitStatus)
     tui.addChild(editor)
     tui.addChild(status)
@@ -263,9 +265,7 @@ export async function startTerminalApp(
   let painted = { revision: -1, wait: '' }
   /** performance.now() of the last frame that actually requested a paint. */
   let lastPaintAt = 0
-  /** Epoch ms the active turn began, undefined when idle. */
-  let waitSince: number | undefined
-  let waitRetry: WaitRetry | undefined
+  const turnStatus = new TurnStatus()
   let waitTicker: ReturnType<typeof setInterval> | undefined
   let unsubscribeSession: (() => void) | undefined
   let interactionDisposers: Array<() => void> = []
@@ -332,8 +332,7 @@ export async function startTerminalApp(
     frameDueAt = undefined
     const started = performance.now()
     renderer.set(entries, localNotices)
-    const pending = waitingBlock()
-    const pendingText = pending === undefined ? '' : pending.text
+    const pendingText = turnStatus.text()
     waitStatus.setText(pendingText)
     if (renderer.contentChanged) transcriptRevision += 1
     const revision = transcriptRevision
@@ -407,25 +406,17 @@ export async function startTerminalApp(
     waitTicker = undefined
   }
 
-  /** Clear execution status when the turn settles or the session changes. */
+  /** Clear live status and the last receipt when leaving the session. */
   const clearWait = (): void => {
-    waitSince = undefined
-    waitRetry = undefined
+    turnStatus.clear()
     stopWaitTicker()
   }
 
   /** Execution status follows Host events, never receipt or playback of text. */
   const beginWait = (retry?: WaitRetry): void => {
-    waitSince ??= Date.now()
-    waitRetry = retry
+    turnStatus.begin(retry)
     if (waitTicker === undefined) waitTicker = setInterval(() => { scheduleTranscript(true) }, WAIT_ROW_TICK_MS)
     scheduleTranscript(true)
-  }
-
-  const waitingBlock = (): (TranscriptBlock & { readonly kind: 'waiting' }) | undefined => {
-    const now = Date.now()
-    if (waitSince === undefined) return undefined
-    return { kind: 'waiting', text: waitingText(waitSince, waitRetry, now) }
   }
 
   const pushNotice = (tone: 'info' | 'warning' | 'error' | 'success', text: string): void => {
@@ -554,7 +545,7 @@ export async function startTerminalApp(
       sessionId: () => active.id,
       appendEntry: entry => {
         const chunk = entry.type === 'live' ? entry.event.data.chunk : undefined
-        if (chunk !== undefined) waitRetry = undefined
+        if (chunk !== undefined) turnStatus.resume()
         if (chunk?.type === 'text-delta' || chunk?.type === 'reasoning-delta') {
           debug(`stream chunk: ${chunk.type} ${String(chunk.text.length)} chars`)
         }
@@ -581,7 +572,7 @@ export async function startTerminalApp(
       attemptPosition: id => attemptPositions.get(id),
       beginWait,
       retryScheduled: retry => beginWait(retry),
-      endWait: clearWait,
+      endWait: reason => { turnStatus.finish(reason); stopWaitTicker() },
     })
     scheduleTranscript(true)
     renderStatus()
@@ -831,6 +822,7 @@ export async function startTerminalApp(
   const dispose = async (reportSession = true): Promise<void> => {
     if (disposed) return
     disposed = true
+    terminalTheme.dispose()
     editor.cancelPendingInput()
     interactionAbort.abort(new Error('native-tui: terminal disposed'))
     disposeInteractions()
@@ -954,6 +946,7 @@ export async function startTerminalApp(
     warmTranscript()
     subscribeActive()
     tui.start()
+    terminalTheme.connect(tui, () => { renderer.refreshPalette(); paintStatus(); tui.requestRender(true) })
     tui.setFocus(editor)
     tui.requestRender()
     void refreshContextWindow()

@@ -17,6 +17,40 @@ const render = (block: TranscriptBlock, theme: 'plain' | 'dark' | 'light' = 'pla
 }
 
 describe('compact transcript presentation', () => {
+  it.each(['dark', 'light', 'plain'] as const)('uses quiet compaction progress and truthful receipts in %s', theme => {
+    const labels = { running: 'Compacting…', done: 'Context compacted', error: 'Failed to compact context', interrupted: 'Interrupted while compacting context' }
+    let heading: string | undefined
+    for (const state of ['running', 'done', 'error', 'interrupted'] as const) {
+      const rows = render({ kind: 'compaction', compactionId: 'c', state, summary: 'Summary',
+        ...(state === 'error' ? { error: 'Failure detail' } : {}),
+      }, theme, 60)
+      heading ??= rows[0]
+      expect(rows[0]).toBe(heading)
+      const plain = rows.map(stripTerminalSequences).join('\n')
+      expect(plain).toContain('• Compact context')
+      expect(plain).toContain('  Summary')
+      expect(plain).toContain(labels[state])
+      expect(plain).not.toMatch(/◆|⟳|✓ done|│/u)
+      if (state === 'error') expect(plain).toContain('Failure detail')
+      if (state === 'interrupted') expect(plain).toContain('Stopped before it committed')
+      expect(rows.every(row => visibleWidth(row) <= 60)).toBe(true)
+      if (theme === 'plain') expect(rows.join('\n')).not.toContain('\x1b')
+    }
+  })
+
+  it.each(['dark', 'light'] as const)('uses a neutral padded user surface and plain Markdown hierarchy in %s', theme => {
+    const palette = createPalette(theme)
+    const lines = render({ kind: 'user', text: 'Please review\nsecond line' }, theme, 60)
+    const plain = lines.map(stripTerminalSequences)
+    expect(plain[0]?.trim()).toBe('')
+    expect(plain[1]).toContain('› Please review')
+    expect(plain[2]).toContain('  second line')
+    expect(plain.at(-1)?.trim()).toBe('')
+    expect(lines.join('\n')).toContain(theme === 'dark' ? '48;5;238' : '48;5;255')
+    expect(lines.join('\n')).not.toContain('48;5;23m')
+    expect(markdownTheme(palette).heading('Heading')).toBe(palette.bold('Heading'))
+    expect(lines.every(line => visibleWidth(line) <= 60)).toBe(true)
+  })
   it('puts shell output directly under a stable bullet heading without a card background', () => {
     const lines = render(tool(), 'dark')
     expect(lines.map(stripTerminalSequences).map(line => line.trimEnd())).toEqual(['• Ran pnpm check', '  └ PASS'])

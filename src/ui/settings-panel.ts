@@ -13,17 +13,19 @@
 
 import {
   Input,
-  SelectList,
   SettingsList,
   Text,
   type Component,
   type SettingItem,
+  type SelectList,
   type SettingsListTheme,
   type TUI,
 } from '@earendil-works/pi-tui'
 import type { ChoiceItem } from './dialogs.js'
 import { bindAbort, dialogFrame } from './dialogs.js'
-import { selectTheme, type Palette } from './theme.js'
+import type { Palette } from './theme.js'
+import { ChoiceList } from './choice-list.js'
+import { selectionRows } from './selection-row.js'
 
 /** Sentinel a field submenu returns to remove the saved override. */
 export const SETTINGS_RESET = '\u0000reset'
@@ -69,10 +71,10 @@ export interface SettingsPanelContext {
 
 function panelTheme(palette: Palette): SettingsListTheme {
   return {
-    label: (text, selected) => selected ? palette.bold(palette.accent(text)) : text,
-    value: (text, selected) => selected ? palette.bold(palette.accent(text)) : palette.dim(text),
+    label: text => text,
+    value: (text, selected) => selected ? text : palette.dim(text),
     description: text => palette.dim(text),
-    cursor: palette.accent('▸ '),
+    cursor: '› ',
     hint: text => palette.dim(text),
   }
 }
@@ -113,7 +115,7 @@ class SettingsPanel implements Component {
     return dialogFrame([
       ...new Text(this.spec.title(), 0, 0).render(inner),
       '',
-      ...this.list.render(inner),
+      ...selectionRows(this.list.render(inner), inner, this.palette.autocompleteSelection, '› '),
       '',
       ...new Text(this.palette.dim(this.spec.hint), 0, 0).render(inner),
     ], width, this.palette)
@@ -192,14 +194,10 @@ class ChoiceSubmenu implements Component {
     onCancel: () => void,
     selected?: string,
   ) {
-    this.list = new SelectList(
-      items.map(item => ({
-        value: item.value,
-        label: item.label,
-        ...(item.description === undefined ? {} : { description: item.description }),
-      })),
+    this.list = new ChoiceList(
+      items,
       Math.min(10, Math.max(1, items.length)),
-      selectTheme(palette),
+      palette,
     )
     if (selected !== undefined) {
       const index = items.findIndex(item => item.label === selected || item.value === selected)
@@ -250,7 +248,7 @@ class InputSubmenu implements Component {
     onSubmit: (value: string) => void,
     onCancel: () => void,
   ) {
-    this.input = new Input({ prompt: '> ', placeholder })
+    this.input = new Input({ prompt: '› ', placeholder })
     if (initialValue !== undefined) {
       this.input.setValue(initialValue)
       // setValue places the cursor before the text; a prefilled field should

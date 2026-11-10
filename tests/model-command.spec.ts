@@ -2,6 +2,7 @@ import { describe, expect, it, onTestFinished } from 'vitest'
 import type { CommandContext } from '../src/ui/commands/context.js'
 import { modelCommand } from '../src/ui/commands/model.js'
 import { createPalette } from '../src/ui/theme.js'
+import { createTerminalTheme } from '../src/ui/terminal-theme.js'
 
 interface Overlay { render(width: number): string[]; handleInput(data: string): void }
 interface Notice { readonly tone: string; readonly text: string }
@@ -64,6 +65,30 @@ const models = (id: string) => [{ id, name: id }]
 const flushUpdates = () => new Promise<void>(resolve => { setImmediate(resolve) })
 
 describe('/model live catalogs', () => {
+  it('renders localized semantic badges after sanitizing labels and preserves badge filtering', async () => {
+    const h = harness({
+      listProviders: () => [{ id: 'p' }],
+      listModels: async () => [
+        { id: 'm', name: 'Model', badge: { text: { en: 'New', zh: '新模型\x1b]52;c;BAD\x07' }, tone: 'info' } },
+        { id: 'n', name: 'Other' },
+      ],
+      resolveModelInfo: async () => ({}),
+    }, { resolveText: (text: { zh: string }) => text.zh })
+    const theme = createTerminalTheme('auto', 'truecolor')
+    Object.assign(h.ctx, { palette: theme.palette })
+    const run = h.run(), picker = await h.picker
+    picker.handleInput('\x1b[B')
+    expect(textOf(picker)).toContain('\x1b[38;5;117m[新模型]')
+    expect(textOf(picker)).not.toContain('BAD')
+    theme.update({ background: { r: 255, g: 255, b: 255 } })
+    expect(textOf(picker)).toContain('\x1b[38;5;25m[新模型]')
+    picker.handleInput('新模型')
+    expect(textOf(picker)).not.toContain('Other')
+    picker.handleInput('\r')
+    await run
+    expect(h.ctx.modelSelection.current).toEqual({ provider: 'p', model: 'm' })
+  })
+
   it('reloads only the provider named by a catalog event', async () => {
     const calls: string[] = []
     const h = harness({ listProviders: () => [{ id: 'p' }, { id: 'q' }], listModels: async (id: string) => { calls.push(id); return models(calls.length <= 2 ? 'old' : 'new') } })

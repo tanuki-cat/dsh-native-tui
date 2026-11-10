@@ -5,8 +5,8 @@
  */
 
 import { collectToolCalls } from '../../runtime/tool-log.js'
-import { diffLines } from '../diff.js'
-import { showTextPager } from '../dialogs.js'
+import { DiffPreview } from '../diff-preview.js'
+import { showComponentPager, showTextPager } from '../dialogs.js'
 import type { CommandContext } from './context.js'
 import { NL } from './shared.js'
 
@@ -78,14 +78,6 @@ export async function diffCommand(ctx: CommandContext, args: string): Promise<vo
   }
   if (entry === undefined)
     return
-  const lines = [ctx.palette.bold('Diff · ' + entry.call.name + ' · ' + entry.call.callId)]
-  for (const diff of entry.call.diffs ?? []) {
-    lines.push(ctx.palette.bold(ctx.palette.accent('diff ' + diff.path)))
-    for (const row of diffLines(diff.oldText, diff.newText, 120)) {
-      lines.push(row.kind === 'add'
-        ? ctx.palette.success('+ ' + row.text)
-        : row.kind === 'remove' ? ctx.palette.error('- ' + row.text) : ctx.palette.dim('  ' + row.text))
-    }
-  }
-  await showTextPager(ctx.tui, ctx.palette, 'Diff · ' + entry.call.name, lines.join('\n'), ctx.signal)
+  await showComponentPager(ctx.tui, ctx.palette, 'Diff · ' + entry.call.name + ' · ' + entry.call.callId,
+    new DiffPreview(entry.call.diffs ?? [], ctx.palette), ctx.signal)
 }

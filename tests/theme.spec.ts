@@ -90,14 +90,12 @@ describe('reasoning colors', () => {
     expect(createPalette('plain').contextBucket('tools')('x')).toBe('x')
   })
 
-  it('uses the effort color for editor borders and follows changes', () => {
-    let effort: string | undefined = 'low'
-    const palette = createPalette('dark')
-    const theme = editorTheme(palette, () => effort)
-    expect(theme.borderColor?.('─')).toContain('38;5;28')
-    effort = 'max'
-    expect(theme.borderColor?.('─')).toContain('38;5;196')
-    expect(editorTheme(palette).borderColor?.('─')).toBe(palette.dim('─'))
+  it('keeps editor chrome neutral while reasoning remains distinguishable', () => {
+    for (const theme of ['dark', 'light', 'plain'] as const) {
+      const palette = createPalette(theme)
+      expect(editorTheme(palette).borderColor?.('↑ 2')).toBe(palette.dim('↑ 2'))
+      if (!palette.plain) expect(palette.reasoning('max')('max')).not.toBe(palette.dim('max'))
+    }
   })
 })
 

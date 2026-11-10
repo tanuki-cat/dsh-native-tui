@@ -1,10 +1,11 @@
-import { Editor, matchesKey, sliceByColumn, stripTerminalSequences, truncateToWidth, visibleWidth, type AutocompleteProvider, type EditorTheme, type TUI, type TuiMouseEvent, type TuiMouseEventResult } from '@earendil-works/pi-tui'
+import { CURSOR_MARKER, Editor, matchesKey, renderFakeCursor, sliceByColumn, stripTerminalSequences, truncateToWidth, visibleWidth, type AutocompleteProvider, type EditorTheme, type TUI, type TuiMouseEvent, type TuiMouseEventResult } from '@earendil-works/pi-tui'
 import { PasteInput } from './paste-input.js'
+import { selectedRow } from './selection-row.js'
 
-// Header, dividers, waiting/status rows and one transcript row stay visible.
+// Header, spacing, waiting/status rows and one transcript row stay visible.
 const COMPLETION_CHROME_ROWS = 9
 
-/** A native editor with a display-only prompt in its reserved left padding. */
+/** A shaded native editor with a display-only prompt in its reserved padding. */
 export class PromptEditor extends Editor {
   private bottomBorder = ''
   private nativeInputHeight = 0
@@ -15,8 +16,10 @@ export class PromptEditor extends Editor {
   attachmentRow?: (width: number) => string | undefined
   onPaste?: (text: string) => string | Promise<string>
   onRemoveAttachment?: () => boolean
+  placeholder = ''
 
-  constructor(tui: TUI, theme: EditorTheme, private readonly highlightSuggestion = theme.selectList.selectedText) {
+  constructor(tui: TUI, theme: EditorTheme, private readonly highlightSuggestion = theme.selectList.selectedText,
+    private readonly surface: (text: string) => string = text => text) {
     super(tui, theme, { paddingX: 2 })
     this.pasteInput = new PasteInput(text => this.onPaste?.(text) ?? text,
       data => this.handleNativeInput(data), () => tui.requestRender())
@@ -54,8 +57,12 @@ export class PromptEditor extends Editor {
     })
   }
 
+  protected override renderTopBorder(width: number, hiddenLineCount: number): string {
+    return super.renderTopBorder(width, hiddenLineCount).replaceAll('─', ' ')
+  }
+
   protected override renderBottomBorder(width: number, hiddenLineCount: number): string {
-    this.bottomBorder = super.renderBottomBorder(width, hiddenLineCount)
+    this.bottomBorder = super.renderBottomBorder(width, hiddenLineCount).replaceAll('─', ' ')
     return this.bottomBorder
   }
 
@@ -72,12 +79,19 @@ export class PromptEditor extends Editor {
     const padding = Math.min(this.getPaddingX(), Math.max(0, Math.floor((width - 1) / 2)))
     this.renderedPadding = padding
     this.menuRows = []
-    if (padding > 0 && lines[1] !== undefined) {
-      lines[1] = this.borderColor('>'.padEnd(padding)) + lines[1].slice(padding)
+    if (this.getText() === '' && this.placeholder !== '' && lines[1] !== undefined) {
+      const available = Math.max(1, width - padding * 2)
+      const hint = stripTerminalSequences(truncateToWidth(this.placeholder, available, ''))
+      const body = this.focused ? CURSOR_MARKER + renderFakeCursor(hint.slice(0, 1) || ' ') + hint.slice(1) : hint
+      lines[1] = ' '.repeat(padding) + this.borderColor(body) + ' '.repeat(Math.max(0, width - padding - visibleWidth(body)))
     }
+    if (padding > 0 && lines[1] !== undefined) {
+      lines[1] = this.borderColor('›'.padEnd(padding)) + lines[1].slice(padding)
+    }
+    const bottom = lines.lastIndexOf(this.bottomBorder)
+    for (let index = 0; index <= bottom; index += 1) lines[index] = this.surface(lines[index]!)
     const cursor = this.getCursor()
     if (!this.isShowingAutocomplete() || !this.getLines()[cursor.line]?.startsWith('/')) return lines
-    const bottom = lines.lastIndexOf(this.bottomBorder)
     if (bottom < 1 || bottom === lines.length - 1) return lines
     const input = lines.slice(0, bottom + 1)
     const menu = lines.slice(bottom + 1)
@@ -113,6 +127,6 @@ export class PromptEditor extends Editor {
       : sliceByColumn(line, padding, Math.max(1, width - padding * 2)).trimEnd()
     const clipped = truncateToWidth(body, Math.max(1, width), '')
     const row = clipped + ' '.repeat(Math.max(0, width - visibleWidth(clipped)))
-    return selected ? this.highlightSuggestion(row) : row
+    return selected ? selectedRow(row, width, this.highlightSuggestion) : row
   }
 }

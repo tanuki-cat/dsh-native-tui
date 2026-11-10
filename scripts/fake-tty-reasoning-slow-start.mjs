@@ -158,7 +158,7 @@ const started = Date.now()
 const tick = setInterval(() => {
   const text = strip(out)
   if (placeholderAt === undefined && text.includes('thinking …')) placeholderAt = Date.now() - started
-  if (waitingAt === undefined && text.includes('⟳ working ·')) waitingAt = Date.now() - started
+  if (waitingAt === undefined && text.includes('• Working (')) waitingAt = Date.now() - started
   if (phase === 'editor' && text.includes('enter send')) {
     phase = 'model'
     try { child.stdin.write('/model mock/mock-model\r') } catch {}

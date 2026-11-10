@@ -90,28 +90,28 @@ export function renderStatusRows(
 ): void {
   const label = (value: string): string => sanitizeTerminalText(value).replace(/[\n\t]/gu, ' ').trim()
   rows.header.setText(
-    palette.bold(palette.brand('◆ ' + label(input.title))) + '\n'
+    palette.bold(label(input.title)) + '\n'
     + palette.dim(label(input.sessionId)),
   )
   const state = input.running
     ? palette.warning('Working')
-    : palette.success('Ready')
+    : palette.ready('Ready')
   const thinking = input.reasoningEffort === undefined ? ''
-    : ' ' + palette.reasoning(input.reasoningEffort)(label(String(input.reasoningEffort)))
+    : ' ' + label(String(input.reasoningEffort))
   const metrics = fold === undefined
     ? collectSessionMetrics(input.events as never, input.stats, input.contextWindow, input.contextMeter)
     : fold(input.events as never, input.stats, input.contextWindow, input.contextMeter)
   const split = splitSessionMetrics(formatSessionMetrics(metrics))
-  const model = palette.bold(palette.accent(label(input.model))) + thinking
+  const model = palette.bold(palette.model(label(input.model) + thinking))
   const cwd = workspacePath(label(input.cwd))
   const status: StatusSegment[] = [{
-    text: palette.brand(label(input.provider))
+    text: palette.dim(label(input.provider))
     + palette.dim('/')
     + model,
     compact: model,
   }, {
-    text: palette.success(cwd),
-    compact: palette.success(cwd.split(/[\\/]/u).filter(Boolean).at(-1) ?? cwd),
+    text: palette.workspace(cwd),
+    compact: palette.workspace(cwd.split(/[\\/]/u).filter(Boolean).at(-1) ?? cwd),
     priority: 2,
   }, { text: state }]
   const percent = metrics.contextPercent
@@ -122,9 +122,9 @@ export function renderStatusRows(
   })
   if (input.attachmentCount > 0) status.push({ text: palette.accent('attached ' + String(input.attachmentCount)) })
   if (input.preset !== undefined) status.push({ text: palette.dim('preset ') + palette.preset(label(input.preset)), priority: 3 })
-  status.push(...split.usage.split('  ·  ').map((text, index) => ({
+  status.push(...split.usage.split('  ·  ').flatMap((text, index) => text.startsWith('0 ') || text.includes('—') ? [] : [{
     text: palette.dim(text), priority: index < 2 ? 6 : index === 2 ? 4 : 5,
-  })))
+  }]))
   rows.status.setSegments(status)
   const mode = input.interactionMode
   const footer: StatusSegment[] = []

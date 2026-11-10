@@ -144,8 +144,8 @@ describe('TranscriptRenderer', () => {
     expect(runningHead).toBe(done.render(80)[0])
     expect(runningHead).toBe(errored.render(80)[0])
     expect(runningHead).not.toContain('compacting')
-    expect(done.render(80)).toContainEqual(expect.stringContaining('✓ done'))
-    expect(errored.render(80)).toContainEqual(expect.stringContaining('✕ failed'))
+    expect(done.render(80)).toContainEqual(expect.stringContaining('Context compacted'))
+    expect(errored.render(80)).toContainEqual(expect.stringContaining('Failed to compact context'))
   })
 
   it('keeps the assistant head row identical when a live block settles', () => {
@@ -512,9 +512,9 @@ describe('TranscriptRenderer component reuse', () => {
     const renderer = new TranscriptRenderer(options)
     renderer.set([user(1, 'question')], [{ kind: 'waiting', text: waitingText(0, undefined, 3_000) }])
     const output = renderer.container.render(80).join('\n')
-    expect(output).toContain('⟳ working · 3s')
+    expect(output).toContain('• Working (3s · esc to interrupt)')
     renderer.set([user(1, 'question')], [{ kind: 'waiting', text: waitingText(0, { retry: 1, maxRetries: 3, code: 'TRANSPORT' }, 3_000) }])
-    expect(renderer.container.render(80).join('\n')).toContain('retry 1/3 after TRANSPORT (automatic) · 3s')
+    expect(renderer.container.render(80).join('\n')).toContain('Retrying 1/3 (3s · TRANSPORT · automatic · esc to interrupt)')
     // The row is transient, so it leaves no cached component behind.
     expect(renderer.container.children).toHaveLength(3)
   })

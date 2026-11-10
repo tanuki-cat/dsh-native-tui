@@ -168,7 +168,7 @@ describe('image composer', () => {
     const lines = h.editor.render(80)
     expect(lines[0]).toContain('[Image #1]')
     expect(lines[1]).toContain('› help')
-    expect(lines.findIndex(line => line.startsWith('> '))).toBeGreaterThan(1)
+    expect(lines.findLastIndex(line => line.startsWith('› '))).toBeGreaterThan(1)
     h.editor.handleInput('\t')
     expect(h.editor.getText()).toBe('/help ')
   })

@@ -1,7 +1,8 @@
-import { SelectList, Text, stripTerminalSequences, truncateToWidth, visibleWidth, type TUI } from '@earendil-works/pi-tui'
+import { Text, stripTerminalSequences, truncateToWidth, visibleWidth, type TUI } from '@earendil-works/pi-tui'
 import type { ChoiceItem } from './dialogs.js'
 import { literalToolText } from './tool-output.js'
-import { selectTheme, type Palette } from './theme.js'
+import type { Palette } from './theme.js'
+import { ChoiceList } from './choice-list.js'
 
 export interface ApprovalSummary {
   readonly heading: string
@@ -26,9 +27,9 @@ export function showApprovalChoice(
       resolve(value)
     }
     const abort = (): void => { finish() }
-    const list = new SelectList(items.map((item, index) => ({
+    const list = new ChoiceList(items.map((item, index) => ({
       value: item.value, label: (index + 1) + '. ' + literalToolText(item.label),
-    })), items.length, selectTheme(palette))
+    })), items.length, palette)
     list.onSelect = item => { finish(item.value) }
     list.onCancel = abort
     const fields = [

@@ -43,7 +43,7 @@ child.on('exit', (code, signal) => {
   clearTimeout(hard)
   const clean = strip(out)
   console.log('EXIT', code, signal, 'phase', phase)
-  console.log('HEADER_TITLE', clean.includes('◆ DeepSeek Harness'))
+  console.log('HEADER_TITLE', clean.includes('DeepSeek Harness'))
   console.log('HEADER_FLUSH', /^native-tui-/m.test(clean))
   console.log('STATUS_MODEL', /\S+\/\S+.* · Ready · /u.test(clean))
   console.log('TRANSCRIPT_FLUSH', /^i Local commands:/m.test(clean))

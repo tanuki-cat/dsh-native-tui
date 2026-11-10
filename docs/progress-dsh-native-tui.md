@@ -368,6 +368,22 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - 验证：`pnpm check` 通过（98 个文件 / 1383 项测试、类型检查、构建）；状态栏四组与对话展示六组真实 Host + 本机 mock 探针全部 PASS；17 个相关探针语法检查通过。原生/PTC 事件归并增加 6 项空结果成功、失败和部分停止回归。
 - 方案与完整验证边界：[状态栏](design-task-optimize-statusline-rendering.md)、[工具与对话展示](design-task-optimize-transcript-presentation.md)；使用说明见 [README](../README.md#渲染与显示)。
 
+## 2026-11-10：统一等待和结束回执
+
+- 等待改为 `• Working (2m 22s · esc to interrupt)`，重试显示次数、失败码和 automatic；正常结束显示 `Worked for … · HH:mm`，取消、失败、blocked 和 token limit 使用真实结束词。结束后停止计时，回执保持到下一轮或会话切换，不写入持久历史。
+- 固定一行、窄屏截断，输入框位置不变；按当前终端 Palette 绘制，保留时间格式、重试累计和错误正文。`session-events` 原样传递 turn/end reason，流式结束不提前视为完成。
+- 验证：`pnpm check` 通过（105 个文件 / 1539 项测试，类型检查与构建通过）；四组状态栏、断流恢复与工具参数等待共六组真实 Host + 本地 mock 探针均 PASS。工具等待探针改为隔离临时 profile，无需预先安装。
+- 方案：[等待和完成展示](design-task-optimize-turn-status-presentation.md)。
+
+## 2026-11-10：统一 Codex CLI 风格的渲染层次
+
+- 补齐渲染审查的五类遗漏：Markdown 分页随宽度和主题重绘，`/diff` 复用内联行号和增删背景，模型徽标在安全清理后按语义着色，选择器/设置/审批共用蓝色选中行，压缩状态与多行编辑统一轻量样式。新增 21 项回归；`pnpm check` 通过（108 个文件 / 1560 项测试），差异 4 组、补全及选择/预览 4 组、工具审批 6 组真实 Host + 本地 mock 探针全部 PASS。
+- 用户消息改为灰阶背景与上下留白；输入面板使用 `›`、中性背景和滚动行数提示，区域之间以留白分隔。标题、provider、目录和 Ready 弱化；Markdown 标题使用字重，交互强调改为适配深浅主题的蓝色。
+- context 默认收起为来源标签，Ctrl+O 同步展开工具与 context，fullscreen 支持点击标题单独切换；缓存和普通流式更新保留已有展开状态。工具状态、diff、reasoning 档位、权限警示与图片附件继续使用实际数据和语义颜色。
+- 验证：`pnpm check` 通过（104 个文件 / 1510 项测试，类型检查与构建通过）；状态栏、补全、工具审批和图片输入共 16 组真实 Host + 本地 mock 探针全部 PASS，覆盖主屏/全屏、深浅主题、宽窄窗口、context 展开、diff 与原始图片发送；8 个修改后探针语法检查通过。
+- 方案与验证边界：[Codex CLI 渲染风格](design-task-optimize-codex-rendering-style.md)。
+- 截图复核后修正固定灰色与过度 dim：通过 pi-tui 原生颜色查询读取终端背景/前景，混合生成面板和次级文本；补上空输入提示，模型与 effort 改为暖色、目录绿色、Ready 紫色，隐藏尚未产生的统计。终端回复晚到或报告主题变化时刷新缓存并保留展开状态。`pnpm check` 通过（105 个文件 / 1526 项测试）；16 组探针复验 PASS，包含截图背景与 250 ms 迟到颜色回复的主屏/全屏验证。
+
 ## 2026-11-10：图片输入紧凑展示
 
 - 粘贴图片路径或文字中的 `@图片路径` 自动保存为 Host 图片附件，输入框上方显示 `[Image #1] [Image #2]`，历史用户消息也使用编号标签。支持引号、shell 转义、相对路径、home 和 `file://`；普通文字和命令参数保持原有语义。

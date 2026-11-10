@@ -1,15 +1,14 @@
 import {
   Container,
-  Editor,
   Image,
   Input,
   Markdown,
-  SelectList,
   Text,
   matchesKey,
   truncateToWidth,
   visibleWidth,
   type Component,
+  type SelectList,
   type TUI,
 } from '@earendil-works/pi-tui'
 import type { ApprovalOutcome, ApprovalRequest } from '@deepseek-ai/dsh-user-approval'
@@ -30,13 +29,10 @@ import { markdownTheme, selectTheme } from './theme.js'
 import { clip } from './tool-preview.js'
 import type { ImagePreview } from '../runtime/images.js'
 import { sanitizeTerminalText } from '../runtime/terminal-text.js'
+import { ChoiceList, type ChoiceItem } from './choice-list.js'
+import { PromptEditor } from './prompt-editor.js'
 
-/** One selectable row in a terminal dialog. */
-export interface ChoiceItem {
-  readonly value: string
-  readonly label: string
-  readonly description?: string
-}
+export type { ChoiceItem } from './choice-list.js'
 
 function localeText(value: { readonly en: string; readonly [locale: string]: string } | undefined): string | undefined {
   if (value === undefined) return undefined
@@ -48,14 +44,14 @@ export function dialogFrame(lines: readonly string[], width: number, palette: Pa
   const outer = Math.max(20, width)
   const inner = Math.max(1, outer - 4)
   const content = lines.map((line) => {
-    const clipped = truncateToWidth(line, inner)
-    return '│ ' + clipped + ' '.repeat(Math.max(0, inner - visibleWidth(clipped))) + ' │'
+    const bounded = truncateToWidth(line, inner)
+    // Native cursor markers must survive plain mode; SGR resets from truncation need not.
+    const clipped = palette.plain ? bounded.replace(/\x1b\[[0-9;]*m/gu, '') : bounded
+    return palette.dialogBand('│ ' + clipped)
+      + palette.dialogBand(' '.repeat(Math.max(0, inner - visibleWidth(clipped))) + ' │')
   })
-  const framed = ['┌' + '─'.repeat(outer - 2) + '┐', ...content, '└' + '─'.repeat(outer - 2) + '┘']
-  return framed.map((line) => {
-    const clipped = truncateToWidth(line, outer)
-    return palette.dialogBand(clipped + ' '.repeat(Math.max(0, outer - visibleWidth(clipped))))
-  })
+  return [palette.dialogBand('┌' + '─'.repeat(outer - 2) + '┐'), ...content,
+    palette.dialogBand('└' + '─'.repeat(outer - 2) + '┘')]
 }
 
 /**
@@ -82,10 +78,10 @@ class ChoiceDialog implements Component {
     private readonly palette: Palette,
     private readonly maxTitleRows?: () => number,
   ) {
-    this.list = new SelectList(
-      items.map(item => ({ value: item.value, label: sanitizeTerminalText(item.label), ...(item.description === undefined ? {} : { description: sanitizeTerminalText(item.description) }) })),
+    this.list = new ChoiceList(
+      items,
       Math.min(12, Math.max(1, items.length)),
-      selectTheme(palette),
+      palette,
     )
   }
 
@@ -141,11 +137,12 @@ class SearchChoiceDialog implements Component {
     const matches = this.items.filter(item => query === ''
       || item.value.toLowerCase().includes(query)
       || item.label.toLowerCase().includes(query)
+      || (item.badge?.text ?? '').toLowerCase().includes(query)
       || (item.description ?? '').toLowerCase().includes(query))
-    const list = new SelectList(
-      matches.map(item => ({ value: item.value, label: sanitizeTerminalText(item.label), ...(item.description === undefined ? {} : { description: sanitizeTerminalText(item.description) }) })),
+    const list = new ChoiceList(
+      matches,
       12,
-      selectTheme(this.palette),
+      this.palette,
     )
     const index = matches.findIndex(item => item.value === selected)
     if (index >= 0) list.setSelectedIndex(index)
@@ -191,7 +188,7 @@ class TextInputDialog implements Component {
     private readonly palette: Palette,
     initialValue?: string,
   ) {
-    this.input = new Input({ prompt: '> ', placeholder })
+    this.input = new Input({ prompt: '› ', placeholder })
     if (initialValue !== undefined) {
       this.input.setValue(initialValue)
       // setValue leaves the cursor before the old text; a prefilled field should
@@ -363,7 +360,7 @@ export function showTextInput(
 
 /** Multi-line editor dialog; the focused dialog forwards keys to its editor. */
 class MultilineInputDialog implements Component {
-  readonly editor: Editor
+  readonly editor: PromptEditor
   onCancel?: () => void
   constructor(
     tui: TUI,
@@ -372,10 +369,10 @@ class MultilineInputDialog implements Component {
     private readonly hint: string,
     private readonly palette: Palette,
   ) {
-    this.editor = new Editor(tui, {
+    this.editor = new PromptEditor(tui, {
       borderColor: text => palette.dim(text),
       selectList: selectTheme(palette),
-    }, { paddingX: 0 })
+    }, palette.autocompleteSelection, palette.dialogBand)
     this.editor.setText(initialValue)
     this.editor.focused = true
   }
@@ -453,7 +450,7 @@ export function showMultilineInput(
   })
 }
 
-/** Render Markdown at a fixed overlay width and page the styled lines. */
+/** Reflow Markdown with the current width and colors on every preview frame. */
 export function showMarkdownPreview(
   tui: TUI,
   palette: Palette,
@@ -461,8 +458,11 @@ export function showMarkdownPreview(
   markdown: string,
   signal?: AbortSignal,
 ): Promise<void> {
-  const rendered = new Markdown(sanitizeTerminalText(markdown), 0, 0, markdownTheme(palette)).render(96).join('\n')
-  return showStyledTextPager(tui, palette, 'Markdown · ' + title, rendered, signal)
+  const text = sanitizeTerminalText(markdown)
+  return showComponentPager(tui, palette, 'Markdown · ' + title, {
+    render: width => new Markdown(text, 0, 0, markdownTheme(palette)).render(width),
+    invalidate: () => {},
+  }, signal)
 }
 
 /** Show a paged read-only text overlay; Escape closes it. */
@@ -474,34 +474,23 @@ export function showTextPager(
   signal?: AbortSignal,
   pageSize = 22,
 ): Promise<void> {
-  return showStyledTextPager(tui, palette, title, sanitizeTerminalText(text), signal, pageSize)
+  return showComponentPager(tui, palette, title, new Text(sanitizeTerminalText(text), 0, 0), signal, pageSize)
 }
 
-/** Accept only UI-rendered lines; external text goes through showTextPager. */
-function showStyledTextPager(
-  tui: TUI, palette: Palette, title: string, text: string, signal?: AbortSignal, pageSize = 22,
+/** Page a UI component; raw external strings go through showTextPager. */
+export function showComponentPager(
+  tui: TUI, palette: Palette, title: string, content: Component, signal?: AbortSignal, pageSize = 22,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted === true) {
       resolve()
       return
     }
-    const lines = text.split('\n')
     let offset = 0
+    let pageRows = Math.max(1, pageSize)
     let handle: ReturnType<TUI['showOverlay']> | undefined
     let off: (() => void) | undefined
     let settled = false
-    const body = new Text('', 0, 0)
-    const hint = new Text('', 0, 0)
-    const render = (): void => {
-      const max = Math.max(0, lines.length - pageSize)
-      offset = Math.min(Math.max(0, offset), max)
-      const slice = lines.slice(offset, offset + pageSize)
-      body.setText(slice.length === 0 ? '(empty)' : slice.join('\n'))
-      hint.setText(palette.dim('lines ' + String(offset + 1) + '–' + String(Math.min(lines.length, offset + pageSize))
-        + ' / ' + String(lines.length) + ' · ↑/↓ PgUp/PgDn · Esc closes'))
-      tui.requestRender()
-    }
     const finish = (): void => {
       if (settled) return
       settled = true
@@ -512,10 +501,21 @@ function showStyledTextPager(
     }
     const onAbort = (): void => { finish() }
     try {
-      const container = new Container()
-      container.addChild(new Text(palette.bold(sanitizeTerminalText(title)), 0, 0))
-      container.addChild(body)
-      container.addChild(hint)
+      const pager: Component = {
+        render: width => {
+          const inner = Math.max(1, width - 4)
+          const heading = new Text(palette.bold(sanitizeTerminalText(title)), 0, 0).render(inner)
+          const lines = content.render(inner)
+          pageRows = Math.max(1, Math.min(pageSize, Math.floor((tui.terminal?.rows ?? 30) * 0.85) - heading.length - 3))
+          offset = Math.min(Math.max(0, offset), Math.max(0, lines.length - pageRows))
+          const slice = lines.slice(offset, offset + pageRows)
+          const hint = 'lines ' + String(offset + 1) + '–' + String(Math.min(lines.length, offset + pageRows))
+            + ' / ' + String(lines.length) + ' · ↑/↓ PgUp/PgDn · Esc closes'
+          return dialogFrame([...heading, ...(slice.length === 0 ? ['(empty)'] : slice),
+            truncateToWidth(palette.dim(hint), inner, '…')], width, palette)
+        },
+        invalidate: () => { content.invalidate?.() },
+      }
       off = tui.addInputListener((data) => {
         if (data === String.fromCharCode(27)) {
           finish()
@@ -523,29 +523,29 @@ function showStyledTextPager(
         }
         if (data === '\x1b[A') {
           offset -= 1
-          render()
+          tui.requestRender()
           return { consume: true }
         }
         if (data === '\x1b[B') {
           offset += 1
-          render()
+          tui.requestRender()
           return { consume: true }
         }
         if (data === '\x1b[5~') {
-          offset -= pageSize
-          render()
+          offset -= pageRows
+          tui.requestRender()
           return { consume: true }
         }
         if (data === '\x1b[6~') {
-          offset += pageSize
-          render()
+          offset += pageRows
+          tui.requestRender()
           return { consume: true }
         }
         return undefined
       })
-      handle = tui.showOverlay(new FramedOverlay(container, palette), { width: 100, maxHeight: '85%', anchor: 'center' })
+      handle = tui.showOverlay(pager, { width: 100, maxHeight: '85%', anchor: 'center' })
       handle.focus()
-      render()
+      tui.requestRender()
     } catch (error) {
       off?.()
       reject(error)
@@ -593,7 +593,7 @@ export function showImagePreview(
         maxWidthCells: 76,
         maxHeightCells: 30,
       }))
-      container.addChild(new Text(palette.dim('Enter/Esc closes'), 0, 0))
+      container.addChild({ render: width => new Text(palette.dim('Enter/Esc closes'), 0, 0).render(width), invalidate: () => {} })
       off = tui.addInputListener((data) => {
         if (data === String.fromCharCode(27) || data === '\r' || data === '\n') {
           finish()
@@ -710,7 +710,7 @@ class MultiChoiceDialog implements Component {
   }
 
   private makeList(): SelectList {
-    const list = new SelectList(
+    const list = new ChoiceList(
       this.items.map(item => ({
         value: item.value,
         label: isAnswerAction(item.value)
@@ -719,7 +719,7 @@ class MultiChoiceDialog implements Component {
         ...(item.description === undefined ? {} : { description: sanitizeTerminalText(item.description) }),
       })),
       Math.min(12, Math.max(1, this.items.length)),
-      selectTheme(this.palette),
+      this.palette,
     )
     list.setSelectedIndex(this.index)
     list.onSelectionChange = (item) => {

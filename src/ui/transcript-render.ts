@@ -12,11 +12,12 @@
 import { Box, Container, Text, type Component } from '@earendil-works/pi-tui'
 import { AssistantMessage } from './assistant-message.js'
 import { sanitizeTerminalText } from '../runtime/terminal-text.js'
-import { BarText } from './bar-text.js'
 import { ToolCard } from './tool-card.js'
 import { clip } from './tool-preview.js'
 import type { TranscriptBlock, TranscriptOptions } from './transcript.js'
 import { MessageBody } from './transcript-chrome.js'
+import { ContextMessage } from './context-message.js'
+import { activityHeading, styleTurnStatus, WaitStatusLine } from './waiting.js'
 
 export { isCodeExecutionTool } from './code-execution-card.js'
 
@@ -29,7 +30,7 @@ export { isCodeExecutionTool } from './code-execution-card.js'
 export function renderTranscriptBlock(block: TranscriptBlock, options: TranscriptOptions): Component {
   const palette = options.palette
   const band = (component: Component, background: (text: string) => string): Component => {
-    const box = new Box(0, 0, background)
+    const box = new Box(0, 1, background)
     box.addChild(component)
     return box
   }
@@ -38,46 +39,46 @@ export function renderTranscriptBlock(block: TranscriptBlock, options: Transcrip
       return band(new MessageBody(new Text(sanitizeTerminalText(block.text), 0, 0), palette, '› '), palette.userBand)
     }
     case 'assistant': return new AssistantMessage(block, options)
-    case 'context': {
-      const container = new Container()
-      container.addChild(new Text(palette.dim('◇ context · ' + sanitizeTerminalText(block.label)), 0, 0))
-      container.addChild(new BarText(clip(sanitizeTerminalText(block.text)), '│ ', palette.dim, palette.dim))
-      return container
-    }
+    case 'context': return new ContextMessage(block, palette, options.toolsExpanded ?? false)
     case 'tool': return new ToolCard(block, options)
     case 'compaction': {
       // The head line stays fixed like the tool card head: the compaction
       // state lands on the tail row, which main-screen can patch safely while
       // the card is still inside the viewport or after it scrolled away.
       const container = new Container()
-      container.addChild(new Text(palette.bold(palette.accent('◆ compaction')), 0, 0))
+      container.addChild(new Text(activityHeading('Compact context', palette), 0, 0))
+      const detail = (text: string): void => {
+        container.addChild(new MessageBody(new Text(text, 0, 0), palette, '  '))
+      }
       const meta = [
         block.shadowedItems === undefined ? undefined : String(block.shadowedItems) + ' item(s)',
         block.shadowedTokens === undefined ? undefined : '~' + String(block.shadowedTokens) + ' tokens',
       ].filter((value): value is string => value !== undefined)
-      if (meta.length > 0) container.addChild(new Text(palette.dim(meta.join(' · ')), 0, 0))
+      if (meta.length > 0) detail(palette.dim(meta.join(' · ')))
       if (block.summary !== undefined && block.summary.trim() !== '') {
         // Keep the card shorter than a typical viewport: main-screen can only
         // patch visible rows, so a card that grows past the viewport after its
         // head scrolled away forces a full repaint of the transcript.
-        container.addChild(new BarText(clip(sanitizeTerminalText(block.summary), 240), '│ ', palette.dim, palette.dim))
+        detail(palette.dim(clip(sanitizeTerminalText(block.summary), 240)))
       }
       if (block.state === 'interrupted') {
-        container.addChild(new Text(palette.warning(clip('Stopped before it committed; the session reopened after it.', 600)), 0, 0))
+        detail(palette.dim('Stopped before it committed; the session reopened after it.'))
       }
-      if (block.error !== undefined) container.addChild(new Text(palette.error(clip(sanitizeTerminalText(block.error), 600)), 0, 0))
+      if (block.error !== undefined) detail(palette.error(clip(sanitizeTerminalText(block.error), 600)))
       // State is the last row: a compaction that finishes after its card scrolled
       // away still only touches the card's tail, never a row above the viewport.
       const state = block.state === 'error'
-        ? palette.error('✕ failed')
+        ? 'Failed to compact context'
         : block.state === 'interrupted'
-          ? palette.warning('⚠ interrupted')
-          : block.state === 'running' ? palette.accent('⟳ compacting…') : palette.success('✓ done')
-      container.addChild(new Text(state, 0, 0))
+          ? 'Interrupted while compacting context'
+          : block.state === 'running' ? 'Compacting…' : 'Context compacted'
+      detail(styleTurnStatus(state, palette))
       return container
     }
     case 'waiting': {
-      return new Text(palette.accent('⟳ ') + palette.dim(sanitizeTerminalText(block.text)), 0, 0)
+      const line = new WaitStatusLine(palette)
+      line.setText(block.text)
+      return line
     }
     case 'notice': {
       const text = sanitizeTerminalText(block.text).replaceAll('\n', '\n  ')

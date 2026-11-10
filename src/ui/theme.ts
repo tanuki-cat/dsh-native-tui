@@ -1,4 +1,4 @@
-import type { EditorTheme, MarkdownTheme, SelectListTheme } from '@earendil-works/pi-tui'
+import { backgroundAnsi, foregroundAnsi, getTerminalColorMode, rgbColor, type EditorTheme, type MarkdownTheme, type RgbColor, type SelectListTheme, type TerminalColorMode, type TerminalColors } from '@earendil-works/pi-tui'
 import type { Config } from '../config.js'
 import type { ProviderReasoningLevel } from '../runtime/providers.js'
 
@@ -23,6 +23,9 @@ export interface Palette {
   readonly success: (text: string) => string
   readonly warning: (text: string) => string
   readonly error: (text: string) => string
+  readonly model: (text: string) => string
+  readonly workspace: (text: string) => string
+  readonly ready: (text: string) => string
   readonly userBand: (text: string) => string
   readonly toolBand: (text: string) => string
   readonly thinkingBand: (text: string) => string
@@ -30,9 +33,9 @@ export interface Palette {
   readonly diffRemoveBand: (text: string) => string
   readonly dialogBand: (text: string) => string
   readonly dialogBorder: (text: string) => string
-  /** Full-width selection row in the upward slash-command menu. */
+  /** Shared full-width selection row for menus and modal pickers. */
   readonly autocompleteSelection: (text: string) => string
-  /** Color one reasoning-effort label and the matching divider lines. */
+  /** Color a reasoning-effort label in the reasoning controls. */
   readonly reasoning: (effort: string | undefined) => (text: string) => string
   /** Color one preset id. */
   readonly preset: (text: string) => string
@@ -54,12 +57,11 @@ function sgr(open: string, close: string): (text: string) => string {
 }
 
 /**
- * Build the 16-color palette. The terminal owns the actual colors, so the
- * same roles stay readable on light and dark backgrounds.
+ * Build semantic styles from the terminal's measured colors when available.
  * @param theme - configured palette mode.
  * @returns semantic styling functions.
  */
-export function createPalette(theme: Config['theme']): Palette {
+export function createPalette(theme: Config['theme'], colors: TerminalColors = {}, colorMode: TerminalColorMode = getTerminalColorMode()): Palette {
   if (theme === 'plain') {
     return {
       plain: true,
@@ -72,6 +74,9 @@ export function createPalette(theme: Config['theme']): Palette {
       success: identity,
       warning: identity,
       error: identity,
+      model: identity,
+      workspace: identity,
+      ready: identity,
       userBand: identity,
       toolBand: identity,
       thinkingBand: identity,
@@ -86,18 +91,38 @@ export function createPalette(theme: Config['theme']): Palette {
       contextBucket: () => identity,
     }
   }
+  const lightBackground = (color: RgbColor): boolean => (color.r * 299 + color.g * 587 + color.b * 114) / 1000 >= 128
+  const light = theme === 'light' || theme === 'auto' && colors.background !== undefined && lightBackground(colors.background)
+  const blend = (top: RgbColor, base: RgbColor, alpha: number): RgbColor => ({
+    r: Math.floor(top.r * alpha + base.r * (1 - alpha)),
+    g: Math.floor(top.g * alpha + base.g * (1 - alpha)),
+    b: Math.floor(top.b * alpha + base.b * (1 - alpha)),
+  })
+  const foreground = (color: RgbColor) => {
+    const open = foregroundAnsi(rgbColor(color.r, color.g, color.b), colorMode)
+    return (text: string): string => open + text + '\u001B[39m'
+  }
+  const surface = (darkAlpha: number, lightAlpha: number, fallback: string) => {
+    if (colors.background === undefined) return sgr(fallback, '49')
+    const pale = lightBackground(colors.background)
+    const top = pale ? { r: 0, g: 0, b: 0 } : { r: 255, g: 255, b: 255 }
+    const color = blend(top, colors.background, pale ? lightAlpha : darkAlpha)
+    const open = backgroundAnsi(rgbColor(color.r, color.g, color.b), colorMode)
+    return (text: string): string => open + text + '\u001B[49m'
+  }
   // Tool cards use a neutral surface instead of a saturated state color: the
   // card already carries success/error in its label, and a full-width green
   // band dominates the transcript (dark) or washes it out (light).
-  const bands = theme === 'light'
-    ? { user: '48;5;195', tool: '48;5;253', thinking: '48;5;254' }
-    : { user: '48;5;23', tool: '48;5;237', thinking: '48;5;235' }
-  const dim = sgr('2', '22')
+  const bands = light
+    ? { user: '48;5;255', tool: '48;5;253', thinking: '48;5;254' }
+    : { user: '48;5;238', tool: '48;5;237', thinking: '48;5;235' }
+  const dim = colors.foreground !== undefined && colors.background !== undefined
+    ? foreground(blend(colors.foreground, colors.background, 0.6)) : sgr('2', '22')
   // 256-color values stay readable on both surfaces: the light palette uses
   // deeper blue/pink/red where the dark palette can afford brighter hues.
   // Every level in PROVIDER_REASONING_LEVELS needs an entry: a missing one
   // silently falls back to dim, which reads as "this level has no colour".
-  const reasoningCodes: ReasoningCodes = theme === 'light'
+  const reasoningCodes: ReasoningCodes = light
     ? {
         off: '38;5;243',
         minimal: '38;5;30',
@@ -142,7 +167,7 @@ export function createPalette(theme: Config['theme']): Palette {
   // blue-450. The terminal has no static brand palette, so these are the closest
   // 256-colour sits: a neutral grey, the same violet family as /preset, and the
   // accent blue. All three stay separable on light and dark backgrounds.
-  const bucketCodes: Record<'system' | 'tools' | 'messages', string> = theme === 'light'
+  const bucketCodes: Record<'system' | 'tools' | 'messages', string> = light
     ? { system: '38;5;243', tools: '38;5;98', messages: '38;5;25' }
     : { system: '38;5;245', tools: '38;5;141', messages: '38;5;39' }
   const contextBucket = (bucket: 'system' | 'tools' | 'messages'): ((text: string) => string) =>
@@ -153,21 +178,24 @@ export function createPalette(theme: Config['theme']): Palette {
     bold: sgr('1', '22'),
     italic: sgr('3', '23'),
     underline: sgr('4', '24'),
-    accent: sgr('36', '39'),
+    accent: sgr(light ? '38;5;25' : '38;5;117', '39'),
     brand: sgr('34', '39'),
     success: sgr('32', '39'),
     warning,
     error,
-    userBand: sgr(bands.user, '49'),
+    model: foreground(light ? { r: 133, g: 89, b: 22 } : { r: 241, g: 199, b: 131 }),
+    workspace: foreground(light ? { r: 36, g: 122, b: 61 } : { r: 143, g: 211, b: 153 }),
+    ready: foreground(light ? { r: 111, g: 66, b: 170 } : { r: 189, g: 147, b: 249 }),
+    userBand: surface(0.16, 0.02, bands.user),
     toolBand: sgr(bands.tool, '49'),
     thinkingBand: sgr(bands.thinking, '49'),
-    diffAddBand: sgr(theme === 'light' ? '48;5;194' : '48;5;22', '49'),
-    diffRemoveBand: sgr(theme === 'light' ? '48;5;224' : '48;5;52', '49'),
-    dialogBand: sgr(theme === 'light' ? '48;5;255' : '48;5;236', '49'),
-    dialogBorder: sgr(theme === 'light' ? '38;5;24' : '38;5;39', '39'),
+    diffAddBand: sgr(light ? '48;5;194' : '48;5;22', '49'),
+    diffRemoveBand: sgr(light ? '48;5;224' : '48;5;52', '49'),
+    dialogBand: surface(0.12, 0.04, light ? '48;5;255' : '48;5;236'),
+    dialogBorder: dim,
     autocompleteSelection: sgr('48;5;75;30', '39;49'),
     reasoning,
-    preset: sgr(theme === 'light' ? '38;5;91' : '38;5;141', '39'),
+    preset: sgr(light ? '38;5;91' : '38;5;141', '39'),
     context,
     contextBucket,
   }
@@ -176,7 +204,7 @@ export function createPalette(theme: Config['theme']): Palette {
 /** Markdown theme backed by the terminal palette. */
 export function markdownTheme(palette: Palette): MarkdownTheme {
   return {
-    heading: text => palette.bold(palette.accent(text)),
+    heading: text => palette.bold(text),
     link: text => palette.underline(palette.accent(text)),
     linkUrl: text => palette.dim(text),
     code: text => palette.accent(text),
@@ -205,15 +233,13 @@ export function selectTheme(palette: Palette): SelectListTheme {
 }
 
 /**
- * Editor chrome theme. The border color follows the current reasoning effort;
- * the caller passes a getter so a model/effort change repaints the same editor.
+ * Neutral editor chrome; reasoning effort stays visible in the status row.
  * @param palette - colours.
- * @param reasoningEffort - current effort, read at border-paint time.
  * @returns the pi-tui editor theme.
  */
-export function editorTheme(palette: Palette, reasoningEffort: () => string | undefined = () => undefined): EditorTheme {
+export function editorTheme(palette: Palette): EditorTheme {
   return {
-    borderColor: text => palette.reasoning(reasoningEffort())(text),
+    borderColor: palette.dim,
     selectList: selectTheme(palette),
   }
 }

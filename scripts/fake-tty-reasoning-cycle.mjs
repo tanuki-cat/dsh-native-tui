@@ -74,7 +74,7 @@ try {
       phase = 'legacy'; write('draft-cycle-proof' + shiftTab)
     } else if (phase === 'legacy' && text.includes('Reasoning effort: medium')) {
       checks.legacy = true
-      checks.draft = text.includes('> draft-cycle-proof')
+      checks.draft = text.includes('› draft-cycle-proof')
       phase = 'kitty'; write('\x1b[9;2u')
     } else if (phase === 'kitty' && text.includes('Reasoning effort: high')) {
       checks.kitty = true
