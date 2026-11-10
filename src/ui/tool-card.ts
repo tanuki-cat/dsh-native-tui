@@ -7,7 +7,7 @@ import { renderCodeExecutionCard } from './code-execution-card.js'
 import { formatToolArguments } from './tool-preview.js'
 import { literalToolText, toolLabel, ToolOutput } from './tool-output.js'
 import { ToolBody, toolHeading } from './transcript-chrome.js'
-import { isWriteUpdate, toolActionLabel } from './tool-label.js'
+import { executionVerb, highlightToolLabel, isWriteUpdate, toolActionLabel } from './tool-label.js'
 
 type ToolBlock = Extract<TranscriptBlock, { kind: 'tool' }>
 type Arguments = Readonly<Record<string, unknown>>
@@ -66,11 +66,11 @@ export class ToolCard implements Component {
     if (block.name === 'write' && (!isWriteUpdate(block) || diffs.length === 0)) return renderWriteCard(block, palette, expanded)
     const path = stringArg(args, 'file_path') ?? stringArg(args, 'path')
     const shell = block.name === 'bash' || block.name === 'pwsh'
-    const name = toolActionLabel(block)
-    const pathLabel = (path: string): string => palette.accent(toolLabel(path, 160, 'end'))
+    const name = highlightToolLabel(toolActionLabel(block), palette)
+    const pathLabel = (path: string): string => toolLabel(path, 160, 'end')
     if (diffs.length > 0) {
       for (const diff of diffs) {
-        container.addChild(toolHeading(palette.bold(toolLabel(name, 120)), palette, block, pathLabel(diffs.length === 1 ? path ?? diff.path : diff.path)))
+        container.addChild(toolHeading(name, palette, block, pathLabel(diffs.length === 1 ? path ?? diff.path : diff.path)))
         addBody(renderEditDiff(diff, palette, expanded))
       }
     } else if (shell) {
@@ -81,7 +81,7 @@ export class ToolCard implements Component {
       const extraLines = Math.max(0, commandLines.length - 1)
       const commandShortened = extraLines > 0 || literalToolText(firstLine).length > 120
       const suffix = extraLines > 0 ? palette.dim(' … (' + extraLines + ' more command lines)') : ''
-      container.addChild(toolHeading(palette.bold('Ran ') + palette.accent((block.name === 'pwsh' ? 'PS> ' : '') + head) + suffix, palette, block))
+      container.addChild(toolHeading(palette.bold(executionVerb(block.pending) + ' ') + palette.accent((block.name === 'pwsh' ? 'PS> ' : '') + head) + suffix, palette, block))
       if (commandShortened && !expanded) addBody(new Text(palette.dim('(command shortened · ctrl+o to expand)'), 0, 0))
       if (command === undefined && block.args.trim() !== '') addBody(new Text(palette.dim(literalToolText(formatToolArguments(block.args))), 0, 0))
       const meta: string[] = []
@@ -99,7 +99,7 @@ export class ToolCard implements Component {
     } else {
       const pattern = stringArg(args, 'pattern')
       const search = ['grep', 'glob', 'find'].includes(block.name) && pattern !== undefined
-      let head = search ? palette.bold(name) + ' ' + palette.accent(inline(JSON.stringify(pattern))) : palette.bold(toolLabel(name, 120))
+      let head = search ? name + ' ' + inline(JSON.stringify(pattern)) : name
       let tail = path === undefined ? undefined : pathLabel(path)
       if (block.name === 'read' && (typeof args?.offset === 'number' || typeof args?.limit === 'number')) {
         const start = typeof args.offset === 'number' ? args.offset : 1
@@ -118,8 +118,9 @@ export class ToolCard implements Component {
     } else if (result?.trim() && block.name === 'read' && !expanded) {
       addBody(new Text(palette.dim('(ctrl+o to expand)'), 0, 0))
     }
-    if (block.pending) container.addChild(new Text(palette.warning('  └ running…'), 0, 0))
-    else if (block.isError) container.addChild(new Text(palette.error('  └ error'), 0, 0))
+    if (block.pending) {
+      if (!shell) container.addChild(new Text(palette.warning('  └ running…'), 0, 0))
+    } else if (block.isError) container.addChild(new Text(palette.error('  └ error'), 0, 0))
     else if (block.stopped) container.addChild(new Text(palette.warning('  └ stopped · partial changes retained; inspect the result'), 0, 0))
     return container
   }

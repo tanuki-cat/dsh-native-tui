@@ -383,6 +383,9 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - 验证：`pnpm check` 通过（104 个文件 / 1510 项测试，类型检查与构建通过）；状态栏、补全、工具审批和图片输入共 16 组真实 Host + 本地 mock 探针全部 PASS，覆盖主屏/全屏、深浅主题、宽窄窗口、context 展开、diff 与原始图片发送；8 个修改后探针语法检查通过。
 - 方案与验证边界：[Codex CLI 渲染风格](design-task-optimize-codex-rendering-style.md)。
 - 截图复核后修正固定灰色与过度 dim：通过 pi-tui 原生颜色查询读取终端背景/前景，混合生成面板和次级文本；补上空输入提示，模型与 effort 改为暖色、目录绿色、Ready 紫色，隐藏尚未产生的统计。终端回复晚到或报告主题变化时刷新缓存并保留展开状态。`pnpm check` 通过（105 个文件 / 1526 项测试）；16 组探针复验 PASS，包含截图背景与 250 ms 迟到颜色回复的主屏/全屏验证。
+- 工具卡片的动作关键字改用主题蓝色，路径、搜索表达式和 MCP 服务/方法保持普通文字；`grep` / `glob` / `find` 统一显示 `Search`，多词工具名句首大写（如 `Todo write`），原生、write 与 PTC compact 共用同一格式。新增 15 项回归。
+- 执行类工具标题随生命周期在 `Running` / `Ran` 之间切换，移除执行卡片的 `running…` 尾行；main-screen 只延后屏外同一标题的时态变化，可见行立即更新，避免清空终端历史。新增 18 项回归，`pnpm check` 通过（109 个文件 / 1593 项测试，类型检查与构建成功）。
+- 验证边界：`node scripts/fake-tty-tool-keywords.mjs` 的 standard 4 组在本机真实 Host 下 PASS；PTC 组需要可用的内层 sandbox，DSH 沙箱内 `run_code` 报 `sandbox-unavailable`，需在沙箱外运行。其余探针与边界见设计文档。
 
 ## 2026-11-10：图片输入紧凑展示
 

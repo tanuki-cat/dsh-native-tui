@@ -163,7 +163,7 @@ describe('pi-style tool cards', () => {
 
   it('names a search by its pattern even when its scope path is present', () => {
     const text = output(new ToolCard(tool({ name: 'grep', args: '{"pattern":"TODO","path":"src"}' }), options))
-    expect(text).toContain('Grep "TODO" src')
+    expect(text).toContain('Search "TODO" src')
   })
 
   it('keeps local expansion through pending, partial and final updates', () => {

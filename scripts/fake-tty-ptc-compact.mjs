@@ -134,7 +134,7 @@ child.on('exit', (code, signal) => {
   clearInterval(tick); clearTimeout(hard); server.close()
   const clean = strip(out)
   const checks = {
-    'run_code head': clean.includes('• Ran run_code'),
+    'run_code head': clean.includes('• Ran code'),
     'read a': clean.includes('└ Read ' + readA),
     'read b': clean.includes('    Read ' + readB),
     'dedup': (clean.match(new RegExp('└ Read ' + readA.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) ?? []).length === 1,

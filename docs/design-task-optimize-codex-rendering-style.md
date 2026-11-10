@@ -83,3 +83,51 @@
 - `node scripts/fake-tty-slash-autocomplete.mjs` 四组 PASS（主屏/全屏 × 100/50 列），新增模型与设置的选中背景、Markdown 预览着色检查；按实际弹窗帧与关闭状态同步后再验证退出，未调用模型。
 - `node scripts/fake-tty-transcript-presentation.mjs` 六组 PASS，覆盖工具、审批允许/拒绝、PTC 和主屏/全屏；所测帧无行宽溢出。回环监听在沙箱内被拒绝后，通过授权在沙箱外运行本地 mock，未连接外部模型。
 - 深浅主题切换与多行编辑由组件回归覆盖；物理终端窗口的视觉验收未由探针替代。
+
+## 工具动作关键字高亮与大小写（2026-11-10）
+
+目标：按用户提供的 Codex CLI 截图，将动作关键字与目标内容分开渲染。当前普通工具标题只加粗动作、强调路径，PTC compact 子调用整行弱化，多词工具标签仍用下划线连接（如 `Todo_write`）。
+
+实施方案：
+
+- 在 `tool-label.ts` 集中处理展示名称和关键字配色。动作使用主题已有的蓝色强调，路径、搜索表达式和 MCP 服务/方法保持普通文字；保留树形引导线、展开提示与状态圆点各自的语义颜色。
+- 文件操作显示 `Read` / `Write` / `Edit`，`grep` / `glob` / `find` 统一显示 `Search`；多词动作使用句首大写（例如 `Todo write`、`Web search`、`Job output`）。MCP 保持缩写大写，服务名和方法名保留原始大小写。
+- 普通工具、write/source 分支、write/update diff 分支、PTC compact 子调用复用相同的关键字格式。PTC 代码执行标题使用 `code` 关键字（按下一节显示 `Running code` / `Ran code`），shell 保留时态摘要前缀并继续突出实际命令。
+- 仅改变视图，不改原始工具名、PTC callLines、参数、事件、工具执行、审批或导出。控制序列先转义再添加受控样式，plain 不输出 ANSI。
+
+验证与验收：
+
+- 回归检查动作关键字实际 ANSI、目标不被染色、深浅/plain 主题、MCP 方法与路径大小写、native/PTC、展开/收起、write/create 与 update、多词名称、窄屏和控制序列安全。
+- 执行定向测试和 `pnpm check`；真实 Host + 本地 mock 探针检查主屏/全屏、native/PTC 和宽窄终端的实际渲染帧，断言高亮范围、标签、执行结果与行宽。记录实际验证边界。
+
+实施与验证记录：
+
+- 普通工具和 PTC compact 子调用的动作使用同一个配色入口，MCP 仅高亮缩写；PTC 标题使用 `code` 关键字（`Running code` / `Ran code`）。保留自定义工具名的连字符及 MCP 方法大小写，原始记录不变。
+- 新增 15 项回归，覆盖深浅/plain 实际 ANSI、原生/source/diff 分支、PTC、展开、控制序列和 1/12/32/80 列宽。定向测试 7 个文件 / 227 项通过；最终 `pnpm check` 通过 108 个文件 / 1575 项测试，类型检查与构建成功。
+- `node scripts/fake-tty-tool-keywords.mjs`：8 组 PASS（原生/PTC × 主屏/全屏 × 100 列 dark / 50 列 light），实际帧中 Read/Search 关键字着色、目标不着色；真实 read/grep/glob 结果包含测试文件且无错误、无行宽溢出。
+- `node scripts/fake-tty-transcript-presentation.mjs`：6 组 PASS，覆盖原生审批允许/拒绝、write/edit diff、源码展开、PTC compact/detailed 与主屏/全屏。
+- 6 个新增或同步的探针脚本语法检查与 `git diff --check` 通过。Host 探针使用本地 mock，回环监听在沙箱内被拒绝后经授权运行；未连接外部模型，物理终端视觉效果仍需实际窗口确认。
+
+## 执行标题随状态切换（2026-11-10）
+
+目标：执行类工具运行中显示 `Running`，结束后显示 `Ran`，由标题承担时态提示，取消执行卡片末尾重复的 `running…`。
+
+实施方案与约束：
+
+- `bash` / `pwsh` 的标题分别显示 `Running command` / `Running PS> command`，结束后改为 `Ran …`。PTC 父卡片使用 `Running code` / `Ran code`，保留代码描述、子调用摘要、展开与高亮。
+- `pending` 为状态依据；结束后的成功、失败、中断都使用过去式，圆点颜色和错误/中断正文继续标明实际结果。仅移除执行类卡片的 `running…` 尾行，文件工具保持原有动作名称与状态提示。
+- 主屏可见标题立即更新。终端已滚出的行不能原地修改；在 `TranscriptMainScreen` 中仅延迟同一标题 `Running` → `Ran` 的屏外变化，避免清除终端历史，窗口尺寸变化等正常完整重绘后显示最新状态。命令正文、链接目标等实际内容变化仍遵循原有重绘。
+- 更新旧有固定标题断言，新增运行/部分结果/成功/失败/中断、主屏/全屏、compact/detailed、展开保持和屏外安全回归。文档记录主屏屏外行的实际边界。
+- 本节替换 [工具、审批和对话展示](design-task-optimize-transcript-presentation.md) 中「工具标题文字不随状态改写」与「文本变化不属于延后规则」两条约束；旧文档保留原决策并记录替代原因。
+
+验证：定向测试、`pnpm check`，真实 Host 本地 mock 探针分别捕获 Running 和 Ran 帧，确认执行卡片无重复 running 尾行、审批与结果保留、无行宽溢出及不必要的历史清除。
+
+实施与验证记录：
+
+- 新增 18 项回归，覆盖三类执行工具在深浅/plain、compact/detailed、展开/收起、部分输出与空结果下的时态变化，以及缓存组件复用、失败/中断和窄屏；主屏 32/100 列验证可见标题立即更新、屏外延迟、resize 后更新及保留历史。
+- 屏外比较仅允许同一正文的 `Running` → `Ran`；命令内容和链接目标变化的回归仍要求正常重绘。转交 pi-tui 的行保持原始未归一化形式，避免重复行尾 reset 引发整屏重绘。
+- `pnpm check` 通过：109 个测试文件 / 1593 项测试，类型检查和构建成功。独立定向检查 3 个文件 / 66 项通过。
+- `node scripts/fake-tty-transcript-presentation.mjs`：6 组 PASS，分别捕获黄色 Running 和绿色/红色 Ran 帧，执行卡片无重复 running 尾行；允许/拒绝、PTC compact/detailed、write/edit diff 和源码展开正常，主屏结算未清除终端历史。
+- `node scripts/fake-tty-tool-keywords.mjs`：8 组 PASS，覆盖原生/PTC × 主屏/全屏 × 100 列 dark / 50 列 light；关键字高亮、PTC Ran 标题、真实工具结果与列宽正常。
+- 复验边界：该探针的 PTC 组需要可用的内层 sandbox；在 DSH 沙箱内复跑时 `run_code` 报 `sandbox-unavailable`（`sandbox-exec: sandbox_apply: Operation not permitted`），standard 4 组仍 PASS，PTC 组需在沙箱外执行。
+- 5 个同步探针语法检查及 `git diff --check` 通过。探针使用已授权的本地 mock 与真实 Host；终端滚动历史内的旧标题按上述边界延迟到重绘更新，未做物理终端窗口的人工验收。

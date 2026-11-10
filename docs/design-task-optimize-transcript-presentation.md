@@ -59,3 +59,12 @@ main-screen 无法修改终端原生 scrollback 中的旧行。对仍在屏幕�
 - 其他展示回归包含空文件/末尾换行计数、折叠前 diff 总量与估算标记、空源码行编号、多行语法颜色、中文/emoji 列宽和纯文本主题，以及审批详情/取消/编号确认。
 - 实际输出摘要：`• edit demo.ts`、`└ (+1 -1)`、`1 - const before = 1`、`1 + const after = 2`、`✓ You approved bash printf … this time` / `! You rejected bash printf …`、`• PRESENTATION DONE`。
 - 提交范围内 17 个探针脚本语法检查及 `git diff --check` 通过。探针需要沙箱外的本机端口监听权限；未逐一重跑所有旧探针，验证不代替真实 provider/实体终端体验验收。
+
+## 后续变更（2026-11-10）
+
+[Codex CLI 渲染风格](design-task-optimize-codex-rendering-style.md) 的「执行标题随状态切换」替换了本文两条约束，原文保留：
+
+- 「工具标题文字和尺寸不随 pending/success/error 改写」——执行类工具（`bash` / `pwsh` / `run_code`）改为标题随 `pending` 显示 `Running` / `Ran`，文件工具仍保持固定动作名。
+- 「文本、尺寸、链接/终端指令变化不属于此延后规则」——main-screen 额外接受同一行 `Running` → `Ran` 的屏外变化；其余文本、链接、尺寸变化仍触发正常重绘。
+
+替代原因：用户要求按 Codex CLI 截图由标题承担执行时态，并取消执行卡片尾部重复的 `running…`。圆点配色、错误/停止正文和 scrollback 约束不变。

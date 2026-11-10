@@ -1,9 +1,9 @@
-import { TuiMainScreen } from '@earendil-works/pi-tui'
+import { TuiMainScreen, truncateToWidth } from '@earendil-works/pi-tui'
 
 const sgr = /\u001B\[[0-9;]*m/gu
 const marker = /^(?:\u001B\[[0-9;]*m)*• (?:\u001B\[[0-9;]*m)*/u
 
-/** Defer offscreen marker recoloring instead of clearing native terminal history. */
+/** Defer offscreen lifecycle changes instead of clearing native terminal history. */
 export class TranscriptMainScreen extends TuiMainScreen {
   override render(width: number): string[] {
     const lines = super.render(width)
@@ -22,6 +22,12 @@ export class TranscriptMainScreen extends TuiMainScreen {
       const normalized = this.applyLineResets([after])[0]!
       if (before.replace(sgr, '') === normalized.replace(sgr, '')) {
         lines[index] = previousMarker + after.slice(nextMarker.length)
+      } else if (before.slice(previousMarker.length).startsWith('Running ') && after.slice(nextMarker.length).startsWith('Ran ')) {
+        // Scrollback cannot be edited; a normal full redraw will show the settled tense.
+        const running = truncateToWidth(nextMarker + 'Running ' + after.slice(nextMarker.length + 4), width, '…')
+        if (before.replace(sgr, '') === this.applyLineResets([running])[0]!.replace(sgr, '')) {
+          lines[index] = previousMarker + running.slice(nextMarker.length)
+        }
       }
     }
     return lines

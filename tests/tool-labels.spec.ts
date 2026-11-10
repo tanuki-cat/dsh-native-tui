@@ -1,4 +1,4 @@
-import { stripTerminalSequences } from '@earendil-works/pi-tui'
+import { stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui'
 import { describe, expect, it } from 'vitest'
 import { renderTranscriptBlock } from '../src/ui/transcript-render.js'
 import type { TranscriptBlock } from '../src/ui/transcript.js'
@@ -11,12 +11,15 @@ const tool = (overrides: Partial<ToolBlock> = {}): ToolBlock => ({
   ...overrides,
 })
 const diff = { path: 'src/MixedCase.ts', oldText: 'before', newText: 'after' }
-function render(block: ToolBlock, theme: 'plain' | 'dark' = 'plain', expanded = false): string {
+function renderRows(block: ToolBlock, theme: 'plain' | 'dark' | 'light' = 'plain', expanded = false, width = 100): string[] {
   const palette = createPalette(theme)
-  return stripTerminalSequences(renderTranscriptBlock(block, {
+  return renderTranscriptBlock(block, {
     palette, markdown: markdownTheme(palette), showReasoning: true, maxEntries: 100,
     toolsExpanded: expanded, runCodeDisplay: 'compact',
-  }).render(100).join('\n'))
+  }).render(width)
+}
+function render(block: ToolBlock, theme: 'plain' | 'dark' | 'light' = 'plain', expanded = false): string {
+  return stripTerminalSequences(renderRows(block, theme, expanded).join('\n'))
 }
 
 describe('tool action labels', () => {
@@ -56,7 +59,8 @@ describe('tool action labels', () => {
   })
 
   it.each([
-    ['read', 'Read'], ['grep', 'Grep'], ['glob', 'Glob'], ['find', 'Find'], ['skill', 'Skill'],
+    ['read', 'Read'], ['grep', 'Search'], ['glob', 'Search'], ['find', 'Search'], ['skill', 'Skill'],
+    ['todo_write', 'Todo write'], ['job_output', 'Job output'], ['web_search', 'Web search'],
   ])('capitalizes the %s action label', (name, label) => {
     expect(render(tool({ name }))).toContain('• ' + label + ' src/MixedCase.ts')
   })
@@ -70,10 +74,74 @@ describe('tool action labels', () => {
     const callLines = ['read src/MixedCase.ts', 'mcp IDEA.replaceTextInFile src/MixedCase.ts', 'skill MySkill']
     const block = tool({ name: 'run_code', args: '{"code":"return 1"}', callLines })
     const text = render(block)
-    expect(text).toContain('• Ran run_code')
+    expect(text).toContain('• Ran code')
     expect(text).toContain('└ Read src/MixedCase.ts')
     expect(text).toContain('MCP IDEA.replaceTextInFile src/MixedCase.ts')
     expect(text).toContain('Skill MySkill')
     expect(block.callLines).toEqual(callLines)
+  })
+})
+
+describe.each(['dark', 'light', 'plain'] as const)('tool keyword highlighting in %s', theme => {
+  const palette = createPalette(theme)
+
+  it('highlights native actions separately from paths and search expressions across expansion', () => {
+    const cases: Array<readonly [ToolBlock, string, string]> = [
+      [tool({ name: 'read' }), 'Read', 'src/MixedCase.ts'],
+      [tool(), 'Write', 'src/MixedCase.ts'],
+      [tool({ operation: 'update' }), 'Edit', 'src/MixedCase.ts'],
+      [tool({ operation: 'update', diffs: [diff] }), 'Edit', 'src/MixedCase.ts'],
+      [tool({ name: 'edit', diffs: [diff] }), 'Edit', 'src/MixedCase.ts'],
+      ...['grep', 'glob', 'find'].map(name => [tool({ name, args: JSON.stringify({ path: 'src', pattern: 'MixedCase|TODO' }) }), 'Search', '"MixedCase|TODO" src'] as const),
+      [tool({ name: 'mcp__IDEA__replaceTextInFile' }), 'MCP', 'IDEA/replaceTextInFile src/MixedCase.ts'],
+    ]
+    for (const expanded of [false, true]) for (const [block, action, target] of cases) {
+      const heading = renderRows(block, theme, expanded)[0]!
+      expect(heading).toContain(palette.accent(action) + ' ' + target)
+      if (!palette.plain) expect(heading).not.toContain(palette.accent(target))
+      else expect(heading).not.toContain('\x1b')
+    }
+  })
+
+  it('highlights compact PTC actions without dimming or coloring their targets', () => {
+    const callLines = ['read src/MixedCase.ts', 'grep MixedCase|TODO', 'glob *.ts', 'find src',
+      'todo_write 2 tasks', 'web_search MixedCase Query', 'mcp IDEA.replaceTextInFile src/MixedCase.ts']
+    const block = tool({ name: 'run_code', args: '{"code":"return 1"}', callLines })
+    const text = renderRows(block, theme).join('\n')
+    expect(text).toContain(palette.bold('Ran ') + palette.accent('code'))
+    for (const [action, target] of [['Read', 'src/MixedCase.ts'], ['Search', 'MixedCase|TODO'],
+      ['Search', '*.ts'], ['Search', 'src'], ['Todo write', '2 tasks'], ['Web search', 'MixedCase Query'],
+      ['MCP', 'IDEA.replaceTextInFile src/MixedCase.ts']]) {
+      expect(text).toContain(palette.accent(action!) + ' ' + target)
+    }
+    if (!palette.plain) expect(text).not.toContain('\x1b[2m' + palette.accent('Read'))
+    else expect(text).not.toContain('\x1b')
+    expect(block.callLines).toEqual(callLines)
+    expect(block.name).toBe('run_code')
+    expect(stripTerminalSequences(renderRows(block, theme, true).join('\n'))).toContain('• Ran code')
+  })
+
+  it('escapes untrusted control sequences before applying action styling', () => {
+    const unsafe = '\x1b[31mINJECT\x9b31m\x1b]52;c;DATA\x07'
+    const blocks = [tool({ name: unsafe }), tool({ name: 'read', args: JSON.stringify({ path: unsafe }) }),
+      tool({ name: 'run_code', args: '{}', callLines: ['read ' + unsafe, unsafe + ' target'] })]
+    for (const block of blocks) {
+      const text = renderRows(block, theme, false, 160).join('\n')
+      expect(text).not.toContain('\x1b[31mINJECT')
+      expect(text).not.toContain('\x9b')
+      expect(text).not.toContain('\x1b]52')
+      expect(text).toContain('\\x1b[31mINJECT')
+      expect(text).toContain('\\x9b31m')
+    }
+  })
+
+  it('bounds styled native and compact rows on narrow terminals', () => {
+    const blocks = [tool({ name: 'read' }), tool({ name: 'grep', args: '{"pattern":"你好MixedCase"}' }),
+      tool({ name: 'run_code', args: '{}', callLines: ['read src/中文/MixedCase.ts', 'todo_write 你好👩‍💻'.repeat(4)] })]
+    for (const width of [1, 12, 32, 80]) for (const block of blocks) {
+      const rows = renderRows(block, theme, false, width)
+      expect(rows.every(row => visibleWidth(row) <= width)).toBe(true)
+      if (palette.plain) expect(rows.join('\n')).not.toContain('\x1b')
+    }
   })
 })

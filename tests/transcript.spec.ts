@@ -303,9 +303,9 @@ describe('reduceTranscript', () => {
         'job_output bash-build · wait',
       ] })
       const text = renderTranscriptBlock(parent, compactOptions).render(100).join('\n')
-      expect(text).toContain('└ Job_output bash-build · poll')
-      expect(text).toContain('    Job_output bash-test · wait · timeout 90s')
-      expect(text).toContain('    Job_output bash-build · wait')
+      expect(text).toContain('└ Job output bash-build · poll')
+      expect(text).toContain('    Job output bash-test · wait · timeout 90s')
+      expect(text).toContain('    Job output bash-build · wait')
     }
   })
 
@@ -336,7 +336,7 @@ describe('reduceTranscript', () => {
       callLines: ['read src/a.ts', 'bash ls -la', 'mcp idea.get_file_problems src/a.ts'],
     })
     const output = renderTranscriptBlock(parent!, compactOptions).render(100).join('\n')
-    expect(output).toContain('• Ran run_code')
+    expect(output).toContain('• Ran code')
     expect(output).toContain('└ Read src/a.ts')
     expect(output).toContain('    Bash ls -la')
     expect(output).toContain('    MCP idea')
@@ -348,7 +348,7 @@ describe('reduceTranscript', () => {
       .find(block => block.kind === 'tool' && block.callId === 'call-outer')
     expect(detailedParent).not.toHaveProperty('callLines')
     const detailedOutput = renderTranscriptBlock(detailedParent!, options).render(100).join('\n')
-    expect(detailedOutput).toContain('• Ran run_code · Explore')
+    expect(detailedOutput).toContain('• Ran code · Explore')
     expect(detailedOutput).toContain('const files = 1')
   })
 
@@ -667,7 +667,7 @@ describe('reduceTranscript', () => {
     renderer.set(entries, [])
     const compactOutput = renderer.container.render(100).join('\n')
     expect(compactOutput).toContain('thinking · first thought')
-    expect(compactOutput).toContain('• Ran run_code')
+    expect(compactOutput).toContain('• Ran code')
     expect(compactOutput).toContain('Press AC')
     expect(compactOutput).not.toContain('long code body')
     expect(compactOutput).toContain('long result body')

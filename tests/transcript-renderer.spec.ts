@@ -104,14 +104,14 @@ describe('TranscriptRenderer', () => {
     renderer.set(entries, [])
     const detailed = renderer.container.render(100).join('\n')
     expect(detailed).toContain('second thought')
-    expect(detailed).toContain('• Ran run_code · Press AC')
+    expect(detailed).toContain('• Ran code · Press AC')
     expect(detailed).toContain('1  long code body')
     expect(detailed).not.toContain('├ args')
 
     renderer.setDisplayModes('detailed', 'compact')
     const compactRunCode = renderer.container.render(100).join('\n')
     expect(compactRunCode).not.toContain('├ args')
-    expect(compactRunCode).toContain('• Ran run_code')
+    expect(compactRunCode).toContain('• Ran code')
     expect(compactRunCode).toContain('Press AC')
     expect(compactRunCode).not.toContain('long code body')
 
@@ -119,14 +119,11 @@ describe('TranscriptRenderer', () => {
     const compactThinking = renderer.container.render(100).join('\n')
     expect(compactThinking).toContain('thinking · first thought')
     expect(compactThinking).not.toContain('second thought')
-    expect(compactThinking).toContain('• Ran run_code · Press AC')
+    expect(compactThinking).toContain('• Ran code · Press AC')
     expect(compactThinking).toContain('1  long code body')
   })
 
-  it('keeps tool and compaction head rows identical across their lifecycle', () => {
-    // Main-screen pi-tui repaints the whole transcript when a row above the
-    // viewport changes, so card heads must never encode run state. The state
-    // lives on the tail row, which main-screen patches or extends safely.
+  it('keeps file-tool and compaction heading text fixed across their lifecycle', () => {
     const pending = renderTranscriptBlock({ kind: 'tool', callId: 'c1', name: 'read', args: '{}', pending: true }, options)
     const settled = renderTranscriptBlock({ kind: 'tool', callId: 'c1', name: 'read', args: '{}', result: 'ok', pending: false }, options)
     const failed = renderTranscriptBlock({ kind: 'tool', callId: 'c1', name: 'read', args: '{}', result: 'no', isError: true, pending: false }, options)
@@ -168,7 +165,7 @@ describe('TranscriptRenderer', () => {
       args: JSON.stringify({ description: 'Press AC', code: 'const x = 1\nconsole.log(x)' }),
       result: '1',
     }, options).render(100).join('\n')
-    expect(output).toContain('• Ran run_code · Press AC')
+    expect(output).toContain('• Ran code · Press AC')
     expect(output).toContain('1  const x = 1')
     expect(output).toContain('2  console.log(x)')
     expect(output).not.toContain('├ result')

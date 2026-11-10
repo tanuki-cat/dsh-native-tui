@@ -67,7 +67,8 @@ async function run(fullscreen, decision, preset = 'standard', display = 'detaile
   const label = (fullscreen ? 'fullscreen' : 'main-screen') + '-' + decision + (preset === 'ptc' ? '-ptc-' + display : '')
   const home = join(root, label), profile = join(home, 'profiles/tui'), workspace = join(home, 'workspace'), log = join(home, 'frames.jsonl')
   const pendingAck = join(home, 'pending-frame-ack')
-  const shellHeading = preset === 'ptc' ? '• Ran run_code · bash' : '• Ran printf'
+  const pendingHeading = preset === 'ptc' ? '• Running code · bash' : '• Running printf'
+  const shellHeading = preset === 'ptc' ? '• Ran code · bash' : '• Ran printf'
   mkdirSync(join(profile, 'node_modules'), { recursive: true })
   for (const dir of [workspace, join(home, 'agents'), join(home, 'bundled')]) mkdirSync(dir)
   writeFileSync(join(workspace, 'package.json'), '{"private":true}')
@@ -106,7 +107,7 @@ async function run(fullscreen, decision, preset = 'standard', display = 'detaile
   try {
     await waitFor(text => text.includes('enter send'), 'startup')
     child.stdin.write('run the presentation probe\r')
-    await waitFor((_text, records) => records.some(frame => frame.rawLines.some(line => strip(line).includes(shellHeading)
+    await waitFor((_text, records) => records.some(frame => frame.rawLines.some(line => strip(line).includes(pendingHeading)
       && line.includes('\x1b[33m• '))), 'pending shell frame')
     writeFileSync(pendingAck, '')
     await waitFor(text => text.includes('1. Allow once') && text.includes('Reason:'), 'approval')
@@ -118,15 +119,20 @@ async function run(fullscreen, decision, preset = 'standard', display = 'detaile
     const records = frames(), transcript = records.flatMap(frame => frame.lines).join('\n')
     assert.ok(transcript.includes('• Write demo.ts') && transcript.includes('• Edit demo.ts'))
     assert.ok(transcript.includes('(+1 -1)') && transcript.includes('1 - const before = 1') && transcript.includes('1 + const after = 2'))
-    assert.ok(transcript.includes(preset === 'ptc' ? '• Ran run_code' : '• Ran printf') && transcript.includes('PRESENTATION THOUGHT'))
+    assert.ok(transcript.includes(preset === 'ptc' ? '• Ran code' : '• Ran printf') && transcript.includes('PRESENTATION THOUGHT'))
     assert.ok(transcript.includes('• PRESENTATION DONE'))
     assert.ok(out.includes('\x1b[3m') && out.includes('48;5;22') && out.includes('48;5;52'))
     assert.ok(!records.some(frame => frame.overflow))
     assert.ok(!transcript.includes('◆ assistant'))
     const marker = (heading, color) => records.some(frame => frame.rawLines.some(line => strip(line).includes(heading) && line.includes('\x1b[' + color + 'm• ')))
-    assert.ok(marker(shellHeading, 33), 'pending tool must have a yellow marker')
+    assert.ok(marker(pendingHeading, 33), 'pending tool must have a Running title and yellow marker')
     assert.ok(marker('• Write demo.ts', 32) && marker('• Edit demo.ts', 32), 'completed file tools must have green markers')
     assert.ok(marker(shellHeading, decision === 'allow' ? 32 : 31), 'settled tool marker must reflect the Host outcome')
+    for (const frame of records) {
+      const index = frame.lines.findIndex(line => line.includes(pendingHeading) || line.includes(shellHeading))
+      if (index >= 0) assert.ok(!frame.lines.slice(index + 1).some(line => line.trim() === '└ running…'), 'execution title must replace the running tail')
+    }
+    if (!fullscreen) assert.ok(!out.includes('\x1b[3J'), 'execution settlement must preserve native terminal history')
     assert.ok(!transcript.includes('✓ done'), 'completion uses the marker, with no extra status row')
     if (decision === 'allow') {
       assert.ok(transcript.includes('✓ You approved bash printf') && transcript.includes('this time'))

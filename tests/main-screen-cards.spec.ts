@@ -1,4 +1,4 @@
-import { Container, Text, TuiMainScreen } from '@earendil-works/pi-tui'
+import { Container, stripTerminalSequences, Text, TuiMainScreen } from '@earendil-works/pi-tui'
 import { describe, expect, it, vi } from 'vitest'
 import { createPalette, editorTheme, markdownTheme } from '../src/ui/theme.js'
 import { renderTranscriptBlock } from '../src/ui/transcript-render.js'
@@ -110,12 +110,11 @@ describe('main-screen card lifecycle', () => {
     } finally { tui.stop() }
   })
 
-  it('patches a tool card whose status moves to the tail row', () => {
+  it('updates a visible execution heading without a full repaint', () => {
     const args = JSON.stringify({ command: 'ls', note: Array.from({ length: 30 }, (_, i) => 'n' + String(i)).join('\n') })
     const pending: TranscriptBlock = { kind: 'tool', callId: 'c1', name: 'bash', args, pending: true }
     const settled: TranscriptBlock = { kind: 'tool', callId: 'c1', name: 'bash', args, result: 'file.txt', pending: false }
-    // A head row that carries the run state sits above the viewport by the time
-    // the result lands, and main-screen can only patch rows that are visible.
+    // This compact shell card remains in the viewport after the filler scrolls away.
     expect(redrawsForSwap(pending, settled)).toBe(0)
   })
 
@@ -132,8 +131,7 @@ describe('main-screen card lifecycle', () => {
   })
 
   it('grows a compact run_code call list without a full repaint', () => {
-    // A compact card keeps its head fixed and appends one row per distinct
-    // sub-call, so the rows that change are the card's own tail.
+    // The compact card and its changing execution heading remain visible.
     const compact = { ...options, runCodeDisplay: 'compact' as const }
     const base: TranscriptBlock = {
       kind: 'tool', callId: 'c1', name: 'run_code', args: JSON.stringify({ description: 'Explore' }), pending: true,
@@ -236,17 +234,60 @@ describe('main-screen tool marker colors', () => {
   it.each(['text', 'link'])('keeps ordinary redraw behavior for changed offscreen heading %s', change => {
     const tui = new TranscriptMainScreen(new FakeTerminal(100, 30) as never, false)
     const link = (target: string): string => '\x1b]8;;https://example.test/' + target + '\x07original command\x1b]8;;\x07'
-    const head = new Text(palette.warning('• ') + (change === 'text' ? 'original command' : link('before')), 0, 0)
+    const head = new Text(palette.warning('• ') + 'Running ' + (change === 'text' ? 'original command' : link('before')), 0, 0)
     tui.addChild(head)
     tui.addChild(new Text(FILLER, 0, 0))
     try {
       tui.start()
       tui.renderNow()
       const baseline = tui.fullRedraws
-      head.setText(palette.success('• ') + (change === 'text' ? 'different command' : link('after')))
+      head.setText(palette.success('• ') + 'Ran ' + (change === 'text' ? 'different command' : link('after')))
       tui.renderNow()
       expect(tui.fullRedraws).toBeGreaterThan(baseline)
     } finally { tui.stop() }
+  })
+})
+
+describe.each(['bash', 'pwsh', 'run_code'])('main-screen %s execution tense', name => {
+  it.each([32, 100])('updates visible titles and defers only offscreen tense changes at %i columns', width => {
+    for (const offscreen of [false, true]) {
+      const terminal = new FakeTerminal(width, 30)
+      const written: string[] = []
+      terminal.write = (text?: string) => { if (text !== undefined) written.push(text) }
+      const tui = new TranscriptMainScreen(terminal as never, false)
+      const palette = createPalette('dark')
+      const colored = { ...options, palette, markdown: markdownTheme(palette) }
+      const block: TranscriptBlock = { kind: 'tool', name, callId: 'tense', pending: true,
+        args: JSON.stringify({ command: 'printf ' + '你好/MixedCase'.repeat(12), code: 'return 1' }),
+      }
+      const root = new Container()
+      root.addChild(new Text('before', 0, 0))
+      root.addChild(renderTranscriptBlock(block, colored))
+      root.addChild(new Text(offscreen ? FILLER : TRAILING, 0, 0))
+      tui.addChild(root)
+      try {
+        tui.start()
+        tui.renderNow()
+        const before = tui.captureRenderState()
+        const index = before.previousLines.findIndex(line => stripTerminalSequences(line).startsWith('• Running '))
+        expect(index).toBeGreaterThanOrEqual(0)
+        expect(index < before.previousViewportTop).toBe(offscreen)
+        const redraws = tui.fullRedraws
+        written.splice(0)
+        root.children[1] = renderTranscriptBlock({ ...block, pending: false }, colored)
+        tui.renderNow()
+        expect(tui.fullRedraws).toBe(redraws)
+        expect(written.join('')).not.toContain('\x1b[3J')
+        const heading = stripTerminalSequences(tui.captureRenderState().previousLines[index]!)
+        expect(heading).toContain(offscreen ? '• Running ' : '• Ran ')
+        expect(stripTerminalSequences(root.children[1]!.render(width)[0]!)).toContain('• Ran ')
+        if (offscreen) {
+          Object.defineProperty(terminal, 'columns', { value: width + 1 })
+          tui.renderNow()
+          expect(stripTerminalSequences(tui.captureRenderState().previousLines[index]!)).toContain('• Ran ')
+        }
+      } finally { tui.stop() }
+    }
   })
 })
 

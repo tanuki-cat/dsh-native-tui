@@ -42,8 +42,8 @@ describe.each(['detailed', 'compact', 'hidden'] as const)('empty reasoning in %s
 
     entries.push(toolCall)
     renderer.set(entries, [])
-    expect(output(renderer)).toContain('• Ran run_code')
-    expect(output(renderer)).toContain('running')
+    expect(output(renderer)).toContain('• Running code')
+    expect(output(renderer)).not.toContain('└ running…')
     expect(output(renderer)).not.toContain('thinking')
     expect(output(renderer)).not.toContain('◆ assistant')
   })
@@ -81,6 +81,6 @@ describe.each(['detailed', 'compact'] as const)('actual reasoning in %s mode', t
     entries.push(live({ type: 'block-start', index: 1, blockType: 'tool-call' }, 3), toolCall)
     renderer.set(entries, [])
     expect(output(renderer)).toContain('ACTUAL THOUGHT')
-    expect(output(renderer)).toContain('• Ran run_code')
+    expect(output(renderer)).toContain('• Running code')
   })
 })

@@ -51,16 +51,18 @@ describe('compact transcript presentation', () => {
     expect(markdownTheme(palette).heading('Heading')).toBe(palette.bold('Heading'))
     expect(lines.every(line => visibleWidth(line) <= 60)).toBe(true)
   })
-  it('puts shell output directly under a stable bullet heading without a card background', () => {
+  it('puts shell output under a heading whose tense follows execution state', () => {
     const lines = render(tool(), 'dark')
     expect(lines.map(stripTerminalSequences).map(line => line.trimEnd())).toEqual(['• Ran pnpm check', '  └ PASS'])
     expect(lines.join('\n')).not.toContain('48;5;237')
     for (const update of [{ pending: true }, { isError: true }, { stopped: true }]) {
-      expect(stripTerminalSequences(render(tool(update), 'dark')[0]!)).toBe(stripTerminalSequences(lines[0]!))
+      const rows = render(tool(update), 'dark').map(stripTerminalSequences)
+      expect(rows[0]).toBe('pending' in update ? '• Running pnpm check' : '• Ran pnpm check')
+      expect(rows.join('\n')).not.toContain('└ running…')
     }
   })
 
-  it.each(['bash', 'pwsh', 'read', 'write', 'edit', 'mcp__idea__lookup', 'run_code'])('colors only the %s marker through its lifecycle, including empty results', name => {
+  it.each(['bash', 'pwsh', 'read', 'write', 'edit', 'mcp__idea__lookup', 'run_code'])('preserves the %s marker semantics through its lifecycle, including empty results', name => {
     for (const theme of ['dark', 'light'] as const) {
       const palette = createPalette(theme)
       for (const runCodeDisplay of ['compact', 'detailed'] as const) {
@@ -79,8 +81,9 @@ describe('compact transcript presentation', () => {
             }).render(100)
             const marker = color('• ')
             expect(rows[0]!.startsWith(marker)).toBe(true)
-            heading ??= rows[0]!.slice(marker.length)
-            expect(rows[0]!.slice(marker.length)).toBe(heading)
+            const title = rows[0]!.slice(marker.length).replace('Running ', 'Ran ')
+            heading ??= title
+            expect(title).toBe(heading)
             expect(rows.join('\n')).not.toContain('✓ done')
           }
         }

@@ -4,7 +4,7 @@ import { SourcePreview } from './source-preview.js'
 import { compactCodeExecutionPreview, compactErrorPreview, formatToolArguments } from './tool-preview.js'
 import type { TranscriptBlock, TranscriptOptions } from './transcript.js'
 import { literalToolText, toolLabel, ToolOutput } from './tool-output.js'
-import { compactToolLabel } from './tool-label.js'
+import { compactToolLabel, executionVerb, highlightToolLabel, toolDisplayName } from './tool-label.js'
 
 /** Tools whose cards follow the code-execution density setting. */
 const CODE_EXECUTION_TOOLS: ReadonlySet<string> = new Set(['run_code', 'bash', 'pwsh'])
@@ -123,7 +123,9 @@ export function renderCodeExecutionCard(block: Extract<TranscriptBlock, { kind: 
   const { description, source, meta } = codeExecutionParts(block.args)
   const label = description ?? firstLine(source)
   const container = new Container()
-  container.addChild(toolHeading(palette.bold('Ran ') + palette.accent(block.name)
+  const action = palette.bold(executionVerb(block.pending) + ' ')
+    + highlightToolLabel(block.name === 'run_code' ? 'code' : toolDisplayName(block.name), palette)
+  container.addChild(toolHeading(action
     + (label === undefined ? '' : palette.dim(' · ' + inlineSummary(label))), palette, block))
   const body = new Container()
   container.addChild(new ToolBody(body, palette))
@@ -133,7 +135,7 @@ export function renderCodeExecutionCard(block: Extract<TranscriptBlock, { kind: 
     const calls = block.callLines ?? []
     const shown = new Set(calls)
     if (calls.length > 0) {
-      for (const line of calls) body.addChild(new Text(palette.dim(literalToolText(compactToolLabel(line))), 0, 0))
+      for (const line of calls) body.addChild(new Text(compactToolLabel(line, palette), 0, 0))
       if (block.callLinesOmitted) body.addChild(new Text(palette.dim('+ ' + block.callLinesOmitted + ' more calls'), 0, 0))
     } else {
       const preview = compactCodeExecutionPreview(block)
@@ -174,8 +176,7 @@ export function renderCodeExecutionCard(block: Extract<TranscriptBlock, { kind: 
     if (block.result?.trim()) body.addChild(new ToolOutput(block.result, palette, options.toolsExpanded ?? false,
       RESULT_PREVIEW_LINES, 'end', block.isError))
   }
-  if (block.pending) container.addChild(new Text(palette.warning('  └ running…'), 0, 0))
-  else if (block.isError) container.addChild(new Text(palette.error('  └ error'), 0, 0))
-  else if (block.stopped) container.addChild(new Text(palette.warning('  └ stopped · inspect the partial result'), 0, 0))
+  if (!block.pending && block.isError) container.addChild(new Text(palette.error('  └ error'), 0, 0))
+  else if (!block.pending && block.stopped) container.addChild(new Text(palette.warning('  └ stopped · inspect the partial result'), 0, 0))
   return container
 }

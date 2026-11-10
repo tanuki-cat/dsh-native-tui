@@ -119,9 +119,9 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 - token 用量与 cache 命中率按 Web 口径：总量取四桶之和、部分命中不会显示成 100%，数字格式与 Web 统计 pill 一致。`tok/s` 是整段 Session 的累计 decode 速率（`decodeTokens / (decodeMs / 1000)`），不是瞬时速率，低于 10 时保留一位小数。
 - 可选 `fullscreen`：TuiAltScreen + ScrollView，header/status/editor 固定，鼠标滚轮滚动、文本选择复制。向上滚动离开末尾后，视口末行显示可点击的 `↓ jump to latest`，点击回到最新消息并恢复自动跟随（也可 `Ctrl+End`）。
 - 长会话渲染优化：每个行组件按宽度缓存结果（`MemoBlock`），`maxTranscriptEntries` 默认 600 限制每帧保留的行组件数；帧间隔按上次绘制时刻对齐并按实测帧成本自适应，内容签名未变的帧跳过重绘。
-- 工具卡片与 PTC 摘要的动作标签统一首字母大写，MCP 前缀使用大写缩写；服务名、方法名、命令和路径保持原样。shell 为 `• Ran command` / `• Ran PS> command`，文件工具为 `• Read path` / `• Write path` / `• Edit path`，MCP 为 `• MCP service/tool`，PTC 为 `• Ran run_code`。shell 首行最多 120 字符，多行命令标记省略行数；路径与查询等标签最多 160 字符，路径保留末尾。展开后查看原命令，正文仍有安全预览上限。
+- 工具卡片的动作关键字单独以主题蓝色高亮（shell 仍整条突出实际命令），路径和搜索表达式使用普通文字。标签统一句首大写（如 `Todo write`），`grep` / `glob` / `find` 显示为 `Search`，MCP 前缀使用大写缩写；服务名、方法名、命令和路径保持原样。shell 运行中为 `• Running command` / `• Running PS> command`，结束后改为 `• Ran …`，文件工具为 `• Read path` / `• Write path` / `• Edit path`，MCP 为 `• MCP service/tool`，PTC 为 `• Running code` / `• Ran code`，执行卡片不再追加 `running…` 尾行；文件工具标题不随时态变化，运行中保留 `running…`。shell 首行最多 120 字符，多行命令标记省略行数；路径与查询等标签最多 160 字符，路径保留末尾。展开后查看原命令，正文仍有安全预览上限。
 - 成功的 read 默认收起，write 新建文件显示带行号的源码预览；shell 保留末尾 5 个视觉行，通用结果保留前 10 个视觉行，随后显示省略行数与 Ctrl+O 提示。折叠状态仍展示错误正文。edit 和有实际更新 diff 的 write 使用 Host 变更元数据，展示 `(+N -N)`、行号、红绿增删行和附近上下文，默认最多 24 个 diff 行；超出计算预算的变更范围用 `~` 标记估算计数，整文件替换保留删除和新增两侧样本。空文件、行尾换行不虚增行数；没有实际 diff 时不推测旧内容。`/diff` 可分页查看会话记录的 diff，仍受预览上限约束。
-- 工具首行的 `•` 用颜色区分状态：黄色运行、绿色完成、红色失败、灰色停止，不额外增加完成提示行；标题保持单行，错误/停止原因继续展示，`plain` 主题不着色。write 在 Host 确认更新后可由 `Write` 改为 `Edit`。main-screen 已进入终端滚动历史的圆点延后到必要的完整重绘再刷新颜色，避免为变色清空历史；fullscreen 直接使用最新颜色。默认 main-screen 不支持点击卡片；fullscreen 下点击卡片首行可单独展开/收起。`Ctrl+O` 在两种模式下均切换所有保留工具卡片和 context 正文。
+- 工具首行的 `•` 用颜色区分状态：黄色运行、绿色完成、红色失败、灰色停止，不额外增加完成提示行；标题保持单行，错误/停止原因继续展示，`plain` 主题不着色。write 在 Host 确认更新后可由 `Write` 改为 `Edit`。main-screen 可见执行标题立即从 `Running` 改为 `Ran`；已进入终端滚动历史的标题和圆点延后到必要的完整重绘再刷新，避免为状态变化清空历史；fullscreen 直接使用最新状态。默认 main-screen 不支持点击卡片；fullscreen 下点击卡片首行可单独展开/收起。`Ctrl+O` 在两种模式下均切换所有保留工具卡片和 context 正文。
 - 审批在屏幕下方突出实际命令、原因与 cwd，所有操作带编号：方向键或编号键移动选择，Enter 才确认，Esc 取消；详情页完整展示调用参数。单次允许显示 `✓ You approved … this time`，拒绝和取消分别显示真实结果。只提供 Host 声明的操作和授权范围，原生单次审批不会增加长期授权选项。
 - **main-screen 手动全局展开的代价**：视口上方的历史卡片高度变化时，pi-tui 会整屏重绘并清除终端 scrollback；Session 日志不受影响。这不属于自动结算零重绘的保证范围。只查看单次完整输出时，可使用 `/tools`、`/tool <index>` 的独立预览，避免全局重排。
 
@@ -587,6 +587,7 @@ node scripts/fake-tty-interaction-modes.mjs native # 五模式、真实文件效
 node scripts/fake-tty-interaction-modes.mjs ptc    # 相同边界的 PTC 内层链路；需要宿主允许创建子进程 sandbox
 node scripts/fake-tty-tool-details.mjs             # 显式 accept-edits 下的真实 PTC 卡片及审批详情；使用隔离 profile、本地 MCP 命名 fixture 和 mock provider
 node scripts/fake-tty-write-update-diff.mjs        # 原生/PTC × 普通/全屏：write 更新 diff、空文件插入、新建预览与 /diff 最新/索引查看
+node scripts/fake-tty-tool-keywords.mjs            # 原生/PTC × 普通/全屏 × 深浅/宽窄：Read/Search 关键字高亮范围、大小写和真实工具结果；PTC 组需要可用的内层 sandbox
 node scripts/fake-tty-slash-autocomplete.mjs       # 普通/全屏 × 100/50 列：向上命令补全、整行选中、键盘、子命令、输入框位置及全屏鼠标
 node scripts/fake-tty-permission-restart.mjs       # minimal 同会话 Agent 重建、取消及权限恢复；使用终端 fence fixture，不依赖物理 PTY
 ~~~

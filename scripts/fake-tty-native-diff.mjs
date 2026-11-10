@@ -151,7 +151,7 @@ child.on('close', async (code, signal) => {
     && !clean.includes('1 + before')
     && clean.includes('1 - before')
     && clean.includes('1 + after')
-    && !clean.includes('• Ran run_code')
+    && !clean.includes('• Ran code')
   console.log('EXIT', code, signal, 'phase', phase, 'collapsedInitially', collapsedInitially, 'expanded', expanded, 'collapsedAgain', collapsedAgain, 'pass', pass)
   console.log(clean.slice(-14000))
   console.log('--- STDERR ---')
