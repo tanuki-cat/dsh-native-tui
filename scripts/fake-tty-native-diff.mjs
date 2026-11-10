@@ -145,7 +145,7 @@ child.on('close', async (code, signal) => {
   const pass = code === 0 && signal === null && phase === 5
     && collapsedInitially && expanded && collapsedAgain
     && clean.includes('Write ' + file)
-    && clean.includes('Edit ' + file)
+    && clean.includes('Edited 1 file') && clean.includes(file)
     && !clean.includes('⚙ write')
     && !clean.includes('├ args') && !clean.includes('├ result')
     && !clean.includes('1 + before')

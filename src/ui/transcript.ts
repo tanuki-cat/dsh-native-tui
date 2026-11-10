@@ -70,6 +70,8 @@ export type TranscriptBlock = ({
   readonly callId: string
   readonly name: string
   readonly args: string
+  /** Turn identity bounds presentation-only file edit groups. */
+  readonly turn?: number
   readonly result?: string
   readonly isError?: boolean
   /** A patch stopped after retaining zero or more committed operations. */
@@ -133,6 +135,8 @@ export interface ToolCallMemory {
 
 /** Options controlling transcript reduction. */
 export interface TranscriptOptions {
+  /** Session workspace used only to shorten displayed file paths. */
+  readonly cwd?: string
   readonly showReasoning: boolean
   readonly thinkingDisplay?: DisplayMode
   readonly runCodeDisplay?: DisplayMode
@@ -294,6 +298,7 @@ export function createTranscriptReducer(options: TranscriptOptions) {
   const assistants = new Map<number, AssistantStream>()
   const finalizedSteps = new Set<string>()
   const toolByCall = new Map<string, number>()
+  const toolTurns = new Map<string, number>()
   const hiddenCodeExecutionCalls = new Set<string>()
   /** Event sequence -> call identity, for both tool calls and tool results. */
   const settledCalls = options.toolMemory?.settled ?? new Set<string>()
@@ -477,6 +482,8 @@ export function createTranscriptReducer(options: TranscriptOptions) {
         const data = (event as unknown as { readonly data?: Record<string, unknown> }).data
         const subCallId = data === undefined ? undefined : typeof data.subCallId === 'string' ? data.subCallId : undefined
         const parentCallId = data === undefined ? undefined : typeof data.parentCallId === 'string' ? data.parentCallId : undefined
+        const rootCallId = typeof data?.rootCallId === 'string' ? data.rootCallId : parentCallId
+        const turn = rootCallId === undefined ? undefined : toolTurns.get(rootCallId)
         const name = data !== undefined && typeof data.name === 'string' && data.name !== '' ? data.name : 'tool'
         const settle = extensionType === 'tool/ptc-dispatch'
         const args = ptcArguments(data?.arguments)
@@ -485,7 +492,6 @@ export function createTranscriptReducer(options: TranscriptOptions) {
         // A compact parent card lists what its program dispatched; a detailed
         // card shows the program source and ignores these rows.
         if (runCodeDisplay === 'compact' && subCallId !== undefined) {
-          const rootCallId = typeof data?.rootCallId === 'string' ? data.rootCallId : parentCallId
           rememberPtcCall(rootCallId, name, args)
         }
         // Only file-editing sub-calls need their own card; the rest are already
@@ -498,7 +504,7 @@ export function createTranscriptReducer(options: TranscriptOptions) {
               toolByCall.set(subCallId, blocks.length)
               callIdBySeq.set(seq, subCallId)
               knownCalls.add(subCallId)
-              blocks.push({ kind: 'tool', callId: subCallId, name, args, pending: true, seq })
+              blocks.push({ kind: 'tool', callId: subCallId, name, args, pending: true, seq, ...(turn === undefined ? {} : { turn }) })
             }
           }
           else if (!(prior?.kind === 'tool' && prior.pending === false)) {
@@ -507,6 +513,7 @@ export function createTranscriptReducer(options: TranscriptOptions) {
               callId: subCallId,
               name,
               args,
+              ...(turn === undefined ? {} : { turn }),
               result: contentText(ptcContent(data?.content)),
               ...(data?.isError === true ? { isError: true } : {}),
               ...(resultStopped(data?.meta) ? { stopped: true } : {}),
@@ -588,6 +595,7 @@ export function createTranscriptReducer(options: TranscriptOptions) {
         }
         case 'tool/call': {
           const callId = event.data.callId
+          if (event.data.turn !== undefined) toolTurns.set(callId, event.data.turn)
           const seenSeq = callIdBySeq.get(seq) === callId
           const knownCall = !seenSeq && knownCalls.has(callId)
           callIdBySeq.set(seq, callId)
@@ -608,6 +616,7 @@ export function createTranscriptReducer(options: TranscriptOptions) {
             callId: event.data.callId,
             name: event.data.name,
             args: event.data.arguments,
+            ...(event.data.turn === undefined ? {} : { turn: event.data.turn }),
             pending: true,
             seq,
           })
@@ -643,6 +652,7 @@ export function createTranscriptReducer(options: TranscriptOptions) {
               callId,
               name: 'tool',
               args: '',
+              ...(event.data.turn === undefined ? {} : { turn: event.data.turn }),
               result,
               ...(isError ? { isError: true } : {}),
               ...(resultStopped(event.data.meta) ? { stopped: true } : {}),

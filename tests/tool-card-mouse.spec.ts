@@ -24,13 +24,17 @@ class Terminal {
   setProgramStatus(): void {}
 }
 
-it('routes SGR press/release through fullscreen layout and a scrolled transcript to the memoized tool card', async () => {
+it.each(['read', 'edits'])('routes SGR press/release through fullscreen layout to the memoized %s card', async family => {
   const terminal = new Terminal()
   const tui = new TuiAltScreen(terminal, false, undefined, { mouse: true })
   onTestFinished(() => { tui.stop() })
   const palette = createPalette('plain')
   const renderer = new TranscriptRenderer({ palette, markdown: markdownTheme(palette), showReasoning: true, maxEntries: 100 })
-  renderer.set([], [{ kind: 'tool', callId: 'mouse', name: 'read', args: '{"file_path":"src/a.ts"}', pending: false, result: 'MOUSE_EXPANDED_ONE\nMOUSE_EXPANDED_TWO' }])
+  renderer.set([], [family === 'read'
+    ? { kind: 'tool', callId: 'mouse', name: 'read', args: '{"file_path":"src/a.ts"}', pending: false, result: 'MOUSE_EXPANDED_ONE\nMOUSE_EXPANDED_TWO' }
+    : { kind: 'tool', callId: 'mouse', name: 'edit', args: '{"file_path":"src/a.ts"}', pending: false, diffs: [{ path: 'src/a.ts', oldText: 'old',
+      newText: Array.from({ length: 30 }, (_, index) => index === 25 ? 'MOUSE_EXPANDED_ONE' : index === 26 ? 'MOUSE_EXPANDED_TWO' : 'row ' + index).join('\n'),
+    }] }])
   const transcript = new Box(0, 1)
   transcript.addChild(new Text(Array.from({ length: 80 }, (_, index) => 'history_' + index).join('\n'), 0, 0))
   transcript.addChild(renderer.container)
@@ -54,10 +58,11 @@ it('routes SGR press/release through fullscreen layout and a scrolled transcript
       terminal.onFrame = undefined
     }
   }
-  const clickTitle = (screen: string[]): void => {
-    const row = screen.findIndex(line => line.includes('Read src/a.ts'))
+  const clickTitle = (screen: string[], expanded = false): void => {
+    const label = family === 'read' ? 'Read src/a.ts' : expanded ? 'Hide details' : 'Edited 1 file'
+    const row = screen.findIndex(line => line.includes(label))
     expect(row).toBeGreaterThan(1)
-    const column = screen[row]!.indexOf('Read src/a.ts')
+    const column = screen[row]!.indexOf(label)
     const position = (column + 1) + ';' + (row + 1)
     terminal.onInput?.('\x1b[<0;' + position + 'M')
     terminal.onInput?.('\x1b[<0;' + position + 'm')
@@ -68,6 +73,6 @@ it('routes SGR press/release through fullscreen layout and a scrolled transcript
   const expanded = await frame(() => { clickTitle(collapsed) })
   expect(expanded.some(line => line.includes('MOUSE_EXPANDED_ONE'))).toBe(true)
   expect(expanded.some(line => line.includes('MOUSE_EXPANDED_TWO'))).toBe(true)
-  const restored = await frame(() => { clickTitle(expanded) })
+  const restored = await frame(() => { clickTitle(expanded, true) })
   expect(restored.some(line => line.includes('MOUSE_EXPANDED_ONE'))).toBe(false)
 })

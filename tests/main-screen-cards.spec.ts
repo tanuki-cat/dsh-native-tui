@@ -79,6 +79,38 @@ function redrawsForSwap(before: TranscriptBlock, after: TranscriptBlock): number
 }
 
 describe('main-screen card lifecycle', () => {
+  it.each([false, true])('preserves native history while an edited-files group grows (protected: %s)', protectedScreen => {
+    let columns = 100
+    const terminal = new FakeTerminal(columns, 12)
+    Object.defineProperty(terminal, 'columns', { get: () => columns })
+    const written: string[] = []
+    terminal.write = (data?: string) => { if (data !== undefined) written.push(data) }
+    const tui = protectedScreen ? new TranscriptMainScreen(terminal as never, false) : new TuiMainScreen(terminal as never, false)
+    const renderer = new TranscriptRenderer(options)
+    tui.addChild(new Text(FILLER, 0, 0))
+    tui.addChild(renderer.container)
+    tui.addChild(new Text('STATUS\nEDITOR', 0, 0))
+    const tools: TranscriptBlock[] = []
+    try {
+      tui.start()
+      tui.renderNow()
+      written.splice(0)
+      for (let index = 0; index < 8; index += 1) {
+        tools.push({ kind: 'tool', callId: 'edit-' + index, turn: 1, name: 'edit', args: '{}', pending: false,
+          diffs: [{ path: 'file-' + index + '.ts', oldText: 'before', newText: 'after' }] })
+        renderer.set([], tools)
+        tui.renderNow()
+      }
+      expect(written.join('').includes('\x1b[3J')).toBe(!protectedScreen)
+      expect(renderer.container.render(columns).join('\n')).toContain('Edited 8 files (+8 -8)')
+      const oldSummary = tui.captureRenderState().previousLines.find(line => stripTerminalSequences(line).startsWith('• Edited'))
+      if (protectedScreen) expect(stripTerminalSequences(oldSummary!)).not.toContain('Edited 8 files')
+      columns = 101
+      tui.renderNow()
+      expect(tui.captureRenderState().previousLines.some(line => stripTerminalSequences(line).includes('Edited 8 files (+8 -8)'))).toBe(true)
+    } finally { tui.stop() }
+  })
+
   it.each(['above', 'visible'] as const)('measures explicit global expansion with cards %s the viewport', placement => {
     const terminal = new FakeTerminal(100, 30)
     const written: string[] = []

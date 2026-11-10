@@ -8,6 +8,7 @@ import { formatToolArguments } from './tool-preview.js'
 import { literalToolText, toolLabel, ToolOutput } from './tool-output.js'
 import { ToolBody, toolHeading } from './transcript-chrome.js'
 import { executionVerb, highlightToolLabel, isWriteUpdate, toolActionLabel } from './tool-label.js'
+import { EditGroupCard, isAppliedEdit } from './edit-group.js'
 
 type ToolBlock = Extract<TranscriptBlock, { kind: 'tool' }>
 type Arguments = Readonly<Record<string, unknown>>
@@ -63,6 +64,7 @@ export class ToolCard implements Component {
     const container = new Container()
     const addBody = (component: Component): void => { container.addChild(new ToolBody(component, palette)) }
     const diffs = block.diffs ?? []
+    if (diffs.length > 1 && isAppliedEdit(block)) return new EditGroupCard([block], { ...this.options, toolsExpanded: expanded })
     if (block.name === 'write' && (!isWriteUpdate(block) || diffs.length === 0)) return renderWriteCard(block, palette, expanded)
     const path = stringArg(args, 'file_path') ?? stringArg(args, 'path')
     const shell = block.name === 'bash' || block.name === 'pwsh'

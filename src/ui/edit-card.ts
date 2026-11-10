@@ -10,30 +10,38 @@ interface NumberedRow {
   readonly line?: number
 }
 
+export interface DiffStats {
+  readonly added: number
+  readonly removed: number
+  readonly approximate: boolean
+}
+
 /** Applied diffs use Host metadata only; rendering never reopens the file. */
-export function renderEditDiff(diff: FileDiff, palette: Palette, expanded = false): Component {
+export function renderEditDiff(diff: FileDiff, palette: Palette, expanded = false,
+  options: { readonly maxRows?: number; readonly summary?: boolean; readonly changedOnly?: boolean } = {}): Component & { readonly stats: DiffStats } {
   const before = diff.oldText === null ? [] : diffSourceLines(diff.oldText)
   const after = diffSourceLines(diff.newText)
   let commonPrefix = 0, commonSuffix = 0
   while (commonPrefix < before.length && commonPrefix < after.length && before[commonPrefix] === after[commonPrefix]) commonPrefix += 1
   while (commonSuffix < before.length - commonPrefix && commonSuffix < after.length - commonPrefix
     && before[before.length - 1 - commonSuffix] === after[after.length - 1 - commonSuffix]) commonSuffix += 1
-  const start = Math.max(0, commonPrefix - 3)
-  const beforeEnd = before.length - Math.max(0, commonSuffix - 3)
-  const afterEnd = after.length - Math.max(0, commonSuffix - 3)
+  const contextLines = 3
+  const start = Math.max(0, commonPrefix - contextLines)
+  const beforeEnd = before.length - Math.max(0, commonSuffix - contextLines)
+  const afterEnd = after.length - Math.max(0, commonSuffix - contextLines)
   const beforeCount = beforeEnd - start, afterCount = afterEnd - start
-  const limit = expanded ? 2000 : 24
+  const limit = options.maxRows ?? (expanded ? 2000 : 24)
   const omittedHint = expanded ? ' · preview limit' : ' · ctrl+o to expand'
   let rows: NumberedRow[] = []
   let added = 0, removed = 0, approximate = false
   if (beforeCount > MAX_DIFF_INPUT_LINES || afterCount > MAX_DIFF_INPUT_LINES || beforeCount * afterCount > MAX_DIFF_MATRIX_CELLS) {
     // The fallback samples both sides directly instead of allocating a whole-file diff.
     const contextBefore = commonPrefix - start
-    const contextAfter = Math.min(commonSuffix, 3)
+    const contextAfter = Math.min(commonSuffix, contextLines)
     removed = before.length - commonPrefix - commonSuffix
     added = after.length - commonPrefix - commonSuffix
     approximate = true
-    const budget = Math.max(0, limit - contextBefore - contextAfter - 2)
+    const budget = Math.max(0, limit - (options.changedOnly ? 0 : contextBefore + contextAfter) - 2)
     const removeBudget = Math.min(removed, budget - Math.min(added, Math.floor(budget / 2)))
     const addBudget = Math.min(added, budget - removeBudget)
     for (let index = start; index < commonPrefix; index += 1) rows.push({ kind: 'context', text: before[index]!, line: index + 1 })
@@ -59,20 +67,25 @@ export function renderEditDiff(diff: FileDiff, palette: Palette, expanded = fals
       if (row.kind !== 'remove') newLine += 1
       return { ...row, line }
     })
+    if (options.changedOnly) rows = rows.filter(row => row.kind !== 'context')
     if (rows.length > limit) {
       const head = Math.floor((limit - 1) / 2)
       const tail = limit - head - 1
       rows = [...rows.slice(0, head), { kind: 'omitted', text: '… ' + (rows.length - head - tail) + ' diff lines omitted · ctrl+o to expand' }, ...rows.slice(-tail)]
     }
   }
+  if (options.changedOnly) rows = rows.filter(row => row.kind !== 'context')
   const gutter = String(Math.max(before.length, after.length)).length
   const estimate = approximate ? '~' : ''
   const summary = '(' + estimate + '+' + added + ' ' + estimate + '-' + removed + ')'
     + (added === 0 && removed === 0 && diff.oldText !== null && diff.oldText !== diff.newText ? ' · line endings changed' : '')
-  const lines: Array<{ text: string; kind: NumberedRow['kind'] }> = [{ text: palette.dim(summary), kind: 'context' }]
+  const lines: Array<{ text: string; kind: NumberedRow['kind'] }> = options.summary === false ? [] : [{ text: palette.dim(summary), kind: 'context' }]
+  if (options.summary === false && added === 0 && removed === 0 && diff.oldText !== null && diff.oldText !== diff.newText) {
+    lines.push({ text: palette.dim('line endings changed'), kind: 'omitted' })
+  }
   let characterBudget = 65536
   let limited = false
-  if (start > 0) lines.push({ text: palette.dim('… ' + start + ' unchanged lines'), kind: 'omitted' })
+  if (start > 0 && !options.changedOnly) lines.push({ text: palette.dim('… ' + start + ' unchanged lines'), kind: 'omitted' })
   for (const row of rows) {
     if (row.kind === 'omitted') { lines.push({ text: palette.dim(row.text), kind: row.kind }); continue }
     const rowPrefix = String(row.line).padStart(gutter) + ' ' + (row.kind === 'add' ? '+' : row.kind === 'remove' ? '-' : ' ') + ' '
@@ -84,9 +97,10 @@ export function renderEditDiff(diff: FileDiff, palette: Palette, expanded = fals
     characterBudget -= bounded.length
     if (characterBudget <= 0) { limited = true; break }
   }
-  if (commonSuffix > 3) lines.push({ text: palette.dim('… ' + (commonSuffix - 3) + ' unchanged lines'), kind: 'omitted' })
+  if (commonSuffix > contextLines && !options.changedOnly) lines.push({ text: palette.dim('… ' + (commonSuffix - contextLines) + ' unchanged lines'), kind: 'omitted' })
   if (limited) lines.push({ text: palette.dim('… [diff content omitted by preview limit]'), kind: 'omitted' })
   return {
+    stats: { added, removed, approximate },
     render: width => {
       const clipped = lines.flatMap(line => {
         const rendered = expanded ? new Text(line.text, 0, 0).render(width) : [truncateToWidth(line.text, Math.max(0, width))]

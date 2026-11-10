@@ -117,7 +117,7 @@ async function run(fullscreen, decision, preset = 'standard', display = 'detaile
     assert.equal(readFileSync(join(workspace, 'demo.ts'), 'utf8'), content.replace('const before = 1', 'const after = 2'))
     assert.equal(existsSync(join(workspace, 'shell-ran.txt')), decision === 'allow')
     const records = frames(), transcript = records.flatMap(frame => frame.lines).join('\n')
-    assert.ok(transcript.includes('• Write demo.ts') && transcript.includes('• Edit demo.ts'))
+    assert.ok(transcript.includes('• Write demo.ts') && transcript.includes('• Edited 1 file (+1 -1)') && transcript.includes('└ demo.ts (+1 -1)'))
     assert.ok(transcript.includes('(+1 -1)') && transcript.includes('1 - const before = 1') && transcript.includes('1 + const after = 2'))
     assert.ok(transcript.includes(preset === 'ptc' ? '• Ran code' : '• Ran printf') && transcript.includes('PRESENTATION THOUGHT'))
     assert.ok(transcript.includes('• PRESENTATION DONE'))
@@ -126,7 +126,7 @@ async function run(fullscreen, decision, preset = 'standard', display = 'detaile
     assert.ok(!transcript.includes('◆ assistant'))
     const marker = (heading, color) => records.some(frame => frame.rawLines.some(line => strip(line).includes(heading) && line.includes('\x1b[' + color + 'm• ')))
     assert.ok(marker(pendingHeading, 33), 'pending tool must have a Running title and yellow marker')
-    assert.ok(marker('• Write demo.ts', 32) && marker('• Edit demo.ts', 32), 'completed file tools must have green markers')
+    assert.ok(marker('• Write demo.ts', 32) && marker('• Edited 1 file', 32), 'completed file tools must have green markers')
     assert.ok(marker(shellHeading, decision === 'allow' ? 32 : 31), 'settled tool marker must reflect the Host outcome')
     for (const frame of records) {
       const index = frame.lines.findIndex(line => line.includes(pendingHeading) || line.includes(shellHeading))
@@ -144,7 +144,7 @@ async function run(fullscreen, decision, preset = 'standard', display = 'detaile
     if (preset === 'standard') {
       let offset = frames().length
       child.stdin.write('\x0f')
-      await waitFor((_text, records) => records.slice(offset).some(frame => frame.lines.some(line => line.includes('18 total lines, ctrl+o to collapse'))), 'expand source')
+      await waitFor((_text, records) => records.slice(offset).some(frame => frame.lines.some(line => line.includes('Hide details'))), 'expand previews')
       if (fullscreen) {
         for (let page = 0; page < 12 && !frames().slice(offset).some(frame => frame.lines.some(line => line.includes('source row 18'))); page += 1) {
           const count = frames().length
@@ -153,6 +153,7 @@ async function run(fullscreen, decision, preset = 'standard', display = 'detaile
         }
       }
       await waitFor((_text, records) => records.slice(offset).some(frame => frame.lines.some(line => line.includes('source row 18'))), 'expanded source visibility')
+      assert.ok(frames().slice(offset).some(frame => frame.lines.some(line => line.includes('18 total lines, ctrl+o to collapse'))), 'written source must also be expanded')
     }
     child.stdin.write('\x04')
     const [code, signal] = await closed

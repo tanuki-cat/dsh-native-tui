@@ -144,10 +144,11 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 - `/files` 浏览目录并预览文件（Enter 进入目录 / 预览，Esc 退出，含 `../`）。
 - `/attach` 暂存文件 / 图片 / 剪贴板图片并随下一条 prompt 发送（8 MiB 上限），`/attach preview <i>` 可内联预览，`/attachments` 打开暂存附件管理器。
 - 粘贴本地图片路径或文字中的 `@图片路径` 会自动暂存为图片，在输入面板中以 `[Image #1] [Image #2]` 与文字同行展示，长路径不占用草稿。支持图片协议的终端自动显示最多两张缩略预览；窄终端标签换行，不支持预览时保留标签。支持引号、shell 转义与 `file://`；读取失败保留原文。空输入框按 Backspace 移除最后一张图片，`/attachments` 可完整预览或移除，`/attach clear` 清空。发送成功清除标签和缩略图，发送失败保留图片与文字草稿；历史用户消息也使用编号图片标签。
-缩略预览沿用 pi-tui 的图片协议和格式支持；全屏模式下 pi-tui 禁用 iTerm2 图片协议。
+缩略预览沿用 pi-tui 的图片协议和格式支持；全屏模式下 pi-tui 禁用 iTerm2 图片协议，此时保留文字标签。
 - `/deliverables` 列出、打开 panel、预览或用系统文件管理器定位 `present` 交付文件。
 - `/changes` 查看最近一轮 workspace 变更文件与单文件 diff。
 - `/tools` / `/tool <index>` 列出工具调用或分页查看完整参数与结果；`/diff [index]` 查看 write/edit 的独立 diff。三者使用相同的最近 50 次调用索引，包含原生调用和 PTC 子调用；`/diff` 无参数时打开其中最近一次有实际 diff 的调用。
+- 同一轮中连续成功的文件修改汇总为 `Edited N files (+A -D)`，逐文件显示相对路径、累计增删行数和带行号的 diff；同一路径只计一个文件。默认最多预览八个文件，每文件四行；Ctrl+O 展开上下文，全屏还可点击汇总标题或 `Show details`。运行中、失败、停止、`write` 新建及缺少 diff 的调用保留独立卡片。统计来自已应用的修改片段，`~` 表示有界算法的估算；完整调用仍可用 `/tool`、`/diff` 查看。
 
 ### 扩展与集成
 
@@ -284,7 +285,7 @@ Plan 保留工具目录，用策略和最终 guard 限制受控调用；`exit_pl
 
 - `hidden`：不渲染 reasoning / `run_code` / `bash` / `pwsh` 块。
 - `compact`：reasoning 只显示首行摘要；代码执行工具只显示状态 + description/command/code 单行摘要。
-  - PTC 的 `run_code` 改为列出程序实际派发的子调用（`read src/a.ts`、`bash <description>`、MCP 显示服务名 `mcp idea`），文件编辑子调用仍走各自的 diff 卡片。
+  - PTC 的 `run_code` 改为列出程序实际派发的子调用（`read src/a.ts`、`bash <description>`、MCP 显示服务名 `mcp idea`），文件编辑子调用走独立的文件修改展示，相邻成功修改可汇总为一个文件列表。
   - 路径过长时保留尾部：文件名才是区分不同文件的部分，从左侧截断会让同目录下的两个文件渲染成同一行而被去重。说明 / 命令等其他参数保留开头。
   - 失败时额外显示 `├ ✕ <错误首行>`，否则失败卡片只有 `error` 而没有原因。
 - `detailed`：完整 reasoning 区带与代码执行工具 args/result 卡片。

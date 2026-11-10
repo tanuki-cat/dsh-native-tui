@@ -16,6 +16,11 @@ import { AssistantMessage } from './assistant-message.js'
 import { ToolCard } from './tool-card.js'
 import { ContextMessage } from './context-message.js'
 import { isCodeExecutionTool, renderTranscriptBlock } from './transcript-render.js'
+import { EditGroupCard, groupEdits, type DisplayBlock } from './edit-group.js'
+
+function renderDisplayBlock(block: DisplayBlock, options: TranscriptOptions): Component {
+  return block.kind === 'edits' ? new EditGroupCard(block.tools, options) : renderTranscriptBlock(block, options)
+}
 
 /**
  * One transcript row component, memoized on the width it last painted at.
@@ -50,23 +55,27 @@ class MemoBlock implements Component {
     return lines
   }
 
-  update(block: TranscriptBlock): boolean {
+  update(block: DisplayBlock, options: TranscriptOptions): boolean {
     if (this.inner instanceof AssistantMessage && block.kind === 'assistant') this.inner.update(block)
     else if (this.inner instanceof ToolCard && block.kind === 'tool') this.inner.update(block)
+    else if (this.inner instanceof EditGroupCard && block.kind === 'edits') this.inner.update(block.tools)
+    else if ((this.inner instanceof ToolCard && block.kind === 'edits') || (this.inner instanceof EditGroupCard && block.kind === 'tool')) {
+      this.inner = renderDisplayBlock(block, { ...options, toolsExpanded: this.inner.isExpanded })
+    }
     else return false
     this.lines = undefined
     return true
   }
 
   setExpanded(expanded: boolean): void {
-    if (!(this.inner instanceof ToolCard) && !(this.inner instanceof ContextMessage)) return
+    if (!(this.inner instanceof ToolCard) && !(this.inner instanceof EditGroupCard) && !(this.inner instanceof ContextMessage)) return
     this.inner.setExpanded(expanded)
     this.lines = undefined
   }
 
-  refreshPalette(block: TranscriptBlock, options: TranscriptOptions): void {
-    const expanded = this.inner instanceof ToolCard || this.inner instanceof ContextMessage ? this.inner.isExpanded : options.toolsExpanded
-    this.inner = renderTranscriptBlock(block, { ...options, toolsExpanded: expanded })
+  refreshPalette(block: DisplayBlock, options: TranscriptOptions): void {
+    const expanded = this.inner instanceof ToolCard || this.inner instanceof EditGroupCard || this.inner instanceof ContextMessage ? this.inner.isExpanded : options.toolsExpanded
+    this.inner = renderDisplayBlock(block, { ...options, toolsExpanded: expanded })
     this.lines = undefined
   }
 
@@ -92,7 +101,7 @@ class MemoBlock implements Component {
  * @param right - block from the current rebuild.
  * @returns true when the previous component can be reused.
  */
-export function sameTranscriptBlock(left: TranscriptBlock, right: TranscriptBlock): boolean {
+export function sameTranscriptBlock(left: DisplayBlock, right: DisplayBlock): boolean {
   if (left === right) return true
   if (left.kind !== right.kind) return false
   const previous = right as unknown as Record<string, unknown>
@@ -144,8 +153,9 @@ function sameTranscriptBlocks(left: readonly TranscriptBlock[], right: readonly 
  * @param block - one reduced block.
  * @returns a key stable for the block's lifetime, or undefined when it has none.
  */
-function blockKey(block: TranscriptBlock): string | undefined {
+function blockKey(block: DisplayBlock): string | undefined {
   switch (block.kind) {
+    case 'edits': return 'tool:' + block.tools[0]!.callId
     case 'tool': return 'tool:' + block.callId
     case 'compaction': return 'compaction:' + block.compactionId
     case 'assistant': return block.live ? 'live:' + block.streamKey : block.seq === undefined ? undefined : 'assistant:' + String(block.seq)
@@ -163,7 +173,7 @@ export class TranscriptRenderer {
   private entries: readonly TranscriptEntry[] = []
   private extra: readonly TranscriptBlock[] = []
   /** Component per stable block identity from the previous rebuild. */
-  private cached = new Map<string, { readonly block: TranscriptBlock; readonly component: Component }>()
+  private cached = new Map<string, { readonly block: DisplayBlock; readonly component: Component }>()
   /** Block list from the previous rebuild, for detecting a frame with nothing new. */
   private paintedBlocks: readonly TranscriptBlock[] | undefined
   private changed = false
@@ -249,7 +259,7 @@ export class TranscriptRenderer {
   toggleToolPreviews(): void {
     this.options = { ...this.options, toolsExpanded: !this.options.toolsExpanded }
     for (const cached of this.cached.values()) {
-      if ((cached.block.kind === 'tool' || cached.block.kind === 'context') && cached.component instanceof MemoBlock) cached.component.setExpanded(this.options.toolsExpanded ?? false)
+      if ((cached.block.kind === 'tool' || cached.block.kind === 'edits' || cached.block.kind === 'context') && cached.component instanceof MemoBlock) cached.component.setExpanded(this.options.toolsExpanded ?? false)
     }
     this.paintedBlocks = undefined
     this.rebuild()
@@ -276,7 +286,14 @@ export class TranscriptRenderer {
    * @param entries - contiguous durable and transient event window.
    * @param notices - local notices placed by durable sequence.
    */
-  set(entries: readonly TranscriptEntry[], notices: readonly TranscriptBlock[]): void {
+  set(entries: readonly TranscriptEntry[], notices: readonly TranscriptBlock[], cwd = this.options.cwd): void {
+    if (cwd !== this.options.cwd) {
+      this.options = { ...this.options, cwd }
+      for (const cached of this.cached.values()) {
+        if ((cached.block.kind === 'tool' || cached.block.kind === 'edits') && cached.component instanceof MemoBlock) cached.component.refreshPalette(cached.block, this.options)
+      }
+      this.paintedBlocks = undefined
+    }
     this.entries = entries
     this.extra = notices
     this.rebuild()
@@ -353,19 +370,19 @@ export class TranscriptRenderer {
     this.cold = cold && this.changed
     if (!this.changed) return
     this.paintedBlocks = blocks
-    const next = new Map<string, { readonly block: TranscriptBlock; readonly component: Component }>()
+    const next = new Map<string, { readonly block: DisplayBlock; readonly component: Component }>()
     let liveChars = 0
     this.container.clear()
-    for (const [index, block] of blocks.entries()) {
+    for (const [index, block] of groupEdits(blocks).entries()) {
       if (block.kind === 'assistant' && block.live) liveChars += block.text.length + (block.reasoning?.length ?? 0)
       if (index > 0) this.container.addChild(this.gap)
       const key = blockKey(block)
       const previous = key === undefined ? undefined : this.cached.get(key)
       // Identity survives window shifts; assistant updates retain completed leaves.
       const component = previous !== undefined && (sameTranscriptBlock(previous.block, block)
-        || previous.component instanceof MemoBlock && previous.component.update(block))
+        || previous.component instanceof MemoBlock && previous.component.update(block, this.options))
         ? previous.component
-        : new MemoBlock(renderTranscriptBlock(block, this.options))
+        : new MemoBlock(renderDisplayBlock(block, this.options))
       if (key !== undefined) next.set(key, { block, component })
       this.container.addChild(component)
     }

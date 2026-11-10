@@ -64,8 +64,9 @@ describe('file diff cards', () => {
       { path: 'one.ts', oldText: null, newText: Array.from({ length: 100 }, (_, index) => 'line ' + index).join('\n') },
       { path: 'two.ts', oldText: 'old', newText: 'new' },
     ] }))
-    expect(output).toContain('Edit one.ts')
-    expect(output).toContain('Edit two.ts')
+    expect(output).toContain('Edited 2 files (+101 -1)')
+    expect(output).toContain('└ one.ts (+100 -0)')
+    expect(output).toContain('└ two.ts (+1 -1)')
     expect(output).toContain('lines omitted')
     expect(output).toContain('1 + new')
     expect(output).not.toContain('Edit src/example.ts')

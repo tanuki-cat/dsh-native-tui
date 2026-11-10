@@ -310,7 +310,7 @@ export async function startTerminalApp(
    */
   const warmTranscript = (): void => {
     if (entries.length === 0) return
-    renderer.set(entries, localNotices)
+    renderer.set(entries, localNotices, summaryCwd())
     renderer.container.render(Math.max(1, terminal.columns))
   }
 
@@ -331,7 +331,7 @@ export async function startTerminalApp(
     const slippedMs = frameOverrunMs(frameDueAt, performance.now())
     frameDueAt = undefined
     const started = performance.now()
-    renderer.set(entries, localNotices)
+    renderer.set(entries, localNotices, summaryCwd())
     const pendingText = turnStatus.text()
     waitStatus.setText(pendingText)
     if (renderer.contentChanged) transcriptRevision += 1

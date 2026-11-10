@@ -2,6 +2,7 @@ import { TuiMainScreen, truncateToWidth } from '@earendil-works/pi-tui'
 
 const sgr = /\u001B\[[0-9;]*m/gu
 const marker = /^(?:\u001B\[[0-9;]*m)*• (?:\u001B\[[0-9;]*m)*/u
+const editedSummary = /^• Edited \d+ files? /u
 
 /** Defer offscreen lifecycle changes instead of clearing native terminal history. */
 export class TranscriptMainScreen extends TuiMainScreen {
@@ -20,6 +21,12 @@ export class TranscriptMainScreen extends TuiMainScreen {
       // Strip SGR only: a link target, image payload, or terminal control change
       // must still reach pi-tui's normal differential comparison.
       const normalized = this.applyLineResets([after])[0]!
+      if (editedSummary.test(before.replace(sgr, '')) && editedSummary.test(normalized.replace(sgr, ''))
+        && previous.previousLines[index + 1] === this.applyLineResets([lines[index + 1] ?? ''])[0]) {
+        const reset = this.applyLineResets([''])[0]!
+        lines[index] = before.endsWith(reset) ? before.slice(0, -reset.length) : before
+        continue
+      }
       if (before.replace(sgr, '') === normalized.replace(sgr, '')) {
         lines[index] = previousMarker + after.slice(nextMarker.length)
       } else if (before.slice(previousMarker.length).startsWith('Running ') && after.slice(nextMarker.length).startsWith('Ran ')) {

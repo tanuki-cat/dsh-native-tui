@@ -124,7 +124,7 @@ child.on('exit', (code, signal) => {
   const clean = strip(out)
   const pass = code === 0 && signal === null && phase === 3
     && clean.includes('Write ' + file)
-    && clean.includes('Edit ' + file)
+    && clean.includes('Edited 1 file') && clean.includes(file)
     && !clean.includes('⚙ write')
     && !clean.includes('1 + before')
     && clean.includes('1 - before')

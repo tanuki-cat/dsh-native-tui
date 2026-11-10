@@ -43,3 +43,7 @@
 - `node scripts/fake-tty-write-update-diff.mjs` 四组通过：standard/PTC × 普通/全屏。终端帧确认更新显示 `Edit`、新建显示 `Write`，原始日志工具名仍为 `write`；空文件插入、Ctrl+O 及 `/diff` 最新/指定索引均正确。
 - `node scripts/fake-tty-transcript-presentation.mjs` 六组通过：普通/全屏 × 允许/拒绝四组，以及普通 PTC compact、全屏 PTC detailed。随后同时运行两个独立展示探针进程，各自六组均通过；握手文件与 profile 相互隔离，保留运行黄、完成绿、失败红的原有断言。
 - 8 个受影响探针文件的语法检查与 `git diff --check` 通过。Host 探针使用本机 mock provider，未使用真实模型 API；监听本机随机端口需要沙箱外运行权限。
+
+## 后续展示变更（2026-11-10）
+
+[多文件编辑汇总展示](design-task-optimize-multi-file-edits.md) 将 Transcript 中成功且具有实际 diff 的文件修改组合为 `Edited N files`，同一路径的多个 hunk 使用一个文件标题；运行中、失败、停止及无 diff 回退继续使用原卡片。原始工具名、Host diff 数据和工具检查索引保持不变。
