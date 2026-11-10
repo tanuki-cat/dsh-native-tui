@@ -17,6 +17,7 @@ import { clip } from './tool-preview.js'
 import type { TranscriptBlock, TranscriptOptions } from './transcript.js'
 import { MessageBody } from './transcript-chrome.js'
 import { ContextMessage } from './context-message.js'
+import { ContextReportMessage } from './context-report.js'
 import { activityHeading, styleTurnStatus, WaitStatusLine } from './waiting.js'
 
 export { isCodeExecutionTool } from './code-execution-card.js'
@@ -81,6 +82,7 @@ export function renderTranscriptBlock(block: TranscriptBlock, options: Transcrip
       return line
     }
     case 'notice': {
+      if (block.tone === 'info' && block.contextReport !== undefined) return new ContextReportMessage(block.contextReport, palette)
       const text = sanitizeTerminalText(block.text).replaceAll('\n', '\n  ')
       if (block.tone === 'error') return new Text(palette.error('✕ ' + text), 0, 0)
       if (block.tone === 'warning') return new Text(palette.warning('! ' + text), 0, 0)

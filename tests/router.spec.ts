@@ -5,11 +5,13 @@ import { runCommandLine, type CommandRouterDeps } from '../src/ui/commands/route
 import { INIT_AGENTS_PROMPT } from '../src/runtime/init-prompt.js'
 import { PromptEditor } from '../src/ui/prompt-editor.js'
 import { createPalette, editorTheme } from '../src/ui/theme.js'
+import type { ContextReportData } from '../src/ui/context-report.js'
 
 /** One recorded notice. */
 interface Notice {
   readonly tone: string
   readonly text: string
+  readonly contextReport?: ContextReportData
 }
 
 /** A dispatcher whose every collaborator records what the line asked of it. */
@@ -44,7 +46,7 @@ function harness(options: { readonly hostResult?: unknown; readonly skills?: rea
     tui: {},
     active: { id: 'session-1', agent: { session: { header: { cwd: '/active-workspace' } }, status: options.running === true ? 'running' : 'idle', cancel: () => { calls.push('cancel') } } },
     signal: new AbortController().signal,
-    notice: (tone: string, text: string) => { notices.push({ tone, text }) },
+    notice: (tone: string, text: string, contextReport?: ContextReportData) => { notices.push({ tone, text, ...(contextReport === undefined ? {} : { contextReport }) }) },
     renderStatus: () => undefined,
     attachments: { pending: [], clear: () => undefined },
     runCommand: async () => undefined,
@@ -157,6 +159,7 @@ describe('command router', () => {
     expect(h.notices[0]?.text).toContain('system prompt')
     expect(h.notices[0]?.text).toContain('tool definitions')
     expect(h.notices[0]?.text).toContain('messages')
+    expect(h.notices[0]?.contextReport).toMatchObject({ metrics: { contextPercent: 6 }, breakdown: { toolsTokens: 628 } })
   })
 
   it('rejects context arguments instead of ignoring them', async () => {

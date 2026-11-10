@@ -111,5 +111,6 @@ export function contextReport(
 /** The `/context` command. */
 export function contextCommand(ctx: CommandContext): void {
   const { metrics, breakdown } = ctx.readContext()
-  ctx.notice('info', contextReport(metrics, breakdown, ctx.palette))
+  const report = { metrics: { ...metrics }, breakdown: breakdown === undefined ? undefined : { ...breakdown } }
+  ctx.notice('info', contextReport(report.metrics, report.breakdown), report)
 }

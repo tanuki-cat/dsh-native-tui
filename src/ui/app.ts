@@ -49,6 +49,7 @@ import { consoleTone, holdConsoleOutput, type ConsoleGuard } from './console-gua
 import { scrollToEndLabel } from './scroll-indicator.js'
 import { PromptEditor } from './prompt-editor.js'
 import { wireImageInput } from './image-input.js'
+import type { ContextReportData } from './context-report.js'
 import { SessionDrafts } from './session-drafts.js'
 import { enqueuePrompt, submitDraft } from './prompt-submission.js'
 import { pickStoredSession } from './commands/sessions.js'
@@ -419,12 +420,13 @@ export async function startTerminalApp(
     scheduleTranscript(true)
   }
 
-  const pushNotice = (tone: 'info' | 'warning' | 'error' | 'success', text: string): void => {
+  const pushNotice = (tone: 'info' | 'warning' | 'error' | 'success', text: string, contextReport?: ContextReportData): void => {
     const streamKey = streamingRowKey(entries)
     localNotices.push({
       kind: 'notice',
       tone,
       text,
+      ...(contextReport === undefined ? {} : { contextReport }),
       afterSeq: lastDurableSeq() ?? 0,
       ...(streamKey === undefined ? {} : { afterStreamKey: streamKey }),
     })

@@ -16,6 +16,7 @@ import type { HostSession } from '../../runtime/agent.js'
 import type { PendingAttachment } from '../../runtime/attachments.js'
 import type { ContextBreakdown, SessionMetrics } from '../../runtime/metrics.js'
 import type { Palette } from '../theme.js'
+import type { ContextReportData } from '../context-report.js'
 import type { LLM } from './services.js'
 import type { ModelSelectionState } from '../../runtime/model-selection.js'
 
@@ -50,8 +51,8 @@ export interface CommandContext {
   readonly signal: AbortSignal
   /** False after the owning Session is replaced or the terminal starts closing. */
   readonly isCurrent?: () => boolean
-  /** Render one notice line. */
-  readonly notice: (tone: NoticeTone, text: string) => void
+  /** Render a notice, optionally carrying structured context-report figures. */
+  readonly notice: (tone: NoticeTone, text: string, contextReport?: ContextReportData) => void
   /** Redraw the header and status row. */
   readonly renderStatus: () => void
   /** Staged attachments. */
