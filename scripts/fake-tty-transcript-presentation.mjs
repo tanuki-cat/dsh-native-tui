@@ -11,7 +11,10 @@ import { fileURLToPath } from 'node:url'
 const repo = dirname(dirname(fileURLToPath(import.meta.url)))
 const root = mkdtempSync(join(tmpdir(), 'dsh-native-tui-presentation-'))
 const content = ['const before = 1', ...Array.from({ length: 17 }, (_, index) => '// source row ' + (index + 2))].join('\n') + '\n'
-const command = "printf TOOL_EXECUTED > shell-ran.txt; printf 'TOOL OUTPUT\\n'"
+// Hold the real shell until its approved-but-pending frame has been observed.
+const command = "printf ''; approval_deadline=$((SECONDS + 15)); "
+  + 'while [ ! -f tool-completion-ack ]; do [ "$SECONDS" -lt "$approval_deadline" ] || exit 1; sleep 0.05; done; '
+  + "printf TOOL_EXECUTED > shell-ran.txt; printf 'TOOL OUTPUT\\n'"
 const strip = text => text.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?/g, '').replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
 let served = []
 let activePreset = 'standard'
@@ -67,6 +70,7 @@ async function run(fullscreen, decision, preset = 'standard', display = 'detaile
   const label = (fullscreen ? 'fullscreen' : 'main-screen') + '-' + decision + (preset === 'ptc' ? '-ptc-' + display : '')
   const home = join(root, label), profile = join(home, 'profiles/tui'), workspace = join(home, 'workspace'), log = join(home, 'frames.jsonl')
   const pendingAck = join(home, 'pending-frame-ack')
+  const completionAck = join(workspace, 'tool-completion-ack')
   const pendingHeading = preset === 'ptc' ? '• Running code · bash' : '• Running printf'
   const shellHeading = preset === 'ptc' ? '• Ran code · bash' : '• Ran printf'
   mkdirSync(join(profile, 'node_modules'), { recursive: true })
@@ -89,6 +93,8 @@ async function run(fullscreen, decision, preset = 'standard', display = 'detaile
   ].join('\n'))
   const env = { ...process.env, DSH_HOME: home, DSH_AGENTS_HOME: join(home, 'agents'), DSH_BUNDLED_SKILL_DIR: join(home, 'bundled'),
     MOCK_API_KEY: 'dummy', TERM: 'xterm-256color', FAKE_TTY_COLUMNS: '100', FAKE_TTY_GEOMETRY_LOG: log, FAKE_TTY_FRAME_SNAPSHOT: '1',
+    // Detailed PTC output needs enough viewport rows to compare its heading and receipt together.
+    FAKE_TTY_ROWS: fullscreen && preset === 'ptc' && display === 'detailed' ? '42' : '30',
     DSH_PROBE_PENDING_ACK: pendingAck }
   delete env.DSH_PERMISSION_MODE; delete env.DSH_TOOLS_MODE
   const child = spawn(process.execPath, ['--import', join(repo, 'scripts/fake-tty-chrome-trace.mjs'), join(repo, 'scripts/fake-tty-entry.mjs'), '--profile', 'tui'],
@@ -112,11 +118,30 @@ async function run(fullscreen, decision, preset = 'standard', display = 'detaile
     writeFileSync(pendingAck, '')
     await waitFor(text => text.includes('1. Allow once') && text.includes('Reason:'), 'approval')
     child.stdin.write((decision === 'allow' ? '1' : '2') + '\r')
+    const receiptText = decision === 'allow' ? 'You approved bash printf' : 'You rejected bash printf'
+    if (decision === 'allow') {
+      await waitFor((_text, records) => records.some(frame => {
+        const toolRow = frame.lines.findIndex(line => line.includes(pendingHeading))
+        const receiptRow = frame.lines.findIndex(line => line.includes(receiptText))
+        return toolRow >= 0 && receiptRow > toolRow
+      }), 'approved receipt after pending tool')
+      assert.ok(!existsSync(join(workspace, 'shell-ran.txt')), 'execution must still be waiting for the completion handshake')
+      writeFileSync(completionAck, '')
+    }
     await waitFor((_text, records) => records.some(frame => frame.status.includes('Ready')
       && frame.lines.some(line => line.includes('PRESENTATION DONE'))), 'answer')
     assert.equal(readFileSync(join(workspace, 'demo.ts'), 'utf8'), content.replace('const before = 1', 'const after = 2'))
     assert.equal(existsSync(join(workspace, 'shell-ran.txt')), decision === 'allow')
     const records = frames(), transcript = records.flatMap(frame => frame.lines).join('\n')
+    const orderedFrames = records.filter(frame => frame.lines.some(line => line.includes(receiptText))
+      && frame.lines.some(line => line.includes(pendingHeading) || line.includes(shellHeading)))
+    assert.ok(orderedFrames.length > 0, 'receipt and tool must be observed together')
+    assert.ok(orderedFrames.some(frame => frame.lines.some(line => line.includes(shellHeading))), 'settled tool and receipt must be observed together')
+    for (const frame of orderedFrames) {
+      const toolRow = frame.lines.findIndex(line => line.includes(pendingHeading) || line.includes(shellHeading))
+      const receiptRow = frame.lines.findIndex(line => line.includes(receiptText))
+      assert.ok(receiptRow > toolRow, 'approval receipt must remain below the tool before and after settlement')
+    }
     assert.ok(transcript.includes('• Write demo.ts') && transcript.includes('• Edited 1 file (+1 -1)') && transcript.includes('└ demo.ts (+1 -1)'))
     assert.ok(transcript.includes('(+1 -1)') && transcript.includes('1 - const before = 1') && transcript.includes('1 + const after = 2'))
     assert.ok(transcript.includes(preset === 'ptc' ? '• Ran code' : '• Ran printf') && transcript.includes('PRESENTATION THOUGHT'))
@@ -158,7 +183,7 @@ async function run(fullscreen, decision, preset = 'standard', display = 'detaile
     child.stdin.write('\x04')
     const [code, signal] = await closed
     assert.equal(code, 0); assert.equal(signal, null)
-    console.log(label, 'PASS', 'frames', records.length, 'tools', served.length, 'shellExecuted', decision === 'allow')
+    console.log(label, 'PASS', 'frames', records.length, 'orderedFrames', orderedFrames.length, 'tools', served.length, 'shellExecuted', decision === 'allow')
   } catch (error) {
     child.kill('SIGTERM'); await closed
     console.error(label, 'stdout', strip(out).slice(-6000), 'stderr', err.slice(-3000))

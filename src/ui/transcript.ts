@@ -70,6 +70,8 @@ export type TranscriptBlock = ({
   readonly callId: string
   readonly name: string
   readonly args: string
+  /** First retained event for this card; result events update seq without moving it. */
+  readonly positionSeq?: number
   /** Turn identity bounds presentation-only file edit groups. */
   readonly turn?: number
   readonly result?: string
@@ -504,7 +506,7 @@ export function createTranscriptReducer(options: TranscriptOptions) {
               toolByCall.set(subCallId, blocks.length)
               callIdBySeq.set(seq, subCallId)
               knownCalls.add(subCallId)
-              blocks.push({ kind: 'tool', callId: subCallId, name, args, pending: true, seq, ...(turn === undefined ? {} : { turn }) })
+              blocks.push({ kind: 'tool', callId: subCallId, name, args, pending: true, seq, positionSeq: seq, ...(turn === undefined ? {} : { turn }) })
             }
           }
           else if (!(prior?.kind === 'tool' && prior.pending === false)) {
@@ -521,6 +523,7 @@ export function createTranscriptReducer(options: TranscriptOptions) {
               ...(operation === undefined ? {} : { operation }),
               pending: false,
               seq,
+              positionSeq: prior?.kind === 'tool' ? prior.positionSeq ?? prior.seq ?? seq : seq,
             }
             if (index === undefined) {
               toolByCall.set(subCallId, blocks.length)
@@ -619,6 +622,7 @@ export function createTranscriptReducer(options: TranscriptOptions) {
             ...(event.data.turn === undefined ? {} : { turn: event.data.turn }),
             pending: true,
             seq,
+            positionSeq: seq,
           })
           break
         }
@@ -660,6 +664,7 @@ export function createTranscriptReducer(options: TranscriptOptions) {
               ...(operation === undefined ? {} : { operation }),
               pending: false,
               seq,
+              positionSeq: seq,
             })
           } else if (prior?.kind === 'tool') {
             blocks[index] = {

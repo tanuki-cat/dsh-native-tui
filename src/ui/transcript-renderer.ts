@@ -351,14 +351,16 @@ export class TranscriptRenderer {
     const blocks: TranscriptBlock[] = []
     const pending = [...anchored]
     for (const block of durable) {
-      while (pending.length > 0) {
+      const positionSeq = block.kind === 'tool' ? block.positionSeq ?? block.seq : block.seq
+      // A synthetic history marker has no chronological position of its own.
+      while (pending.length > 0 && !(block.kind === 'notice' && positionSeq === undefined)) {
         const notice = pending[0]!
         // An assistant row keeps its stream key after settlement, so a notice
         // raised while it was live stays under it. The plain seq test would
         // lift the notice above the row before (and after) that settlement.
         if (notice.afterStreamKey !== undefined && block.kind === 'assistant'
           && block.streamKey === notice.afterStreamKey) break
-        if (notice.afterSeq >= (block.seq ?? Number.POSITIVE_INFINITY)) break
+        if (notice.afterSeq >= (positionSeq ?? Number.POSITIVE_INFINITY)) break
         blocks.push(pending.shift()!)
       }
       blocks.push(block)
