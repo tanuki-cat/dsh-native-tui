@@ -2,8 +2,8 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir, homedir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { CombinedAutocompleteProvider, CURSOR_MARKER, stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { CombinedAutocompleteProvider, CURSOR_MARKER, Editor, getCapabilities, setCapabilities, stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { imagePathReferences, importImagePaste } from '../src/runtime/image-input.js'
 import type { AttachmentsService, PendingAttachment } from '../src/runtime/attachments.js'
 import { wireImageInput } from '../src/ui/image-input.js'
@@ -14,6 +14,9 @@ import { createPalette, editorTheme } from '../src/ui/theme.js'
 
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=', 'base64')
 const roots: string[] = []
+const originalCapabilities = getCapabilities()
+beforeEach(() => { setCapabilities({ ...originalCapabilities, images: null }) })
+afterEach(() => { setCapabilities(originalCapabilities) })
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))) })
 const paste = (text: string) => '\x1b[200~' + text + '\x1b[201~'
 const pendingImage = (name: string): PendingAttachment => ({ label: name, kind: 'image', block: { type: 'image', attachment: { attachmentId: name, mediaType: 'image/png' } as never } })
@@ -166,9 +169,8 @@ describe('image composer', () => {
     h.editor.handleInput('/')
     await vi.waitFor(() => expect(h.editor.isShowingAutocomplete()).toBe(true))
     const lines = h.editor.render(80)
-    expect(lines[0]).toContain('[Image #1]')
-    expect(lines[1]).toContain('› help')
-    expect(lines.findLastIndex(line => line.startsWith('› '))).toBeGreaterThan(1)
+    expect(lines[0]).toContain('› help')
+    expect(lines.findLastIndex(line => line.startsWith('› [Image #1]'))).toBeGreaterThan(0)
     h.editor.handleInput('\t')
     expect(h.editor.getText()).toBe('/help ')
   })
@@ -176,7 +178,7 @@ describe('image composer', () => {
     const h = await harness()
     h.pending.push(pendingImage('/very/long/private/image.png'), pendingImage('clipboard.png'))
     h.editor.setText('hello')
-    expect(h.editor.render(100)[0]).toContain('[Image #1] [Image #2]')
+    expect(h.editor.render(100)[1]).toContain('› [Image #1] [Image #2] hello')
     expect(h.editor.render(100).join('\n')).not.toContain('/very/long')
     expect(visibleWidth(h.editor.render(1)[0]!)).toBeLessThanOrEqual(1)
     for (const width of [2, 8, 24, 80]) {
@@ -184,7 +186,10 @@ describe('image composer', () => {
       expect(h.editor.render(width)[0]).not.toContain('\x1b')
     }
     h.editor.render(40)
-    h.editor.handleMouse({ type: 'click', button: 'left', x: 4, y: 2, width: 40, height: 4 } as never)
+    const lines = h.editor.render(100)
+    const prompt = lines[1]!
+    const textColumn = visibleWidth(prompt.slice(0, prompt.indexOf('hello')))
+    h.editor.handleMouse({ type: 'click', button: 'left', x: textColumn + 2, y: 1, width: 100, height: 3 } as never)
     expect(h.editor.getCursor()).toEqual({ line: 0, col: 2 })
   })
   it('removes the last image on empty Backspace and leaves files intact', async () => {
@@ -199,6 +204,30 @@ describe('image composer', () => {
     h.editor.handleInput('\x7f')
     expect(h.pending).toEqual([file])
     expect(h.editor.render(80).join('\n')).not.toContain('[Image #')
+  })
+  it('preserves native wrapping, mouse placement, Unicode editing and undo with inline image labels', async () => {
+    const h = await harness()
+    h.pending.push(pendingImage('one.png'))
+    const text = 'abcdefghij'.repeat(4) + '\n你好 next line'
+    h.editor.setText(text)
+    const lines = h.editor.render(40)
+    const native = new Editor({ terminal: { rows: 30 }, requestRender: vi.fn() } as never, editorTheme(h.ctx.palette), { paddingX: 2 })
+    native.setText(text)
+    native.render(29)
+    const event = { type: 'click', button: 'left', x: 4, y: 2, width: 29, height: lines.length } as const
+    native.handleMouse(event as never)
+    h.editor.handleMouse({ ...event, x: 15, width: 40 } as never)
+    expect(h.editor.getCursor()).toEqual(native.getCursor())
+    h.editor.handleInput('中')
+    native.handleInput('中')
+    expect(h.editor.getText()).toBe(native.getText())
+    h.editor.handleInput('\x1f')
+    expect(h.editor.getText()).toBe(text)
+    expect(lines.filter(line => line.includes(CURSOR_MARKER))).toHaveLength(1)
+    expect(lines.every(line => visibleWidth(line.replace(CURSOR_MARKER, '')) <= 40)).toBe(true)
+    h.pending.splice(0)
+    expect(h.editor.render(40).join('\n')).not.toContain('[Image #')
+    expect(h.editor.getText()).toBe(text)
   })
   it('cancels queued text and a late import when the terminal is disposed', async () => {
     const h = await harness()

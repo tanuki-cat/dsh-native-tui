@@ -1,4 +1,4 @@
-/** Real Host: compact image chips, removal, drafts and image bytes on the model wire. */
+/** Real Host: inline labels, thumbnail protocols, removal and original image bytes on the model wire. */
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
@@ -44,9 +44,11 @@ const server = createServer((req, res) => {
   })
 })
 
-async function run(fullscreen) {
+async function run(fullscreen, protocol) {
   requests.length = 0
-  const label = fullscreen ? 'fullscreen' : 'main-screen'
+  const label = (fullscreen ? 'fullscreen' : 'main-screen') + '-' + protocol
+  // pi-tui disables iTerm2 images in the alternate screen because they cannot be placed reliably.
+  const supportsThumbnails = protocol !== 'none' && !(fullscreen && protocol === 'iterm2')
   const home = join(root, label), profile = join(home, 'profiles/tui'), workspace = join(home, 'workspace'), log = join(home, 'frames.jsonl')
   mkdirSync(join(profile, 'node_modules'), { recursive: true })
   for (const dir of [workspace, join(home, 'agents'), join(home, 'bundled')]) mkdirSync(dir)
@@ -65,7 +67,8 @@ async function run(fullscreen) {
   ].join('\n'))
   const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !/KEY|TOKEN|SECRET|CREDENTIAL/.test(key))),
     DSH_HOME: home, DSH_AGENTS_HOME: join(home, 'agents'), DSH_BUNDLED_SKILL_DIR: join(home, 'bundled'),
-    MOCK_API_KEY: 'dummy', TERM: 'xterm-256color', FAKE_TTY_COLUMNS: '100', FAKE_TTY_GEOMETRY_LOG: log, FAKE_TTY_FRAME_SNAPSHOT: '1' }
+    MOCK_API_KEY: 'dummy', TERM: 'xterm-256color', FAKE_TTY_IMAGE_PROTOCOL: protocol,
+    FAKE_TTY_COLUMNS: '100', FAKE_TTY_GEOMETRY_LOG: log, FAKE_TTY_FRAME_SNAPSHOT: '1' }
   delete env.DSH_PERMISSION_MODE; delete env.DSH_TOOLS_MODE
   const child = spawn(process.execPath, ['--import', join(repo, 'scripts/fake-tty-chrome-trace.mjs'), join(repo, 'scripts/fake-tty-entry.mjs'), '--profile', 'tui'],
     { cwd: workspace, env, stdio: ['pipe', 'pipe', 'pipe'] })
@@ -80,25 +83,39 @@ async function run(fullscreen) {
       await new Promise(resolve => setTimeout(resolve, 40))
     }
   }
-  const imageFrames = records => records.filter(frame => frame.lines.some(line => line.includes('/attachments preview/remove')))
+  const imageFrames = records => records.filter(frame => frame.lines.some(line => line.startsWith('› [Image #')))
+  const thumbnail = line => protocol === 'kitty' ? line.includes('\x1b_G') : line.includes('\x1b]1337;File=')
+  const hasThumbnail = frame => frame.rawLines.some(thumbnail)
   const paste = text => child.stdin.write('\x1b[200~' + text + '\x1b[201~')
   try {
     await waitFor(text => text.includes('enter send'), 'startup')
     paste('@"' + imagePath + '"')
     await waitFor((_text, records) => imageFrames(records).some(frame => frame.lines.some(line => line.includes('[Image #1]'))), 'first image chip')
+    if (supportsThumbnails) {
+      await waitFor((_text, records) => imageFrames(records).some(hasThumbnail), 'automatic thumbnail')
+      const frame = imageFrames(frames()).find(hasThumbnail)
+      const imageRow = frame.rawLines.findIndex(thumbnail)
+      const inputRow = frame.lines.findLastIndex(line => line.startsWith('› [Image #'))
+      assert.ok(imageRow < inputRow, 'thumbnail precedes the text input inside the composer')
+      const line = frame.rawLines[imageRow]
+      if (protocol === 'kitty') assert.match(line, /c=4,r=2(?:,|;)/)
+      else assert.ok(line.includes('width=4;'), 'iTerm2 thumbnail is bounded to four cells')
+    }
     let offset = frames().length
     child.stdin.write('\x7f')
     await waitFor((_text, records) => records.slice(offset).some(frame => imageFrames([frame]).length === 0 && !frame.status.includes('1 attached')), 'backspace removal')
+    assert.ok(!hasThumbnail(frames().at(-1)), 'removal clears the thumbnail')
     offset = frames().length
     paste('@"' + imagePath + '" @"' + imagePath + '"')
     await waitFor((_text, records) => imageFrames(records.slice(offset)).some(frame => frame.lines.some(line => line.includes('[Image #1] [Image #2]'))), 'two image chips')
+    if (supportsThumbnails) await waitFor((_text, records) => records.slice(offset).some(frame => frame.rawLines.filter(thumbnail).length === 2), 'two thumbnails')
     child.stdin.write('/attach clear\r')
     await waitFor(text => text.includes('Cleared 2 staged'), 'clear images')
     // Enter follows the paste without waiting for attachment persistence.
     paste('@"' + imagePath + '"')
     child.stdin.write('describe this image\r')
     await waitFor((_text, records) => records.some(frame => frame.status.includes('Ready') && frame.lines.some(line => line.includes('IMAGE INPUT RECEIVED'))), 'image answer')
-    const hasHistoryImage = records => records.some(frame => frame.lines.some(line => line.includes('[Image #1]') && !line.includes('/attachments preview/remove')))
+    const hasHistoryImage = records => records.some(frame => imageFrames([frame]).length === 0 && frame.lines.some(line => line.includes('[Image #1]')))
     if (fullscreen) {
       for (let page = 0; page < 8 && !hasHistoryImage(frames()); page += 1) {
         const count = frames().length
@@ -118,10 +135,12 @@ async function run(fullscreen) {
     assert.deepEqual(Buffer.from(images[0].image_url.split(',')[1], 'base64'), png, 'request contains the original PNG')
     assert.ok(!JSON.stringify(input).includes(imagePath), 'model prompt does not contain the local path')
     assert.equal(imageFrames([records.at(-1)]).length, 0, 'accepted submission clears the composer chips')
+    assert.ok(!hasThumbnail(records.at(-1)), 'accepted submission clears the thumbnail')
+    if (!supportsThumbnails) assert.ok(!records.some(frame => frame.rawLines.some(line => line.includes('\x1b_G') || line.includes('\x1b]1337;File='))))
     child.stdin.write('\x04')
     const [code, signal] = await closed
     assert.equal(code, 0); assert.equal(signal, null)
-    console.log(label, 'PASS', JSON.stringify({ chipFrames: chips.length, imagesSent: images.length, originalBytes: true, overflow: false }))
+    console.log(label, 'PASS', JSON.stringify({ chipFrames: chips.length, thumbnails: records.filter(hasThumbnail).length, imagesSent: images.length, originalBytes: true, overflow: false }))
   } catch (error) {
     child.kill('SIGTERM'); await closed
     console.error(label, strip(out).slice(-5000), err.slice(-2500))
@@ -131,9 +150,11 @@ async function run(fullscreen) {
 
 try {
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
-  await run(false)
-  await run(true)
-  console.log('RESULT PASS 2 configurations')
+  for (const protocol of ['none', 'kitty', 'iterm2']) {
+    await run(false, protocol)
+    await run(true, protocol)
+  }
+  console.log('RESULT PASS 6 configurations')
 } finally {
   server.closeAllConnections()
   await new Promise(resolve => server.close(resolve))

@@ -5,6 +5,11 @@ import { selectedRow } from './selection-row.js'
 // Header, spacing, waiting/status rows and one transcript row stay visible.
 const COMPLETION_CHROME_ROWS = 9
 
+export interface AttachmentPresentation {
+  readonly labels: string
+  readonly preview: readonly string[]
+}
+
 /** A shaded native editor with a display-only prompt in its reserved padding. */
 export class PromptEditor extends Editor {
   private bottomBorder = ''
@@ -12,8 +17,10 @@ export class PromptEditor extends Editor {
   private menuRows: number[] = []
   private renderedPadding = 0
   private attachmentRows = 0
+  private attachmentColumns = 0
+  private panelStart = 0
   private readonly pasteInput: PasteInput
-  attachmentRow?: (width: number) => string | undefined
+  attachmentPresentation?: (width: number, maxRows: number) => AttachmentPresentation | undefined
   onPaste?: (text: string) => string | Promise<string>
   onRemoveAttachment?: () => boolean
   placeholder = ''
@@ -67,29 +74,44 @@ export class PromptEditor extends Editor {
   }
 
   override render(width: number): string[] {
-    const row = this.attachmentRow?.(width)
-    this.attachmentRows = row === undefined ? 0 : 1
-    const lines = this.renderEditor(width)
-    return row === undefined ? lines : [row, ...lines]
+    const attachments = this.attachmentPresentation?.(width, Math.min(8, Math.max(0, Math.floor(this.tui.terminal.rows / 4))))
+    const labelBudget = Math.max(0, Math.min(Math.floor(width / 2), width - 12))
+    const inline = attachments !== undefined && labelBudget >= 10
+    const labels = attachments === undefined ? '' : truncateToWidth(attachments.labels, inline ? labelBudget : width, '…')
+    this.attachmentColumns = inline ? visibleWidth(labels) + 1 : 0
+    const extra = attachments === undefined ? [] : [...attachments.preview, ...(inline ? [] : [labels])]
+    this.attachmentRows = extra.length
+    const lines = this.renderEditor(width - this.attachmentColumns, width, inline ? labels : '', attachments !== undefined)
+    const insertAt = this.panelStart + 1
+    lines.splice(insertAt, 0, ...extra.map(line => {
+      // Protocol rows carry their own cell geometry and may include cursor movement.
+      if (line.includes('\x1b_G') || line.includes('\x1b]1337;File=')) return line
+      return this.surface(line + ' '.repeat(Math.max(0, width - visibleWidth(line))))
+    }))
+    return lines
   }
 
-  private renderEditor(width: number): string[] {
+  private renderEditor(width: number, fullWidth: number, labels: string, hasAttachments: boolean): string[] {
     const lines = super.render(width)
     // Match the native padding clamp so cursor, wrapping, mouse and menus keep their offsets.
     const padding = Math.min(this.getPaddingX(), Math.max(0, Math.floor((width - 1) / 2)))
     this.renderedPadding = padding
     this.menuRows = []
-    if (this.getText() === '' && this.placeholder !== '' && lines[1] !== undefined) {
+    if (!hasAttachments && this.getText() === '' && this.placeholder !== '' && lines[1] !== undefined) {
       const available = Math.max(1, width - padding * 2)
       const hint = stripTerminalSequences(truncateToWidth(this.placeholder, available, ''))
       const body = this.focused ? CURSOR_MARKER + renderFakeCursor(hint.slice(0, 1) || ' ') + hint.slice(1) : hint
       lines[1] = ' '.repeat(padding) + this.borderColor(body) + ' '.repeat(Math.max(0, width - padding - visibleWidth(body)))
     }
     if (padding > 0 && lines[1] !== undefined) {
-      lines[1] = this.borderColor('›'.padEnd(padding)) + lines[1].slice(padding)
+      lines[1] = this.borderColor('›'.padEnd(padding)) + (labels === '' ? '' : labels + ' ') + lines[1].slice(padding)
     }
     const bottom = lines.lastIndexOf(this.bottomBorder)
-    for (let index = 0; index <= bottom; index += 1) lines[index] = this.surface(lines[index]!)
+    for (let index = 0; index <= bottom; index += 1) {
+      const prefix = index === 1 ? '' : ' '.repeat(this.attachmentColumns)
+      lines[index] = this.surface(prefix + lines[index]!)
+    }
+    this.panelStart = 0
     const cursor = this.getCursor()
     if (!this.isShowingAutocomplete() || !this.getLines()[cursor.line]?.startsWith('/')) return lines
     if (bottom < 1 || bottom === lines.length - 1) return lines
@@ -105,13 +127,18 @@ export class PromptEditor extends Editor {
     const start = Math.max(0, Math.min(selected - Math.floor(itemBudget / 2), itemCount - itemBudget))
     this.menuRows = Array.from({ length: Math.min(itemBudget, itemCount) }, (_, index) => start + index)
     if (keepScrollInfo) this.menuRows.push(menu.length - 1)
-    const suggestions = this.menuRows.map(index => this.renderSuggestion(menu[index]!, width, padding))
+    const suggestions = this.menuRows.map(index => this.renderSuggestion(menu[index]!, fullWidth, padding))
+    this.panelStart = suggestions.length
     return [...suggestions, ...input]
   }
 
   override handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-    if (event.y < this.attachmentRows) return undefined
-    event = { ...event, y: event.y - this.attachmentRows }
+    const previewStart = this.panelStart + 1
+    if (event.y >= previewStart && event.y < previewStart + this.attachmentRows) return undefined
+    if (event.y >= previewStart) event = { ...event, y: event.y - this.attachmentRows }
+    if (event.y >= this.panelStart) event = { ...event,
+      x: Math.max(0, event.x - this.attachmentColumns), width: event.width - this.attachmentColumns,
+    }
     if (this.menuRows.length === 0) return super.handleMouse(event)
     const nativeRow = this.menuRows[event.y]
     return super.handleMouse({ ...event,

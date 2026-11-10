@@ -1,20 +1,22 @@
-import { stripTerminalSequences, truncateToWidth } from '@earendil-works/pi-tui'
+import { stripTerminalSequences } from '@earendil-works/pi-tui'
 import { imagePathReferences, importImagePaste } from '../runtime/image-input.js'
 import type { AttachmentsService } from '../runtime/attachments.js'
 import type { CommandContext } from './commands/context.js'
 import { warnIfModelTextOnly } from './commands/attachments.js'
 import { errorMessage, sessionCwd } from './commands/shared.js'
 import type { PromptEditor } from './prompt-editor.js'
+import { ImagePreviews } from './image-previews.js'
 
-/** Bind the attachment strip and path paste to the existing session draft. */
+/** Bind thumbnails, numbered labels and path paste to the existing session draft. */
 export function wireImageInput(editor: PromptEditor, context: () => CommandContext): void {
-  editor.attachmentRow = width => {
+  const previews = new ImagePreviews()
+  editor.attachmentPresentation = (width, maxRows) => {
     const ctx = context()
-    const count = ctx.attachments.pending.filter(item => item.kind === 'image').length
-    if (count === 0) return undefined
-    const labels = Array.from({ length: count }, (_, index) => '[Image #' + (index + 1) + ']').join(' ')
-    const row = truncateToWidth(ctx.palette.accent(labels) + ctx.palette.dim(' · /attachments preview/remove · backspace remove last'), width, '…')
-    return ctx.palette.plain ? stripTerminalSequences(row) : row
+    const images = ctx.attachments.pending.filter(item => item.kind === 'image')
+    const preview = previews.render(ctx, images, width, maxRows)
+    if (images.length === 0) return undefined
+    const labels = ctx.palette.accent(images.map((_, index) => '[Image #' + (index + 1) + ']').join(' '))
+    return { labels: ctx.palette.plain ? stripTerminalSequences(labels) : labels, preview }
   }
   editor.onRemoveAttachment = () => {
     const ctx = context()

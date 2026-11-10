@@ -7,7 +7,13 @@
  * frame and the first streamed frame of the next step.
  */
 import { appendFileSync } from 'node:fs'
-import { TuiAltScreen, TuiMainScreen, visibleWidth } from '@earendil-works/pi-tui'
+import { getCapabilities, setCapabilities, TuiAltScreen, TuiMainScreen, visibleWidth } from '@earendil-works/pi-tui'
+
+const imageProtocol = process.env.FAKE_TTY_IMAGE_PROTOCOL
+if (imageProtocol === 'kitty' || imageProtocol === 'iterm2' || imageProtocol === 'none') {
+  setCapabilities({ ...getCapabilities(), images: imageProtocol === 'none' ? null : imageProtocol })
+}
+const imageLine = line => line.includes('\x1b_G') || line.includes('\x1b]1337;File=')
 
 const logPath = process.env.FAKE_TTY_GEOMETRY_LOG
 const marks = (process.env.FAKE_TTY_GEOMETRY_MARKS ?? '').split(',').filter(Boolean)
@@ -34,7 +40,7 @@ if (logPath !== undefined) {
         width: this.terminal.columns,
         status: lines[statusRow]?.trimEnd() ?? '',
         footer: lines[statusRow + 1]?.trimEnd(),
-        overflow: state.previousLines.some(line => visibleWidth(line) > this.terminal.columns),
+        overflow: state.previousLines.some(line => !imageLine(line) && visibleWidth(line) > this.terminal.columns),
         ...(traceOverlays ? { overlay: this.hasOverlay() } : {}),
         ...(process.env.FAKE_TTY_FRAME_SNAPSHOT === '1' ? { lines, rawLines: state.previousLines } : {}),
       }
