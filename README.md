@@ -602,6 +602,17 @@ node scripts/fake-tty-permission-restart.mjs       # minimal 同会话 Agent 重
 python3 scripts/pty-smoke.py
 ~~~
 
+### 发布
+
+推送 `v<version>` tag 触发 `release.yml`：校验 tag 与 `package.json` 的 `version` 一致，重跑 `pnpm check`，打出 `.tgz`，按 Conventional Commits 自动汇总变更并创建 GitHub Release；带 `-rc` / `-alpha` 的 tag 自动标记为 Pre-release。
+
+~~~sh
+git tag -a v0.2.2-rc.1 -m "v0.2.2-rc.1"
+git push origin v0.2.2-rc.1
+~~~
+
+npm 路径预留在 `publish-npm` job，默认跳过：需要仓库变量 `NPM_PUBLISH=true`、移除 `package.json` 的 `private`、补公开包名与 `publishConfig`、配置 `NPM_TOKEN`；预发布版本还要指定 dist-tag。
+
 ### 工作流
 
 - 修改后按改动范围跑对应探针，再跑 `pnpm check`。
