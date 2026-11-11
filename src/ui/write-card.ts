@@ -38,10 +38,8 @@ export function renderWriteCard(block: ToolBlock, palette: Palette, expanded = f
       const preview = source.slice(0, 65536)
       body.addChild(new SourcePreview(preview, languageForPath(path), palette))
       if (truncated || (expanded && lines.length > 2000)) body.addChild(new Text(palette.dim('… [content omitted by preview limit]'), 0, 0))
-      if (lines.length > PREVIEW_LINES) {
-        body.addChild(new Text(palette.dim(expanded
-          ? `… (${String(lines.length)} total lines, ctrl+o to collapse)`
-          : `… (${String(lines.length - PREVIEW_LINES)} more lines, ${String(lines.length)} total, ctrl+o to expand)`), 0, 0))
+      if (!expanded && lines.length > PREVIEW_LINES) {
+        body.addChild(new Text(palette.dim(`… (${String(lines.length - PREVIEW_LINES)} more lines, ${String(lines.length)} total)`), 0, 0))
       }
     }
   }

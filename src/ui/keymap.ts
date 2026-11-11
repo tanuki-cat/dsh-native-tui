@@ -1,7 +1,7 @@
 import { isKeyRelease, matchesKey } from '@earendil-works/pi-tui'
 
 /** One global terminal shortcut handled before the focused component. */
-export type GlobalShortcut = 'cancel-turn' | 'clear-input' | 'exit' | 'toggle-tool-previews' | 'new-session' | 'pick-session' | 'cycle-reasoning'
+export type GlobalShortcut = 'cancel-turn' | 'clear-input' | 'exit' | 'toggle-tool-previews' | 'new-session' | 'pick-session' | 'cycle-reasoning' | 'jump-to-latest'
 
 /** Terminal state that decides what a global shortcut means. */
 export interface ShortcutState {
@@ -11,6 +11,8 @@ export interface ShortcutState {
   editorFocused: boolean
   /** Whether the prompt editor holds any text. */
   editorHasText: boolean
+  /** Whether the fullscreen viewport is browsing history without an overlay. */
+  scrolledAway?: boolean
 }
 
 /**
@@ -24,6 +26,7 @@ export interface ShortcutState {
 export function globalShortcut(data: string, state: ShortcutState): GlobalShortcut | undefined {
   if (isKeyRelease(data)) return undefined
   if (matchesKey(data, 'escape')) {
+    if (state.editorFocused && state.scrolledAway) return 'jump-to-latest'
     // A draft belongs to the user: Escape discards it before it can reach the
     // turn, so a running turn only sees Escape when the editor is empty.
     if (state.editorFocused && state.editorHasText) return 'clear-input'

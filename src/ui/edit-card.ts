@@ -31,7 +31,7 @@ export function renderEditDiff(diff: FileDiff, palette: Palette, expanded = fals
   const afterEnd = after.length - Math.max(0, commonSuffix - contextLines)
   const beforeCount = beforeEnd - start, afterCount = afterEnd - start
   const limit = options.maxRows ?? (expanded ? 2000 : 24)
-  const omittedHint = expanded ? ' · preview limit' : ' · ctrl+o to expand'
+  const omittedHint = expanded ? ' · preview limit' : ''
   let rows: NumberedRow[] = []
   let added = 0, removed = 0, approximate = false
   if (beforeCount > MAX_DIFF_INPUT_LINES || afterCount > MAX_DIFF_INPUT_LINES || beforeCount * afterCount > MAX_DIFF_MATRIX_CELLS) {
@@ -71,7 +71,7 @@ export function renderEditDiff(diff: FileDiff, palette: Palette, expanded = fals
     if (rows.length > limit) {
       const head = Math.floor((limit - 1) / 2)
       const tail = limit - head - 1
-      rows = [...rows.slice(0, head), { kind: 'omitted', text: '… ' + (rows.length - head - tail) + ' diff lines omitted · ctrl+o to expand' }, ...rows.slice(-tail)]
+      rows = [...rows.slice(0, head), { kind: 'omitted', text: '… ' + (rows.length - head - tail) + ' diff lines omitted' + omittedHint }, ...rows.slice(-tail)]
     }
   }
   if (options.changedOnly) rows = rows.filter(row => row.kind !== 'context')
@@ -108,7 +108,7 @@ export function renderEditDiff(diff: FileDiff, palette: Palette, expanded = fals
         return rendered.map(text => diffRow(text, width, band))
       })
       if (!expanded && lines.some(line => visibleWidth(line.text) > width)) {
-        clipped.push(truncateToWidth(palette.dim('… (long diff lines clipped · ctrl+o to expand)'), Math.max(0, width)))
+        clipped.push(truncateToWidth(palette.dim('… (long diff lines clipped)'), Math.max(0, width)))
       }
       return clipped
     },

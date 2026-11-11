@@ -148,7 +148,6 @@ export function renderCodeExecutionCard(block: Extract<TranscriptBlock, { kind: 
       const message = compactErrorPreview(block.result)
       if (message !== '' && !shown.has(message)) body.addChild(new Text(palette.error(literalToolText(message)), 0, 0))
     }
-    body.addChild(new Text(palette.dim('(ctrl+o to expand)'), 0, 0))
   } else {
     if (source !== undefined) {
       const lines = literalToolText(source).split('\n')
@@ -167,8 +166,8 @@ export function renderCodeExecutionCard(block: Extract<TranscriptBlock, { kind: 
       if (preview.length > 0) body.addChild(new SourcePreview(preview.join('\n'), CODE_EXECUTION_LANGUAGES[block.name], palette))
       const hidden = lines.length - preview.length
       if (hidden > 0 || shortened) body.addChild(new Text(palette.dim(
-        '+ ' + hidden + ' more lines' + (shortened ? ' · long lines shortened' : '')
-          + (options.toolsExpanded ? ' · preview limit' : ' · ctrl+o to expand'),
+        '… ' + hidden + ' more lines' + (shortened ? ' · long lines shortened' : '')
+          + (options.toolsExpanded ? ' · preview limit' : ''),
       ), 0, 0))
     } else if (block.args.trim() !== '') {
       body.addChild(new ToolOutput(formatToolArguments(block.args), palette, options.toolsExpanded ?? false))

@@ -96,12 +96,12 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 - 审批与问答 waterfall。普通选择、输入、分页和图片 overlay 使用带边框的不透明背景；审批使用屏幕下方的编号选项与分隔线，突出实际调用和原因。审批按 toolName 与 callId 精确读取本次原生或 PTC 调用的参数，展示实际命令、目标路径或 MCP 方法；无法匹配时明确显示参数不可用，不借用相邻调用。`View full request details` 可查看完整 JSON，按视觉行翻页并随窗口缩放；Esc 返回原审批，查看详情本身不批准请求。长预览会标记截断，为批准、拒绝与取消保留空间。
 - 权限问答（`approval` intent）只提供调用方声明的批准、拒绝及可选持久授权，默认选中拒绝，不显示 Other 或跳过。动作保持可见，完整权限说明可分页查看，查看详情不会授权。展示标签与授权答案值分离；Esc 或请求中止不会批准。
 - 普通问答面板支持单选与多选：Space 勾选、Enter 提交，Other 提供自由文本（多选时会与已勾选项一并返回）；每题都有 `Skip this question` 行（无选项文本题为 `Answer… / Skip this question` 菜单），跳过只返回 `{ id, selected: [] }` 并继续批次；Esc 或请求 signal 中止会以 `UserQuestionError(ASK_ABORTED)` 取消整批。
-- 运行中 `Esc` / `Ctrl+C` 取消 turn；输入框有草稿时 `Esc` 先清空草稿，空输入才取消（overlay 聚焦时不触发）。
+- 运行中 `Esc` / `Ctrl+C` 取消 turn；全屏浏览历史时 `Esc` 先回到末尾并保留草稿与运行状态；已在末尾时，输入框有草稿则 `Esc` 先清空草稿，空输入才取消（overlay 聚焦时不触发）。
 
 ### 渲染与显示
 
 - Transcript 使用轻量的圆点和缩进层次：用户消息以 `›` 开头，使用中性灰阶背景和上下留白；正文直接渲染 Markdown，以 `•` 标记消息，标题使用字重区分层级；thinking 使用灰色斜体。工具标题以 `•` 开头，结果缩进到 `└` 下方；本地命令输出和审批回执按 durable event sequence 插入。
-- `◇ context` 默认仅显示来源与展开提示，避免上下文正文占满对话。`Ctrl+O` 可展开/收起保留的 context 正文；fullscreen 下也可点击标题单独切换。此设置只影响终端视图，Host 事件、实际模型上下文和导出保留原有内容。
+- `◇ context` 默认显示来源和淡色 `Show details · ctrl+o`，展开后入口变为 `Hide details · ctrl+o`。`Ctrl+O` 可展开/收起保留的 context 正文；fullscreen 下也可点击标题或详情行单独切换。此设置只影响终端视图，Host 事件、实际模型上下文和导出保留原有内容。
 - 流式内容直接跟随 provider：每帧显示已收到的全部 text/reasoning，`block-end` 与 `assistant/message` 立即采用完整内容，没有额外逐字动画、播放队列或 settle grace。reasoning、正文、工具卡片按 provider/event 顺序展示，可以落在同一帧。
 - 执行状态独立于内容渲染：turn 开始后显示 `• Working (5s · esc to interrupt)`，使用中性圆点、清晰标题和次级时间提示；满一分钟显示 `1m 5s`，满一小时显示 `1h 2m 3s`，不补零，超过 24 小时继续累计小时。收到文本、reasoning、工具调用或 stream/end 都不视为完成。自动重试显示 `• Retrying N/M (1m 5s · CODE · automatic · esc to interrupt)`，沿用本轮累计时长；新 attempt 或恢复收流后回到 Working。断流检测、超时与重试策略归 Host/provider。
 - 真正收到 turn/end 后显示 `Worked for 2m 22s · 10:49`，取消、失败、blocked 与 token limit 使用对应的结束词，错误正文继续保留。回执停止计时并保持到下一轮开始或切换/关闭会话；它是当前终端的状态，不写入 Session 历史或导出。等待、重试和完成均占固定一行，按窗口宽度截断。
@@ -117,11 +117,11 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 - 启动时限时查询终端前景与背景；`auto` 随实际背景选择深浅配色。支持真彩色及 256 色降级，收到迟到的颜色回复或终端主题变化通知时刷新画面，并保留工具/context 展开状态；终端不响应时继续使用回退配色。
 - 上下文读 token meter 的 `contextPressure` 投影（最近一次 provider 采样 + 此后 surface 增减，包含 compaction 影响），首次 provider 采样前显示 `Context —`。接近自动压缩阈值时整段转黄色、达到阈值转红色；阈值按 `compaction-basic` 的 `thresholdRatio`、`headroomTokens` 与请求预留输出复算。`/context` 查看完整 token 数、容量、压缩阈值和构成明细。
 - token 用量与 cache 命中率按 Web 口径：总量取四桶之和、部分命中不会显示成 100%，数字格式与 Web 统计 pill 一致。`tok/s` 是整段 Session 的累计 decode 速率（`decodeTokens / (decodeMs / 1000)`），不是瞬时速率，低于 10 时保留一位小数。
-- 可选 `fullscreen`：TuiAltScreen + ScrollView，header/status/editor 固定，鼠标滚轮滚动、文本选择复制。向上滚动离开末尾后，视口末行显示可点击的 `↓ jump to latest`，点击回到最新消息并恢复自动跟随（也可 `Ctrl+End`）。
+- 可选 `fullscreen`：TuiAltScreen + ScrollView，header/status/editor 固定，鼠标滚轮滚动、文本选择复制。向上滚动离开末尾后，输入区域上方的固定间隔行居中显示 `↓ Back to bottom · esc`，使用浅蓝文字和紧凑中性背景。点击按钮、按 `Esc` 或 `Ctrl+End` 回到最新消息并恢复自动跟随；回到末尾后恢复空白间隔。浏览历史时 Esc 保留草稿，overlay 保留自身的 Esc 操作。
 - 长会话渲染优化：每个行组件按宽度缓存结果（`MemoBlock`），`maxTranscriptEntries` 默认 600 限制每帧保留的行组件数；帧间隔按上次绘制时刻对齐并按实测帧成本自适应，内容签名未变的帧跳过重绘。
 - 工具卡片的动作关键字单独以主题蓝色高亮（shell 仍整条突出实际命令），路径和搜索表达式使用普通文字。标签统一句首大写（如 `Todo write`），`grep` / `glob` / `find` 显示为 `Search`，MCP 前缀使用大写缩写；服务名、方法名、命令和路径保持原样。shell 运行中为 `• Running command` / `• Running PS> command`，结束后改为 `• Ran …`，文件工具为 `• Read path` / `• Write path` / `• Edit path`，MCP 为 `• MCP service/tool`，PTC 为 `• Running code` / `• Ran code`，执行卡片不再追加 `running…` 尾行；文件工具标题不随时态变化，运行中保留 `running…`。shell 首行最多 120 字符，多行命令标记省略行数；路径与查询等标签最多 160 字符，路径保留末尾。展开后查看原命令，正文仍有安全预览上限。
-- 成功的 read 默认收起，write 新建文件显示带行号的源码预览；shell 保留末尾 5 个视觉行，通用结果保留前 10 个视觉行，随后显示省略行数与 Ctrl+O 提示。折叠状态仍展示错误正文。edit 和有实际更新 diff 的 write 使用 Host 变更元数据，展示 `(+N -N)`、行号、红绿增删行和附近上下文，默认最多 24 个 diff 行；超出计算预算的变更范围用 `~` 标记估算计数，整文件替换保留删除和新增两侧样本。空文件、行尾换行不虚增行数；没有实际 diff 时不推测旧内容。`/diff` 可分页查看会话记录的 diff，仍受预览上限约束。
-- 工具首行的 `•` 用颜色区分状态：黄色运行、绿色完成、红色失败、灰色停止，不额外增加完成提示行；标题保持单行，错误/停止原因继续展示，`plain` 主题不着色。write 在 Host 确认更新后可由 `Write` 改为 `Edit`。main-screen 可见执行标题立即从 `Running` 改为 `Ran`；已进入终端滚动历史的标题和圆点延后到必要的完整重绘再刷新，避免为状态变化清空历史；fullscreen 直接使用最新状态。默认 main-screen 不支持点击卡片；fullscreen 下点击卡片首行可单独展开/收起。`Ctrl+O` 在两种模式下均切换所有保留工具卡片和 context 正文。
+- 成功的 read 默认收起，write 新建文件显示带行号的源码预览；shell 保留末尾 5 个视觉行，通用结果保留前 10 个视觉行，省略行数独立展示。工具、源码、diff、PTC 与 context 统一使用卡片底部的淡色 `Show details · ctrl+o` / `Hide details · ctrl+o`，每张卡片仅一个详情入口。折叠状态仍展示错误正文。edit 和有实际更新 diff 的 write 使用 Host 变更元数据，展示 `(+N -N)`、行号、红绿增删行和附近上下文，默认最多 24 个 diff 行；超出计算预算的变更范围用 `~` 标记估算计数，整文件替换保留删除和新增两侧样本。空文件、行尾换行不虚增行数；没有实际 diff 时不推测旧内容。`/diff` 可分页查看会话记录的 diff，仍受预览上限约束。
+- 工具首行的 `•` 用颜色区分状态：黄色运行、绿色完成、红色失败、灰色停止，不额外增加完成提示行；标题保持单行，错误/停止原因继续展示，`plain` 主题不着色。write 在 Host 确认更新后可由 `Write` 改为 `Edit`。main-screen 可见执行标题立即从 `Running` 改为 `Ran`；已进入终端滚动历史的标题和圆点延后到必要的完整重绘再刷新，避免为状态变化清空历史；fullscreen 直接使用最新状态。默认 main-screen 不支持点击卡片；fullscreen 下点击卡片首行或详情行可单独展开/收起，正文点击不切换。`Ctrl+O` 在两种模式下均切换所有保留工具卡片和 context 正文。
 - 审批在屏幕下方突出实际命令、原因与 cwd，所有操作带编号：方向键或编号键移动选择，Enter 才确认，Esc 取消；详情页完整展示调用参数。单次允许显示 `✓ You approved … this time`，拒绝和取消分别显示真实结果。只提供 Host 声明的操作和授权范围，原生单次审批不会增加长期授权选项。
 - **main-screen 手动全局展开的代价**：视口上方的历史卡片高度变化时，pi-tui 会整屏重绘并清除终端 scrollback；Session 日志不受影响。这不属于自动结算零重绘的保证范围。只查看单次完整输出时，可使用 `/tools`、`/tool <index>` 的独立预览，避免全局重排。
 

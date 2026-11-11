@@ -118,7 +118,7 @@ let collapsedAgain = false
 const tick = setInterval(() => {
   const text = strip(out)
   if (phase === 0 && text.includes('enter send')) { phase = 1; try { child.stdin.write('run the native diff probe\r') } catch {} }
-  else if (phase === 1 && text.includes('ctrl+o to expand')) {
+  else if (phase === 1 && text.includes('Show details')) {
     collapsedInitially = !text.includes(previewTail)
     phase = 2
     try { child.stdin.write('\x0f') } catch {}
@@ -129,7 +129,7 @@ const tick = setInterval(() => {
     phase = 3
     try { child.stdin.write('\x0f') } catch {}
   }
-  else if (phase === 3 && strip(out.slice(collapseOffset)).includes('ctrl+o to expand') && text.includes('1 + after')) {
+  else if (phase === 3 && strip(out.slice(collapseOffset)).includes('Show details') && text.includes('1 + after')) {
     collapsedAgain = true
     phase = 4
     seenAt = Date.now()

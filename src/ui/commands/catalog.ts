@@ -17,7 +17,7 @@ export const HELP_LINES: readonly string[] = [
   'Ctrl+N: new/blank session · Alt+S: switch session (keep draft and attachments)',
   'Shift+Tab: cycle reasoning efforts from the current model map (keeps draft)',
   'Ctrl+O: expand/collapse all tool cards (main-screen may redraw history and clear terminal scrollback)',
-  'Fullscreen only: click the first line of a tool card to toggle it',
+  'Fullscreen only: click the first line of a tool card or its Show details / Hide details row to toggle it',
   '/exit · /quit (or bare exit/quit) · /reload',
   '/cancel · /model [provider/model] · /reasoning [effort|default|map] · /provider [add|list|edit|models|remove <route>]',
   '/mcp [add|list|remove <name>]',

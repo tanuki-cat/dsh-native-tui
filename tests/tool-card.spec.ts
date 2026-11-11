@@ -19,7 +19,7 @@ const click = (overrides: Partial<TuiMouseEvent> = {}): TuiMouseEvent => ({
 
 describe('pi-style tool cards', () => {
   it('advertises keyboard expansion everywhere and scopes mouse input to fullscreen', () => {
-    expect(output(new ToolCard(tool(), options))).toContain('(ctrl+o to expand)')
+    expect(output(new ToolCard(tool(), options))).toContain('Show details · ctrl+o')
     expect(output(new ToolCard(tool(), options))).not.toContain('click')
     expect(HELP_LINES.find(line => line.startsWith('Ctrl+O:'))).not.toContain('click')
     expect(HELP_LINES.some(line => line.startsWith('Fullscreen only:') && line.includes('first line of a tool card'))).toBe(true)
@@ -34,7 +34,7 @@ describe('pi-style tool cards', () => {
     expect(text).toContain('NEW_0')
     expect(text).toContain('preview limit')
     expect(text).not.toContain('ctrl+o to expand')
-    expect(card.render(140).length).toBeLessThanOrEqual(2002)
+    expect(card.render(140).length).toBeLessThanOrEqual(2003)
   })
 
   it.each(['bash', 'pwsh'])('bounds multiline %s titles and reveals the original command only when expanded', name => {
@@ -145,7 +145,7 @@ describe('pi-style tool cards', () => {
     expect(preview.render(80)).toEqual(first)
     preview.render(20)
     expect(preview.render(80)).toEqual(first)
-    expect(first.filter(line => line.includes('to collapse'))).toHaveLength(1)
+    expect(first.join('\n')).not.toContain('ctrl+o')
   })
 
   it('folds generic and MCP results without opaque args/result labels', () => {
@@ -182,10 +182,13 @@ describe('pi-style tool cards', () => {
 
   it('ignores right clicks, modified clicks, body clicks and wheel events', () => {
     const card = new ToolCard(tool(), options)
-    for (const event of [click({ button: 'right' }), click({ ctrl: true }), click({ shift: true }), click({ y: 1 }), click({ type: 'wheel' })]) {
+    for (const event of [click({ button: 'right' }), click({ ctrl: true }), click({ shift: true }), click({ y: 2 }), click({ type: 'wheel' })]) {
       expect(card.handleMouse(event)).toBeUndefined()
       expect(output(card)).not.toContain('READ_CONTENT')
     }
+    card.setExpanded(true)
+    output(card)
+    expect(card.handleMouse(click({ y: 1 }))).toBeUndefined()
   })
 
   it('preserves per-card clicks through the transcript memo and global expansion without recreating other cards', () => {

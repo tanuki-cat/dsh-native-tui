@@ -28,6 +28,17 @@ describe('globalShortcut', () => {
     }
   })
 
+  it('returns to the bottom before clearing a draft or cancelling a running turn', () => {
+    for (const running of [false, true]) for (const editorHasText of [false, true]) {
+      for (const data of ['\x1b', '\x1b[27u']) {
+        expect(globalShortcut(data, state({ scrolledAway: true, running, editorHasText }))).toBe('jump-to-latest')
+      }
+    }
+    expect(globalShortcut('\x1b', state({ scrolledAway: true, editorFocused: false }))).toBeUndefined()
+    expect(globalShortcut('\x1b[27;1:3u', state({ scrolledAway: true }))).toBeUndefined()
+    expect(globalShortcut('\x1b[27;5u', state({ scrolledAway: true }))).toBeUndefined()
+  })
+
   it('does not clear an unfocused or empty editor', () => {
     expect(globalShortcut('\x1b', state({ editorFocused: false, editorHasText: true }))).toBeUndefined()
     expect(globalShortcut('\x1b', state({ running: true, editorFocused: false, editorHasText: true }))).toBe('cancel-turn')

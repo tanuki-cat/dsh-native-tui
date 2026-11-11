@@ -4,12 +4,14 @@ import { ToolBody } from './transcript-chrome.js'
 import { clip } from './tool-preview.js'
 import type { Palette } from './theme.js'
 import type { TranscriptBlock } from './transcript.js'
+import { detailsRow } from './details-row.js'
 
 /** Context metadata stays compact while its original display text remains inspectable. */
 export class ContextMessage implements Component {
   private readonly body: Component
   private readonly label: string
   private readonly hasBody: boolean
+  private detailsY = 0
 
   constructor(block: Extract<TranscriptBlock, { kind: 'context' }>, private readonly palette: Palette,
     private expanded = false) {
@@ -24,16 +26,18 @@ export class ContextMessage implements Component {
   get isExpanded(): boolean { return this.expanded }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-    if (!this.hasBody || event.type !== 'click' || event.button !== 'left' || event.y !== 0 || event.shift || event.alt || event.ctrl) return undefined
+    if (!this.hasBody || event.type !== 'click' || event.button !== 'left' || (event.y !== 0 && event.y !== this.detailsY) || event.shift || event.alt || event.ctrl) return undefined
     this.expanded = !this.expanded
     return { handled: true }
   }
 
   render(width: number): string[] {
-    const hint = this.hasBody ? ' (ctrl+o to ' + (this.expanded ? 'collapse' : 'expand') + ')' : ''
-    const row = truncateToWidth(this.palette.dim('◇ context · ' + this.label + hint), width, '…')
-    return [this.palette.plain ? stripTerminalSequences(row) : row,
+    const row = truncateToWidth(this.palette.dim('◇ context · ' + this.label), width, '…')
+    const rows = [this.palette.plain ? stripTerminalSequences(row) : row,
       ...(this.expanded && this.hasBody ? this.body.render(width) : [])]
+    this.detailsY = rows.length
+    if (this.hasBody) rows.push(detailsRow(this.palette, this.expanded, width))
+    return rows
   }
 
   invalidate(): void { this.body.invalidate?.() }

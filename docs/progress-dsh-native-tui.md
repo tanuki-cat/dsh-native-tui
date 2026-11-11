@@ -49,7 +49,7 @@ dsh --profile tui
 | 附件 | 路径/剪贴板图片、`/attach preview`、`/attachments` 管理器 |
 | 引用 | `@file`、`@@session` canonical mention |
 | Web 附加 | `/changes`、`/deliverables` panel/preview/reveal、JSONL/ZIP/HTML 导出 |
-| 终端 | 可选 `fullscreen`（TuiAltScreen + ScrollView + mouse + `↓ jump to latest`）、安全终端恢复 |
+| 终端 | 可选 `fullscreen`（TuiAltScreen + ScrollView + mouse + `↓ Back to bottom · esc`）、安全终端恢复 |
 
 ## 4. 验证证据
 
@@ -90,7 +90,8 @@ EXIT 0
 - 剪贴板 RGB PNG → `/attach paste` → `/attach preview` → `/attachments` → 图片 overlay。
 - `@@` 在真实 profile 中列出其他 Session 候选；Tab 插入后的发送未完整验证。
 - `fullscreen: true` 启动、`/help`、Ctrl+D 退出；2026-10-22 普通终端复验：鼠标滚轮滚动、文本选择复制、退出后终端恢复均正常；桌面鼠标拖拽未验证。
-- `fullscreen` 的 `↓ jump to latest`（2026-10-22）：视口离开末尾时在末行合成、点击恢复跟随，由 `tests/fullscreen-jump-latest.spec.ts` 用假 Terminal 驱动真实 `TuiAltScreen` 覆盖（未在末尾无标签、滚走后标签出现且尾行不可见、点击后尾行回到屏幕并恢复 `isFollowingOutput`）；移除接线时 3 个用例中 2 个失败，确认测试针对该缺陷。真实终端点击未单独复验。
+- `fullscreen` 的 `↓ Back to bottom · esc`（2026-11-11 更新）：离开末尾时在输入区域上方的固定间隔行居中显示浅蓝文字与紧凑中性背景按钮，点击或 Esc 恢复跟随；`tests/fullscreen-jump-latest.spec.ts` 用假 Terminal 驱动真实 `TuiAltScreen` 覆盖末尾隐藏、居中与正文分离、坐标点击、空白点击、resize 和 Ctrl+End。keymap 验证浏览历史时 Esc 优先返回末尾，真实 Host 的 transcript-presentation 探针验证点击与 Esc 返回末尾、草稿保留和末尾清空草稿。
+- 统一详情入口（2026-11-11）：工具、源码、diff、PTC 和 context 统一使用 `Show details · ctrl+o` / `Hide details · ctrl+o`，每卡一处，行数省略提示不再内联快捷键，全屏标题与详情行均可点击；页脚位置由卡片构建分支决定，多文件编辑沿用自身末行。`pnpm check` 通过 114 文件 / 1712 测试；transcript-presentation 6 组、statusline 4 组真实 Host 场景此前全部 PASS，页脚与省略标记的后续修正受本机沙箱限制未复跑。详见[设计与验证记录](design-task-optimize-details-and-jump-latest.md)。
 - 等待提示行：mock SSE provider + 真实 Host + 真实 TUI 抓取渲染流，确认 `⟳ waiting for response · Ns` 逐秒递增、首个可渲染输出到达时消失（裸 block-start 不提前清除）；mock 首次返回 500 时显示 `retry 1/5 after SERVER (automatic)` 并在重放成功后清除。工具调用流式生成期间提示行改为 `⟳ generating run_code call · Ns`（`scripts/fake-tty-wait-tool-phase.mjs` 验证 request → tool 阶段的先后顺序）。
 
 ### 未完成真实验证

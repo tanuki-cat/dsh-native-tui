@@ -132,7 +132,7 @@ describe('TranscriptRenderer', () => {
     expect(pendingHead).toBe(failed.render(80)[0])
     expect(pendingHead).not.toContain('running')
     expect(settled.render(80).at(-1)).toContain('ctrl+o')
-    expect(failed.render(80).at(-1)).toContain('error')
+    expect(failed.render(80).join('\n')).toContain('error')
 
     const running = renderTranscriptBlock({ kind: 'compaction', compactionId: 'k', state: 'running', seq: 1 }, options)
     const done = renderTranscriptBlock({ kind: 'compaction', compactionId: 'k', state: 'done', shadowedItems: 1, shadowedTokens: 5, summary: 's', seq: 2 }, options)
@@ -169,7 +169,7 @@ describe('TranscriptRenderer', () => {
     expect(output).toContain('1  const x = 1')
     expect(output).toContain('2  console.log(x)')
     expect(output).not.toContain('├ result')
-    expect(output).toMatch(/\n {4}1\s*$/u)
+    expect(output).toMatch(/\n {4}1\s*\n {2}Show details/u)
     expect(output).not.toContain('└ done')
     expect(output).not.toContain('├ args')
   })
@@ -271,7 +271,7 @@ describe('TranscriptRenderer', () => {
     }, options).render(120).join('\n')
     expect(output).toContain('line 11')
     expect(output).not.toContain('line 12')
-    expect(output).toContain('+ 3 more lines · ctrl+o to expand')
+    expect(output).toContain('… 3 more lines')
     expect(output).not.toContain('└ done')
   })
 
@@ -302,7 +302,7 @@ describe('TranscriptRenderer', () => {
     expect(output).toContain('inspect the request')
     expect(output).toContain('final answer')
     expect(output).toContain('Read a.ts')
-    expect(output).toContain('ctrl+o to expand')
+    expect(output).toContain('Show details · ctrl+o')
   })
 })
 

@@ -9,6 +9,7 @@ import { literalToolText, toolLabel, ToolOutput } from './tool-output.js'
 import { ToolBody, toolHeading } from './transcript-chrome.js'
 import { executionVerb, highlightToolLabel, isWriteUpdate, toolActionLabel } from './tool-label.js'
 import { EditGroupCard, isAppliedEdit } from './edit-group.js'
+import { detailsRow } from './details-row.js'
 
 type ToolBlock = Extract<TranscriptBlock, { kind: 'tool' }>
 type Arguments = Readonly<Record<string, unknown>>
@@ -21,11 +22,21 @@ function argumentsOf(raw: string): Arguments | undefined {
 const stringArg = (args: Arguments | undefined, key: string): string | undefined => typeof args?.[key] === 'string' ? args[key] as string : undefined
 const inline = toolLabel
 
+/** Where a card's single details footer lives. */
+type DetailsPlacement = 'none' | 'appended' | 'own'
+
+/** Whether a card renders content beyond its heading, so its footer has something to reveal. */
+function revealsContent(block: ToolBlock): boolean {
+  return Boolean(block.result?.trim() || block.diffs?.length || block.args.trim())
+}
+
 /** A tool call keeps its identity and local expansion through stream updates. */
 export class ToolCard implements Component {
   private args: Arguments | undefined
   private expanded: boolean
   private component: Component | undefined
+  private placement: DetailsPlacement = 'none'
+  private detailsY: number | undefined
   constructor(private block: ToolBlock, private readonly options: TranscriptOptions) {
     this.args = argumentsOf(block.args)
     this.expanded = options.toolsExpanded ?? false
@@ -45,14 +56,24 @@ export class ToolCard implements Component {
   get isExpanded(): boolean { return this.expanded }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-    if (event.type !== 'click' || event.button !== 'left' || event.y !== 0 || event.shift || event.alt || event.ctrl) return undefined
+    if (event.type !== 'click' || event.button !== 'left' || (event.y !== 0 && event.y !== this.detailsY) || event.shift || event.alt || event.ctrl) return undefined
     this.setExpanded(!this.expanded)
     return { handled: true }
   }
 
   render(width: number): string[] {
     this.component ??= this.build()
-    return this.component.render(width)
+    const rows = this.component.render(width)
+    if (this.placement === 'none') {
+      this.detailsY = undefined
+      return rows
+    }
+    if (this.placement === 'own') {
+      this.detailsY = this.component instanceof EditGroupCard ? this.component.detailsRowIndex : undefined
+      return rows
+    }
+    this.detailsY = rows.length
+    return [...rows, detailsRow(this.options.palette, this.expanded, width)]
   }
 
   invalidate(): void { this.component?.invalidate?.() }
@@ -60,12 +81,25 @@ export class ToolCard implements Component {
   private build(): Component {
     const { block, args, expanded } = this
     const palette = this.options.palette
-    if (block.name === 'run_code') return renderCodeExecutionCard(block, { ...this.options, toolsExpanded: expanded })
+    this.placement = 'none'
+    if (block.name === 'run_code') {
+      this.placement = revealsContent(block) ? 'appended' : 'none'
+      return renderCodeExecutionCard(block, { ...this.options, toolsExpanded: expanded })
+    }
     const container = new Container()
-    const addBody = (component: Component): void => { container.addChild(new ToolBody(component, palette)) }
     const diffs = block.diffs ?? []
-    if (diffs.length > 1 && isAppliedEdit(block)) return new EditGroupCard([block], { ...this.options, toolsExpanded: expanded })
-    if (block.name === 'write' && (!isWriteUpdate(block) || diffs.length === 0)) return renderWriteCard(block, palette, expanded)
+    let body = 0
+    const addBody = (component: Component): void => { container.addChild(new ToolBody(component, palette)); body += 1 }
+    // Content the collapsed card withholds for its single details footer.
+    let hidden = false
+    if (diffs.length > 1 && isAppliedEdit(block)) {
+      this.placement = 'own'
+      return new EditGroupCard([block], { ...this.options, toolsExpanded: expanded })
+    }
+    if (block.name === 'write' && (!isWriteUpdate(block) || diffs.length === 0)) {
+      this.placement = revealsContent(block) ? 'appended' : 'none'
+      return renderWriteCard(block, palette, expanded)
+    }
     const path = stringArg(args, 'file_path') ?? stringArg(args, 'path')
     const shell = block.name === 'bash' || block.name === 'pwsh'
     const name = highlightToolLabel(toolActionLabel(block), palette)
@@ -84,7 +118,7 @@ export class ToolCard implements Component {
       const commandShortened = extraLines > 0 || literalToolText(firstLine).length > 120
       const suffix = extraLines > 0 ? palette.dim(' … (' + extraLines + ' more command lines)') : ''
       container.addChild(toolHeading(palette.bold(executionVerb(block.pending) + ' ') + palette.accent((block.name === 'pwsh' ? 'PS> ' : '') + head) + suffix, palette, block))
-      if (commandShortened && !expanded) addBody(new Text(palette.dim('(command shortened · ctrl+o to expand)'), 0, 0))
+      if (commandShortened && !expanded) addBody(new Text(palette.dim('… command shortened'), 0, 0))
       if (command === undefined && block.args.trim() !== '') addBody(new Text(palette.dim(literalToolText(formatToolArguments(block.args))), 0, 0))
       const meta: string[] = []
       const description = stringArg(args, 'description')
@@ -95,9 +129,9 @@ export class ToolCard implements Component {
       if (args?.run_in_background === true) meta.push('background')
       if (typeof args?.sandbox_permissions === 'string') meta.push('sandbox ' + inline(args.sandbox_permissions))
       if (meta.length > 0) addBody(new Text(palette.dim(meta.join(' · ')), 0, 0))
-      if (expanded && command !== undefined && commandShortened) {
+      if (expanded && command !== undefined) {
         addBody(new ToolOutput(command, palette, true, 10, 'start', false, block.name === 'pwsh' ? 'powershell' : 'bash'))
-      }
+      } else if (command !== undefined) hidden = true
     } else {
       const pattern = stringArg(args, 'pattern')
       const search = ['grep', 'glob', 'find'].includes(block.name) && pattern !== undefined
@@ -113,17 +147,22 @@ export class ToolCard implements Component {
       container.addChild(toolHeading(head, palette, block, tail))
       if (args === undefined && block.args.trim() !== '') addBody(new Text(palette.dim(literalToolText(formatToolArguments(block.args))), 0, 0))
       else if (expanded && block.name !== 'read' && block.name !== 'edit') addBody(new Text(palette.dim(literalToolText(formatToolArguments(block.args))), 0, 0))
+      // A running card without a preview stays brief; a settled one exposes its arguments on expand.
+      else if (!block.pending && args !== undefined && block.name !== 'read' && block.name !== 'edit') hidden = true
     }
     const result = block.result
-    if (result?.trim() && (block.isError || block.stopped || (diffs.length === 0 && (block.name !== 'read' || expanded)))) {
-      addBody(new ToolOutput(result, palette, expanded, shell ? 5 : 10, shell ? 'end' : 'start', block.isError, block.name === 'read' ? languageForPath(path) : undefined))
-    } else if (result?.trim() && block.name === 'read' && !expanded) {
-      addBody(new Text(palette.dim('(ctrl+o to expand)'), 0, 0))
+    if (result?.trim()) {
+      // A collapsed read keeps its result for the details footer; every other card shows it at once.
+      const shown = block.isError || block.stopped || (diffs.length === 0 && (block.name !== 'read' || expanded))
+      if (shown) {
+        addBody(new ToolOutput(result, palette, expanded, shell ? 5 : 10, shell ? 'end' : 'start', block.isError, block.name === 'read' ? languageForPath(path) : undefined))
+      } else if (!expanded && block.name === 'read' && diffs.length === 0) hidden = true
     }
     if (block.pending) {
       if (!shell) container.addChild(new Text(palette.warning('  └ running…'), 0, 0))
     } else if (block.isError) container.addChild(new Text(palette.error('  └ error'), 0, 0))
     else if (block.stopped) container.addChild(new Text(palette.warning('  └ stopped · partial changes retained; inspect the result'), 0, 0))
+    this.placement = body > 0 || hidden ? 'appended' : 'none'
     return container
   }
 }

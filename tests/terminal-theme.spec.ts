@@ -111,6 +111,6 @@ describe('terminal color adaptation', () => {
     const output = renderer.container.render(100).join('\n')
     expect(output).toContain(kind === 'tool' ? 'DETAIL SOURCE 0' : 'DETAIL SOURCE')
     expect(output).toContain('38;2;157;157;162')
-    expect(output).toContain('ctrl+o to collapse')
+    expect(output).toContain('Hide details · ctrl+o')
   })
 })

@@ -16,7 +16,7 @@ const click = { type: 'click', button: 'left', x: 1, y: 0, screenX: 1, screenY: 
 describe('compact context messages', () => {
   it('shows only the source and expansion hint by default', () => {
     const lines = renderTranscriptBlock(context, options).render(100)
-    expect(lines).toEqual(['◇ context · file-policy (ctrl+o to expand)'])
+    expect(lines).toEqual(['◇ context · file-policy', '  Show details · ctrl+o'])
     expect(lines.join('\n')).not.toContain('Context detail')
     expect(context.text).toBe(text)
   })
@@ -25,14 +25,14 @@ describe('compact context messages', () => {
     const message = new ContextMessage(context, palette)
     expect(message.handleMouse(click)).toEqual({ handled: true })
     const expanded = message.render(100).join('\n')
-    expect(expanded).toContain('(ctrl+o to collapse)')
+    expect(expanded).toContain('Hide details · ctrl+o')
     expect(expanded).toContain('  └ Context detail 中文😀')
     expect(expanded).toContain('    Second line')
     expect(message.handleMouse({ ...click, y: 1 })).toBeUndefined()
     expect(message.handleMouse({ ...click, shift: true })).toBeUndefined()
     expect(message.render(100).join('\n')).toBe(expanded)
     message.handleMouse(click)
-    expect(message.render(100)).toHaveLength(1)
+    expect(message.render(100)).toHaveLength(2)
   })
 
   it('opens all context previews with Ctrl+O and retains them through stream updates', () => {

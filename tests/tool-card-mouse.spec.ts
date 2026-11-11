@@ -59,7 +59,7 @@ it.each(['read', 'edits'])('routes SGR press/release through fullscreen layout t
     }
   }
   const clickTitle = (screen: string[], expanded = false): void => {
-    const label = family === 'read' ? 'Read src/a.ts' : expanded ? 'Hide details' : 'Edited 1 file'
+    const label = expanded ? 'Hide details' : 'Show details'
     const row = screen.findIndex(line => line.includes(label))
     expect(row).toBeGreaterThan(1)
     const column = screen[row]!.indexOf(label)

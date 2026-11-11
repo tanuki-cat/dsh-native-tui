@@ -53,7 +53,7 @@ describe('compact transcript presentation', () => {
   })
   it('puts shell output under a heading whose tense follows execution state', () => {
     const lines = render(tool(), 'dark')
-    expect(lines.map(stripTerminalSequences).map(line => line.trimEnd())).toEqual(['• Ran pnpm check', '  └ PASS'])
+    expect(lines.map(stripTerminalSequences).map(line => line.trimEnd())).toEqual(['• Ran pnpm check', '  └ PASS', '  Show details · ctrl+o'])
     expect(lines.join('\n')).not.toContain('48;5;237')
     for (const update of [{ pending: true }, { isError: true }, { stopped: true }]) {
       const rows = render(tool(update), 'dark').map(stripTerminalSequences)

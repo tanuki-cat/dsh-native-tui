@@ -161,7 +161,7 @@ for (const testCase of CASES) {
     'assistant reply': clean.includes(testCase.preset.toUpperCase() + ' COMPACT DONE'),
   }
   if (testCase.steps.includes('read')) {
-    checks['read stays collapsed'] = clean.includes('Read ' + file) && clean.includes('ctrl+o to expand') && !clean.includes('├ args')
+    checks['read stays collapsed'] = clean.includes('Read ' + file) && clean.includes('Show details') && !clean.includes('├ args')
     checks['read path shown'] = clean.includes(file)
   }
   const pass = code === 0 && signal === null && phase === 3 && Object.values(checks).every(Boolean)

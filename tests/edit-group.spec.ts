@@ -32,7 +32,7 @@ describe('edited files presentation', () => {
       expect(output).toContain('1 - BEFORE_' + id)
       expect(output).toContain('1 + AFTER_' + id)
     }
-    expect(output).toContain('+ Show details')
+    expect(output).toContain('Show details · ctrl+o')
     expect(output).not.toContain('• Edit ')
   })
 

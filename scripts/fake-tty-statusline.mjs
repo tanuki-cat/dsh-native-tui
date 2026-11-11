@@ -88,6 +88,11 @@ async function run(fullscreen, width, theme) {
       await new Promise(resolve => setTimeout(resolve, 30))
     }
   }
+  // The footer has to belong to the context card, not to any other card in the frame.
+  const contextShowsDetails = frame => {
+    const title = frame.lines.findIndex(line => line.includes('◇ context'))
+    return title >= 0 && (frame.lines[title + 1] ?? '').trim() === 'Show details · ctrl+o'
+  }
   try {
     const surface = theme === 'light' ? '48;2;244;244;244' : '48;2;65;67;78'
     await waitFor(records => records.some(frame => frame.rawLines.some(line => line.includes(surface)) && frame.status.includes('Ready')), 'terminal palette')
@@ -107,14 +112,14 @@ async function run(fullscreen, width, theme) {
     assert.equal(initial.lines[prompt - 1].trim(), ''); assert.equal(initial.lines[prompt + 1].trim(), '')
     assert.ok(!initial.lines.some(line => /^─+$/u.test(line)), 'chrome uses spacing instead of stacked rules')
     const bodyMarker = 'Current working directory:'
-    assert.ok(frames().some(frame => frame.lines.some(line => line.includes('◇ context') && line.includes('ctrl+o to expand'))))
+    assert.ok(frames().some(contextShowsDetails), 'context card carries the details footer')
     assert.ok(!frames().some(frame => frame.lines.some(line => line.includes(bodyMarker))), 'context body starts folded')
     let offset = frames().length
     child.stdin.write('\x0f')
     await waitFor(records => records.slice(offset).some(frame => frame.lines.some(line => line.includes(bodyMarker))), 'expand context')
     offset = frames().length
     child.stdin.write('\x0f')
-    await waitFor(records => records.slice(offset).some(frame => frame.lines.some(line => line.includes('ctrl+o to expand'))
+    await waitFor(records => records.slice(offset).some(frame => contextShowsDetails(frame)
       && !frame.lines.some(line => line.includes(bodyMarker))), 'collapse context')
     let outcome = 'completed'
     if (width === 60) {

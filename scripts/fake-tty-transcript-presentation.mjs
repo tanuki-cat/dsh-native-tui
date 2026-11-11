@@ -133,6 +133,8 @@ async function run(fullscreen, decision, preset = 'standard', display = 'detaile
     assert.equal(readFileSync(join(workspace, 'demo.ts'), 'utf8'), content.replace('const before = 1', 'const after = 2'))
     assert.equal(existsSync(join(workspace, 'shell-ran.txt')), decision === 'allow')
     const records = frames(), transcript = records.flatMap(frame => frame.lines).join('\n')
+    assert.ok(transcript.includes('Show details · ctrl+o'), 'cards share the details footer')
+    assert.ok(!/ctrl\+o to (?:expand|collapse)/u.test(transcript), 'legacy details prompts must not appear')
     const orderedFrames = records.filter(frame => frame.lines.some(line => line.includes(receiptText))
       && frame.lines.some(line => line.includes(pendingHeading) || line.includes(shellHeading)))
     assert.ok(orderedFrames.length > 0, 'receipt and tool must be observed together')
@@ -178,7 +180,41 @@ async function run(fullscreen, decision, preset = 'standard', display = 'detaile
         }
       }
       await waitFor((_text, records) => records.slice(offset).some(frame => frame.lines.some(line => line.includes('source row 18'))), 'expanded source visibility')
-      assert.ok(frames().slice(offset).some(frame => frame.lines.some(line => line.includes('18 total lines, ctrl+o to collapse'))), 'written source must also be expanded')
+      if (fullscreen) {
+        offset = frames().length
+        child.stdin.write('\x1b[5~')
+        const jumpLabel = '↓ Back to bottom · esc'
+        await waitFor((_text, records) => records.slice(offset).some(frame => frame.lines.some(line => line.includes(jumpLabel))), 'show back to bottom')
+        const scrolled = frames().slice(offset).findLast(frame => frame.lines.some(line => line.includes(jumpLabel)))
+        const jumpRow = scrolled.lines.findIndex(line => line.includes(jumpLabel))
+        const jumpColumn = scrolled.lines[jumpRow].indexOf(jumpLabel)
+        assert.equal(jumpColumn, Math.floor((scrolled.width - jumpLabel.length - 2) / 2) + 1, 'jump button is centered')
+        assert.ok(jumpRow < scrolled.editorRow && jumpRow > 0, 'jump action sits above the composer')
+        assert.ok(scrolled.rawLines[jumpRow].includes('\x1b[38;5;117m' + jumpLabel), 'button uses the accent foreground')
+        assert.ok(/\x1b\[48;(?:5|2);/u.test(scrolled.rawLines[jumpRow]), 'button uses a compact background')
+        offset = frames().length
+        const position = (jumpColumn + 2) + ';' + (jumpRow + 1)
+        child.stdin.write('\x1b[<0;' + position + 'M\x1b[<0;' + position + 'm')
+        await waitFor((_text, records) => records.slice(offset).some(frame => !frame.lines.some(line => line.includes(jumpLabel))
+          && frame.lines.some(line => line.includes('PRESENTATION DONE'))), 'click jump to latest')
+        offset = frames().length
+        child.stdin.write('\x1b[5~')
+        await waitFor((_text, records) => records.slice(offset).some(frame => frame.lines.some(line => line.includes(jumpLabel))), 'browse history again')
+        offset = frames().length
+        child.stdin.write('KEEP_DRAFT')
+        await waitFor((_text, records) => records.slice(offset).some(frame => frame.lines.some(line => line.includes('› KEEP_DRAFT'))), 'draft while browsing history')
+        offset = frames().length
+        child.stdin.write('\x1b')
+        await waitFor((_text, records) => records.slice(offset).some(frame => !frame.lines.some(line => line.includes(jumpLabel))
+          && frame.lines.some(line => line.includes('PRESENTATION DONE')) && frame.lines.some(line => line.includes('› KEEP_DRAFT'))), 'Escape returns to bottom and preserves draft')
+        offset = frames().length
+        child.stdin.write('\x1b')
+        await waitFor((_text, records) => records.slice(offset).some(frame => !frame.lines.some(line => line.includes('KEEP_DRAFT'))), 'Escape at bottom clears draft')
+      }
+      offset = frames().length
+      child.stdin.write('\x0f')
+      await waitFor((_text, records) => records.slice(offset).some(frame => frame.lines.some(line => line.includes('Show details'))
+        && !frame.lines.some(line => line.includes('source row 18'))), 'collapse previews')
     }
     child.stdin.write('\x04')
     const [code, signal] = await closed

@@ -1,15 +1,13 @@
 import { Box, ScrollView, Text, TuiAltScreen, VStack } from '@earendil-works/pi-tui'
-import { describe, expect, it } from 'vitest'
-import { scrollToEndLabel } from '../src/ui/scroll-indicator.js'
+import { describe, expect, it, onTestFinished } from 'vitest'
+import { ScrollToLatest } from '../src/ui/scroll-indicator.js'
 import { createPalette } from '../src/ui/theme.js'
 
 /**
  * The fullscreen viewport owns its scroll offset, so a reader who scrolled up
- * can only get back to the tail through the clickable label pi-tui composites
- * on the last row of a follow-end primary scroll view. These cases drive a real
- * `TuiAltScreen` with a fake terminal, because the bug they cover is the
- * option never reaching pi-tui: a label-only assertion would pass while the
- * viewport stayed stuck.
+ * gets back to the tail through the centered button above the composer.
+ * Drive a real layout so mouse coordinates and output following are verified
+ * together with the final rendered position.
  */
 
 class FakeTerminal {
@@ -34,7 +32,7 @@ class FakeTerminal {
 }
 
 const NL = String.fromCharCode(10)
-const LABEL = 'jump to latest'
+const LABEL = 'Back to bottom'
 
 function strip(text: string): string {
   return text.replace(/\u001B\[[0-9;?]*[A-Za-z]/g, '').replace(/\u001B\][^\u0007]*\u0007/g, '')
@@ -45,13 +43,15 @@ function openViewport() {
   const terminal = new FakeTerminal()
   const tui = new TuiAltScreen(terminal, false, undefined, {
     mouse: true,
-    scrollToEndIndicator: () => scrollToEndLabel(createPalette('plain')),
   })
+  onTestFinished(() => { tui.stop() })
   const rows = Array.from({ length: 40 }, (_, index) => 'row' + String(index).padStart(3, '0'))
   const document = new Box(0, 0)
   document.addChild(new Text(rows.join(NL), 0, 0))
   tui.setLayoutRoot(new VStack([
     { component: new ScrollView(document, { follow: 'end', primary: true }), basis: 0, grow: 1, minSize: 1 },
+    { component: new ScrollToLatest(createPalette('plain'), () => tui.isFollowingOutput, () => { tui.scrollToBottom() }), basis: 'auto' },
+    { component: new Text('EDITOR', 0, 0), basis: 'auto' },
   ]))
   tui.start()
   /**
@@ -62,13 +62,7 @@ function openViewport() {
   const frame = async (): Promise<string[]> => {
     tui.scrollBy(0)
     await new Promise(resolve => setTimeout(resolve, 80))
-    const parts = terminal.output.split('\u001B[?2026h')
-    const flat = strip(parts[parts.length - 1] ?? '')
-    const screen: string[] = []
-    for (let index = 0; index < flat.length; index += terminal.columns) {
-      screen.push(flat.slice(index, index + terminal.columns))
-    }
-    return screen
+    return tui.getScreenLines().map(strip)
   }
   return { terminal, tui, rows, frame }
 }
@@ -81,14 +75,16 @@ describe('fullscreen jump to latest', () => {
     expect(screen.some(row => row.includes(LABEL))).toBe(false)
   })
 
-  it('labels the last viewport row once the reader scrolls away from the end', async () => {
+  it('centers the button above the composer without covering the transcript', async () => {
     const { tui, frame, rows } = openViewport()
     await frame()
     tui.scrollBy(-20)
     const screen = await frame()
     expect(tui.isFollowingOutput).toBe(false)
     expect(screen.some(row => row.includes(rows[rows.length - 1] as string))).toBe(false)
-    expect(screen[screen.length - 1]).toContain(LABEL)
+    expect(screen[screen.length - 2]?.trimEnd()).toBe(' '.repeat(8) + ' ↓ Back to bottom · esc')
+    expect(screen[screen.length - 1]).toContain('EDITOR')
+    expect(screen[screen.length - 3]).toContain('row')
   })
 
   it('returns to the tail when the label is clicked', async () => {
@@ -108,6 +104,24 @@ describe('fullscreen jump to latest', () => {
     expect(tui.isFollowingOutput).toBe(true)
     expect(clicked.some(row => row.includes(rows[rows.length - 1] as string))).toBe(true)
     expect(clicked.some(row => row.includes(LABEL))).toBe(false)
+  })
+
+  it('ignores clicks in the left padding and realigns after a resize', async () => {
+    const { terminal, tui, frame } = openViewport()
+    await frame()
+    tui.scrollBy(-20)
+    const screen = await frame()
+    const y = screen.findIndex(row => row.includes(LABEL)) + 1
+    terminal.onInput?.('\x1b[<0;1;' + y + 'M')
+    terminal.onInput?.('\x1b[<0;1;' + y + 'm')
+    await frame()
+    expect(tui.isFollowingOutput).toBe(false)
+    terminal.columns = 60
+    const resized = await frame()
+    expect(resized[resized.length - 2]?.trimEnd()).toBe(' '.repeat(18) + ' ↓ Back to bottom · esc')
+    terminal.onInput?.('\x1b[1;5F')
+    await frame()
+    expect(tui.isFollowingOutput).toBe(true)
   })
 })
 

@@ -35,9 +35,7 @@ export class ToolOutput implements Component {
     const hidden = this.expanded ? 0 : Math.max(0, all.length - this.limit)
     const lines = hidden === 0 ? [...all] : this.keep === 'end' ? all.slice(-this.limit) : all.slice(0, this.limit)
     if (hidden > 0) {
-      lines.push(...new Text(this.palette.dim('+ ' + hidden + (this.keep === 'end' ? ' earlier lines' : ' more lines') + ' (ctrl+o to expand)'), 0, 0).render(width))
-    } else if (this.expanded && all.length > this.limit) {
-      lines.push(...new Text(this.palette.dim('… (ctrl+o to collapse)'), 0, 0).render(width))
+      lines.push(...new Text(this.palette.dim('… ' + hidden + (this.keep === 'end' ? ' earlier lines' : ' more lines')), 0, 0).render(width))
     }
     if (this.omitted > 0) lines.push(...new Text(this.palette.dim('… [' + this.omitted + ' chars omitted by preview limit]'), 0, 0).render(width))
     return lines

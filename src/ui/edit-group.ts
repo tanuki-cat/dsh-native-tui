@@ -6,6 +6,7 @@ import { isWriteUpdate } from './tool-label.js'
 import { toolHeading } from './transcript-chrome.js'
 import { toolLabel } from './tool-output.js'
 import type { TranscriptBlock, TranscriptOptions } from './transcript.js'
+import { detailsRow } from './details-row.js'
 
 type ToolBlock = Extract<TranscriptBlock, { kind: 'tool' }>
 export interface EditGroupBlock {
@@ -57,6 +58,8 @@ export class EditGroupCard implements Component {
   }
 
   get isExpanded(): boolean { return this.expanded }
+  /** Last row of the card, which carries its own details footer. */
+  get detailsRowIndex(): number { return this.height - 1 }
   update(tools: readonly ToolBlock[]): void { this.tools = tools; this.files = undefined }
   setExpanded(expanded: boolean): void { this.expanded = expanded; this.invalidate() }
 
@@ -126,7 +129,7 @@ export class EditGroupCard implements Component {
       }
     }
     if (files.length > maxFiles) lines.push(truncateToWidth(palette.dim('  … ' + (files.length - maxFiles) + ' more files' + (this.expanded ? ' · preview limit' : '')), width, '…'))
-    lines.push(truncateToWidth(palette.dim(this.expanded ? '  - Hide details · ctrl+o to collapse' : '  + Show details · ctrl+o to expand'), width, '…'))
+    lines.push(detailsRow(palette, this.expanded, width))
     this.height = lines.length
     return palette.plain ? lines.map(stripTerminalSequences) : lines
   }

@@ -28,10 +28,10 @@ describe('write content cards', () => {
     const text = render(write(content))
     expect(text).toContain('SOURCE_LINE_010')
     expect(text).not.toContain('SOURCE_LINE_011')
-    expect(text).toContain('73 more lines, 83 total, ctrl+o to expand')
+    expect(text).toContain('73 more lines, 83 total')
     const expanded = render(write(content), true)
     expect(expanded).toContain('SOURCE_LINE_083')
-    expect(expanded).toContain('ctrl+o to collapse')
+    expect(expanded).toContain('Hide details · ctrl+o')
     expect(expanded).not.toContain('more lines')
   })
 
@@ -58,8 +58,8 @@ describe('write content cards', () => {
     const pending = renderTranscriptBlock(write(content, { pending: true, result: undefined, diffs: undefined }), options).render(120)
     const settled = renderTranscriptBlock(write(content), options).render(120)
     expect(pending[0]).toBe(settled[0])
-    expect(pending.slice(0, settled.length)).toEqual(settled)
-    expect(pending.at(-1)).toContain('running…')
+    expect(pending.filter(line => !line.includes('running…'))).toEqual(settled)
+    expect(pending.at(-2)).toContain('running…')
   })
 
   it('preserves write errors and empty files', () => {
@@ -110,6 +110,6 @@ describe('write content cards', () => {
     expect(output()).toContain('1 + new')
     renderer.toggleToolPreviews()
     expect(output()).not.toContain('CODE_LINE_29')
-    expect(output()).toContain('ctrl+o to expand')
+    expect(output()).toContain('Show details · ctrl+o')
   })
 })

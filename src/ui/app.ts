@@ -46,7 +46,7 @@ import { TranscriptMainScreen } from './transcript-main-screen.js'
 import { WAIT_ROW_TICK_MS, WaitStatusLine, TurnStatus, type WaitRetry } from './waiting.js'
 import { holdProcessWarnings, type WarningGuard } from './warnings.js'
 import { consoleTone, holdConsoleOutput, type ConsoleGuard } from './console-guard.js'
-import { scrollToEndLabel } from './scroll-indicator.js'
+import { ScrollToLatest } from './scroll-indicator.js'
 import { PromptEditor } from './prompt-editor.js'
 import { wireImageInput } from './image-input.js'
 import type { ContextReportData } from './context-report.js'
@@ -123,21 +123,16 @@ export async function startTerminalApp(
   let reasoningEffort: string | undefined
   const terminal = new ProcessTerminal()
   const tui = config.fullscreen
-    ? new TuiAltScreen(terminal, false, undefined, {
-      mouse: true,
-      // The fullscreen viewport owns its scroll offset, so a reader who scrolled
-      // up has no way back without a target to click. pi-tui composites this on
-      // the last row of the follow-end primary scroll view only while that view
-      // is away from its end, and resumes following on a click.
-      scrollToEndIndicator: () => scrollToEndLabel(palette),
-    })
+    ? new TuiAltScreen(terminal, false, undefined, { mouse: true })
     : new TranscriptMainScreen(terminal, false)
   // Every row uses the width the terminal reports: no stored horizontal inset,
   // so transcript, status and prompt share one left edge
   // and stay aligned through a resize.
   const header = new Text('', 0, 0)
   const headerGap = new Spacer(1)
-  const composerGap = new Spacer(1)
+  const composerGap = tui instanceof TuiAltScreen
+    ? new ScrollToLatest(palette, () => tui.isFollowingOutput, () => { tui.scrollToBottom() })
+    : new Spacer(1)
   const status = new StatusBar(palette.dim(' · '))
   const footer = new StatusBar(palette.dim(' · '))
   const waitStatus = new WaitStatusLine(palette)
@@ -879,6 +874,7 @@ export async function startTerminalApp(
       running: active.agent.status === 'running',
       editorFocused: tui.getFocusedComponent() === editor,
       editorHasText: editor.getText() !== '',
+      scrolledAway: tui instanceof TuiAltScreen && !tui.isFollowingOutput && !tui.hasOverlay(),
     })
     if (shortcut !== undefined && editor.isProcessingPaste && shortcut !== 'exit' && shortcut !== 'cancel-turn') {
       editor.deferInput(() => { if (!disposed) handleGlobalInput(data) })
@@ -909,6 +905,10 @@ export async function startTerminalApp(
       if (tui.hasOverlay()) return undefined
       renderer.toggleToolPreviews()
       tui.requestRender()
+      return { consume: true }
+    }
+    if (shortcut === 'jump-to-latest') {
+      if (tui instanceof TuiAltScreen) tui.scrollToBottom()
       return { consume: true }
     }
     if (shortcut === 'clear-input') {
