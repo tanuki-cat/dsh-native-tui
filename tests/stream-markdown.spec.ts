@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { Markdown } from '@earendil-works/pi-tui'
+import { Markdown, setCapabilityOverrides } from '@earendil-works/pi-tui'
 import { createPalette, markdownTheme } from '../src/ui/theme.js'
 import { StreamMarkdown } from '../src/ui/stream-markdown.js'
 
@@ -107,11 +107,17 @@ describe('StreamMarkdown', () => {
   it('renders a document that defines link references whole', () => {
     // A reference definition resolves against the entire document: a split
     // would leave the half without the definition rendering it as literal text.
-    const body = prose.repeat(30) + '\n\nSee [the source][src] for details.\n\n'
-      + prose.repeat(20) + '\n\n[src]: https://example.com\n'
-    const painted = new StreamMarkdown(body, theme).render(40)
-    expect(painted).toEqual(new Markdown(body, 0, 0, theme).render(40))
-    expect(painted.filter(line => line.includes('\u001b]8;;'))).not.toHaveLength(0)
+    // Hyperlink output is host-dependent, so force it for this assertion.
+    setCapabilityOverrides({ hyperlinks: true })
+    try {
+      const body = prose.repeat(30) + '\n\nSee [the source][src] for details.\n\n'
+        + prose.repeat(20) + '\n\n[src]: https://example.com\n'
+      const painted = new StreamMarkdown(body, theme).render(40)
+      expect(painted).toEqual(new Markdown(body, 0, 0, theme).render(40))
+      expect(painted.filter(line => line.includes('\u001b]8;;'))).not.toHaveLength(0)
+    } finally {
+      setCapabilityOverrides({ hyperlinks: undefined })
+    }
   })
 
   it('stops splitting once a reference definition arrives', () => {
