@@ -50,7 +50,7 @@
       name: '@deepseek-ai/dsh-session-stats'
 
     - id: mcp-manager
-      name: dsh-native-tui/mcp-manager
+      name: '@deepseek-ai/dsh-mcp-manager'
       config:
         servers: {}
 

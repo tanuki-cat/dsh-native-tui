@@ -8,6 +8,7 @@ import { formatLocalTimestamp } from '../src/ui/format-time.js'
 import { settingsCommand } from '../src/ui/commands/settings.js'
 import { workspacesCommand } from '../src/ui/commands/workspace.js'
 import { scheduleCommand } from '../src/ui/commands/schedule.js'
+import { pluginsCommand } from '../src/ui/commands/plugins.js'
 
 /** One recorded notice. */
 interface Notice {
@@ -117,48 +118,54 @@ describe('command handler argument paths', () => {
   it('prints the /mcp usage for an unknown subcommand', async () => {
     const ctx = contextOf({ settings })
     await mcpCommand(ctx, 'nonsense')
-    expect(allText(ctx)).toContain('Usage: /mcp [add | list | reload [name] | remove <name>]')
+    expect(allText(ctx)).toContain('Usage: /mcp [add | list | reload [name] | probe <name> | remove <name>]')
   })
 
-  it('reloads every configured MCP server through /mcp reload', async () => {
-    const reloaded: string[] = []
+  it('restarts every configured MCP server through /mcp reload', async () => {
+    const restarted: string[] = []
     const ctx = contextOf({
       settings: {
         describe: () => [{ ns: 'mcp-manager', value: { servers: { idea: {}, demo: {} } }, schema: {}, revision: 1 }],
         update: async () => undefined,
         mutate: async () => undefined,
       },
-      mcpManagerStatus: {
-        reload: async (name: string) => { reloaded.push(name) },
-        snapshot: () => ({ idea: { status: 'connected' }, demo: { status: 'connected' } }),
+      mcpManager: {
+        list: () => [
+          { name: 'idea', configured: true, status: { state: 'connected' } },
+          { name: 'demo', configured: true, status: { state: 'connected' } },
+        ],
+        restart: async (name: string) => { restarted.push(name) },
+        probe: async () => ({ ok: true }),
       },
     })
     await mcpCommand(ctx, 'reload')
-    expect(reloaded).toEqual(['idea', 'demo'])
-    expect(allText(ctx)).toContain('MCP server idea reloaded: connected')
-    expect(allText(ctx)).toContain('MCP server demo reloaded: connected')
+    expect(restarted).toEqual(['idea', 'demo'])
+    expect(allText(ctx)).toContain('MCP server idea restarted: connected')
+    expect(allText(ctx)).toContain('MCP server demo restarted: connected')
   })
 
-  it('reloads one named MCP server and reports its failure state', async () => {
-    const reloaded: string[] = []
+  it('reports a failed restart state', async () => {
     const ctx = contextOf({
       settings: {
         describe: () => [{ ns: 'mcp-manager', value: { servers: { idea: {} } }, schema: {}, revision: 1 }],
         update: async () => undefined,
         mutate: async () => undefined,
       },
-      mcpManagerStatus: {
-        reload: async (name: string) => { reloaded.push(name) },
-        snapshot: () => ({ idea: { status: 'error', error: 'connection refused' } }),
+      mcpManager: {
+        list: () => [{ name: 'idea', configured: true, status: { state: 'failed', lastError: 'connection refused' } }],
+        restart: async () => undefined,
+        probe: async () => ({ ok: false }),
       },
     })
     await mcpCommand(ctx, 'reload idea')
-    expect(reloaded).toEqual(['idea'])
-    expect(allText(ctx)).toContain('MCP server idea reloaded: error · connection refused')
+    expect(allText(ctx)).toContain('MCP server idea restarted: failed · connection refused')
   })
 
   it('refuses to reload an unconfigured MCP server', async () => {
-    const ctx = contextOf({ settings })
+    const ctx = contextOf({
+      settings,
+      mcpManager: { list: () => [{ name: 'idea', configured: true, status: { state: 'connected' } }], restart: async () => undefined, probe: async () => ({ ok: true }) },
+    })
     await mcpCommand(ctx, 'reload ghost')
     expect(allText(ctx)).toContain('No configured MCP server "ghost".')
   })
@@ -172,13 +179,61 @@ describe('command handler argument paths', () => {
       },
     })
     await mcpCommand(ctx, 'reload idea')
-    expect(allText(ctx)).toContain('The MCP manager is unavailable')
+    expect(allText(ctx)).toContain('core MCP manager is unavailable')
   })
 
-  it('lists an empty MCP registry', async () => {
-    const ctx = contextOf({ settings })
+  it('lists an empty core MCP registry', async () => {
+    const ctx = contextOf({
+      settings,
+      mcpManager: { list: () => [], restart: async () => undefined, probe: async () => ({ ok: true }) },
+    })
     await mcpCommand(ctx, '')
     expect(allText(ctx)).toContain('No MCP servers configured. Use /mcp add.')
+  })
+
+  it('lists core-manager status and probes on request', async () => {
+    const restarted: string[] = []
+    const ctx = contextOf({
+      settings: {
+        describe: () => [{ ns: 'mcp-manager', value: { servers: { idea: { transport: 'stdio', command: 'npx', args: [] } } }, schema: {}, revision: 1 }],
+        update: async () => undefined,
+        mutate: async () => undefined,
+      },
+      mcpManager: {
+        list: () => [{ name: 'idea', configured: true, status: { state: 'connected', toolCount: 3 } }],
+        restart: async (name: string) => { restarted.push(name) },
+        probe: async () => ({ ok: true, serverInfo: { name: 'idea', version: '1' }, toolNames: ['a', 'b'], truncated: false, durationMs: 5 }),
+      },
+    })
+    await mcpCommand(ctx, 'list')
+    expect(allText(ctx)).toContain('connected · 3 tools')
+    await mcpCommand(ctx, 'probe idea')
+    expect(allText(ctx)).toContain('MCP probe idea ok')
+    await mcpCommand(ctx, 'reload idea')
+    expect(restarted).toEqual(['idea'])
+    expect(allText(ctx)).toContain('MCP server idea restarted: connected')
+  })
+
+  it('marks git-updatable bundles in the bundle list', async () => {
+    const ctx = contextOf({
+      pluginManager: {
+        listBundles: async () => [{ name: 'git-bundle', version: '1.0.0', enabled: true, installed: true, update: 'git' }],
+      },
+    })
+    await pluginsCommand(ctx, '')
+    expect(allText(ctx)).toContain('(git update)')
+  })
+
+  it('explains how to update a git bundle instead of listing registry versions', async () => {
+    const ctx = contextOf({
+      pluginManager: {
+        listBundles: async () => [{ name: 'git-bundle', version: '1.0.0', enabled: true, installed: true, update: 'git' }],
+        listVersions: async () => ({ status: 'refused', problem: 'not-updatable', reason: 'not a registry package' }),
+      },
+    })
+    await pluginsCommand(ctx, 'versions git-bundle')
+    expect(allText(ctx)).toContain('Git spec')
+    expect(allText(ctx)).toContain('/plugins update git-bundle <version> <git-spec>')
   })
 
   it('prints the /schedule add usage for a bad duration', async () => {
@@ -246,6 +301,25 @@ describe('notice timestamps', () => {
     })
     await agentsCommand(ctx)
     expect(allText(ctx)).toContain(formatLocalTimestamp(createdAt))
+  })
+
+  it('renders recursive subagent rows as a tree', async () => {
+    const ctx = contextOf({
+      subagents: {
+        listDescendants: async () => [
+          { id: 'child-1', kind: 'child', parentId: 'session-1', depth: 1, path: 'researcher', mode: 'continuable', activity: 'running', hasChildren: true },
+          { id: 'child-2', kind: 'child', parentId: 'child-1', depth: 2, name: 'reviewer', mode: 'one-shot', activity: 'inactive', hasChildren: false },
+          { id: 'child-3', kind: 'diagnostic', parentId: 'child-1', depth: 2, reason: 'corrupt' },
+        ],
+      },
+    })
+    await agentsCommand(ctx)
+    const text = allText(ctx)
+    expect(text).toContain('researcher')
+    expect(text).toContain('  reviewer')
+    expect(text).toContain('[unavailable] child-3')
+    expect(text).toContain('running')
+    expect(text).toContain('has children')
   })
 
   it('lists background jobs with the host-local dispatch time', () => {

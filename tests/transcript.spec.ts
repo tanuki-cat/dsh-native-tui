@@ -402,6 +402,60 @@ describe('reduceTranscript', () => {
     expect(output).not.toContain('await tools.read')
   })
 
+  it('keeps the host tool failure identity', () => {
+    const entries: TranscriptEntry[] = [
+      durable('tool/call', { turn: 1, step: 1, callId: 'call-1', name: 'read', arguments: '{}' }, 1),
+      durable('tool/result', {
+        turn: 1,
+        step: 1,
+        message: {
+          source: { callId: 'call-1' },
+          content: [{ type: 'text', text: 'not found' }],
+          isError: true,
+        },
+        error: { name: 'AttachmentError', code: 'ATTACHMENT_NOT_FOUND', reason: 'missing file' },
+      }, 2),
+    ]
+    const block = reduceTranscript(entries, options).find(item => item.kind === 'tool')
+    expect(block).toMatchObject({
+      kind: 'tool',
+      isError: true,
+      errorName: 'AttachmentError',
+      errorCode: 'ATTACHMENT_NOT_FOUND',
+      errorReason: 'missing file',
+    })
+    const output = renderTranscriptBlock(block!, options).render(100).join('\n')
+    expect(output).toContain('AttachmentError · ATTACHMENT_NOT_FOUND')
+    const expanded = renderTranscriptBlock(block!, { ...options, toolsExpanded: true }).render(100).join('\n')
+    expect(expanded).toContain('missing file')
+  })
+
+  it('keeps the failure identity on a PTC sub-call', () => {
+    const entries: TranscriptEntry[] = [
+      durable('tool/call', { turn: 1, step: 1, callId: 'call-outer', name: 'run_code', arguments: '{}' }, 1),
+      durable('tool/ptc-dispatch-start', {
+        subCallId: 'call-outer:ptc:1', parentCallId: 'call-outer', rootCallId: 'call-outer',
+        name: 'write', arguments: { file_path: 'a.ts' },
+      }, 2),
+      durable('tool/ptc-dispatch', {
+        subCallId: 'call-outer:ptc:1', parentCallId: 'call-outer', rootCallId: 'call-outer',
+        name: 'write', arguments: { file_path: 'a.ts' },
+        content: [{ type: 'text', text: 'failed' }],
+        isError: true,
+        error: { name: 'AttachmentError', code: 'ATTACHMENT_NOT_FOUND', reason: 'missing file' },
+      }, 3),
+    ]
+    const block = reduceTranscript(entries, options)
+      .find(item => item.kind === 'tool' && item.callId === 'call-outer:ptc:1')
+    expect(block).toMatchObject({
+      kind: 'tool',
+      isError: true,
+      errorName: 'AttachmentError',
+      errorCode: 'ATTACHMENT_NOT_FOUND',
+      errorReason: 'missing file',
+    })
+  })
+
   it('rebuilds a created file diff from the native write call arguments', () => {
     const entries: TranscriptEntry[] = [
       durable('tool/call', {
@@ -547,6 +601,43 @@ describe('reduceTranscript', () => {
     const detached = reduceTranscript([durable('user/message', checkpoint, 5)], options)
     expect(detached[0]).toMatchObject({ kind: 'context', label: 'compact-checkpoint' })
     expect(detached[0]?.kind === 'context' ? detached[0].text.length : 0).toBeLessThanOrEqual(300)
+  })
+
+  it('renders a runtime-context snapshot from its sections', () => {
+    const entries: TranscriptEntry[] = [durable('user/message', {
+      content: [{ type: 'text', text: '<system-reminder>\nintro\n\nworkspace root\n\nskills\n</system-reminder>' }],
+      source: {
+        kind: 'runtime-context',
+        form: 'snapshot',
+        sections: [
+          { name: 'workspace', text: 'root /tmp/work' },
+          { name: 'skills', text: 'dsh-doc' },
+        ],
+      },
+    }, 1)]
+    const block = reduceTranscript(entries, options).find(item => item.kind === 'context')
+    expect(block).toMatchObject({ kind: 'context', label: 'runtime-context · workspace, skills' })
+    const text = block?.kind === 'context' ? block.text : ''
+    expect(text).toContain('root /tmp/work')
+    expect(text).not.toContain('<system-reminder>')
+  })
+
+  it('marks an empty runtime-context snapshot as cleared', () => {
+    const entries: TranscriptEntry[] = [durable('user/message', {
+      content: [{ type: 'text', text: '<system-reminder>\nCurrent runtime context: none.\n</system-reminder>' }],
+      source: { kind: 'runtime-context', form: 'snapshot', sections: [] },
+    }, 1)]
+    const block = reduceTranscript(entries, options).find(item => item.kind === 'context')
+    expect(block).toMatchObject({ kind: 'context', label: 'runtime-context · cleared', text: '' })
+  })
+
+  it('uses a notice summary as the context row label', () => {
+    const entries: TranscriptEntry[] = [durable('user/message', {
+      content: [{ type: 'text', text: 'full notice text' }],
+      source: { kind: 'runtime-context', form: 'notice', summary: 'goal paused' },
+    }, 1)]
+    const block = reduceTranscript(entries, options).find(item => item.kind === 'context')
+    expect(block).toMatchObject({ kind: 'context', label: 'runtime-context · goal paused', text: '' })
   })
 
   it('renders compaction lifecycle and pruned tool output', () => {

@@ -53,6 +53,20 @@ describe('provider config helpers', () => {
     })
   })
 
+  it('accepts the Gemini native protocol', () => {
+    const provider = buildCustomProvider({
+      route: 'gemini',
+      api: 'google-generative-ai',
+      baseURL: 'https://generativelanguage.googleapis.com/v1beta',
+      apiKeyEnv: 'GEMINI_API_KEY',
+      modelId: 'gemini-2.5-pro',
+      contextWindow: 1_000_000,
+      maxTokens: 65_536,
+    })
+    expect(provider.api).toBe('google-generative-ai')
+    expect((provider.models as readonly { id?: string }[])[0]?.id).toBe('gemini-2.5-pro')
+  })
+
   it('declares text and image input explicitly', () => {
     const provider = buildCustomProvider({
       route: 'vision-gateway',

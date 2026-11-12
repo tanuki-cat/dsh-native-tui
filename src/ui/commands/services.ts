@@ -104,9 +104,28 @@ export interface SubagentRow {
   readonly label?: string
 }
 
-/** The subagent service. */
+/** One recursive descendant row from the rc.2 `listDescendants` surface. */
+export interface SubagentDescendantRow {
+  readonly id: SessionId
+  readonly kind: 'child' | 'diagnostic'
+  readonly parentId: SessionId
+  readonly depth: number
+  readonly path?: string
+  readonly mode?: string
+  readonly label?: string
+  readonly name?: string
+  readonly activity?: 'running' | 'inactive'
+  readonly hasChildren?: boolean
+  readonly reason?: 'corrupt' | 'unsupported' | 'unavailable'
+}
+
+/**
+ * The subagent service. rc.2 exposes recursive listing; profiles on an older
+ * Host still expose direct children, so both are declared optional here.
+ */
 export interface SubagentsService {
-  listChildren(parentSessionId: SessionId, signal?: AbortSignal): Promise<readonly SubagentRow[]>
+  listDescendants?(rootSessionId: SessionId, signal?: AbortSignal): Promise<readonly SubagentDescendantRow[]>
+  listChildren?(parentSessionId: SessionId, signal?: AbortSignal): Promise<readonly SubagentRow[]>
 }
 
 /** One workspace row. */
@@ -151,15 +170,42 @@ export interface WorkspaceChangesService {
   diff(sessionId: SessionId, seq: number, index: number, signal: AbortSignal): Promise<import('../../runtime/changes.js').WorkspaceDiffView | undefined>
 }
 
-/** The MCP manager's live connection snapshot. */
-export interface McpManagerStatus {
-  snapshot(): Record<string, { readonly status: 'starting' | 'connected' | 'disconnected' | 'error'; readonly error?: string }>
-  /**
-   * Rebuild one server's client row from the stored configuration. This is the
-   * manual reconnect path for a server whose automatic budget is exhausted.
-   * @param serverName - configured server to rebuild.
-   */
-  reload(serverName: string): Promise<void>
+/** Runtime state of one server under the rc.2 core MCP manager. */
+export interface McpManagedServerStatus {
+  readonly state: 'disabled' | 'connected' | 'connecting' | 'reconnecting' | 'closed' | 'waiting-credentials' | 'failed'
+  readonly reason?: string
+  readonly lastError?: string
+  readonly toolCount?: number
+  readonly attempt?: number
+  readonly maxAttempts?: number
+  /** Cleanup facts retained by the core manager for a failed removal. */
+  readonly result?: { readonly cleanupError?: string }
+}
+
+/** One server as the core manager lists it. */
+export interface McpManagedServerView {
+  readonly name: string
+  readonly configured: boolean
+  readonly status: McpManagedServerStatus
+}
+
+/** Stage-classified one-shot probe outcome. */
+export interface McpProbeResultLike {
+  readonly ok: boolean
+  readonly stage?: string
+  readonly message?: string
+  readonly serverInfo?: { readonly name?: string; readonly version?: string }
+  readonly toolNames?: readonly string[]
+  readonly truncated?: boolean
+  readonly durationMs?: number
+  readonly cleanupError?: string
+}
+
+/** The rc.2 core MCP manager surface the TUI calls. */
+export interface McpManagerService {
+  list(): readonly McpManagedServerView[]
+  restart(name: string): Promise<void>
+  probe(name: string, options?: { readonly signal?: AbortSignal }): Promise<McpProbeResultLike>
 }
 
 /** Per-session projection reads. */
@@ -177,6 +223,8 @@ export interface AgentDefaultModelService {
 export interface CredentialsService {
   set(ref: string, value: string): Promise<void>
   resolve(ref: string): Promise<{ readonly value?: string } | undefined>
+  /** Configuration facts only; rc.2 adds a provider-masked preview. */
+  describe?(ref: string): Promise<{ readonly configured?: boolean; readonly masked?: string } | undefined>
 }
 
 /** The agent-preset registry. */
