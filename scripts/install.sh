@@ -8,6 +8,7 @@ mode='link'
 build=1
 command_name=''
 install_command=1
+artifact_dir=''
 
 usage() {
   cat <<'EOF'
@@ -17,9 +18,14 @@ Install dsh-native-tui into a DSH profile.
 
 Options:
   -p, --profile <name>  DSH profile to install into (default: tui)
-      --pack            install a packed tarball from .tmp instead of linking
-                        this checkout; a previous installation is removed first
-                        so an unchanged version still picks up the rebuilt tgz
+      --pack            install a packed tarball from a stable artifact
+                        directory instead of linking this checkout; a previous
+                        installation is removed first so an unchanged version
+                        still picks up the rebuilt tgz
+      --artifact-dir <dir>
+                        directory for packed tarballs
+                        (default: $XDG_DATA_HOME/dsh-native-tui or
+                        ~/.local/share/dsh-native-tui)
       --no-build        skip pnpm install/build (requires an existing dist/)
       --command <name>  launcher command name (default: dnt for tui, dnt-<profile> otherwise)
   -h, --help            show this help
@@ -32,6 +38,8 @@ Environment:
                         let pnpm provision the package.json-pinned version
                         instead of using the installed one; needed only when
                         the pinned version must be exact
+  DSH_NATIVE_TUI_ARTIFACT_DIR
+                        override --artifact-dir
 
 Examples:
   scripts/install.sh
@@ -66,6 +74,11 @@ while (($# > 0)); do
       install_command=1
       shift 2
       ;;
+    --artifact-dir)
+      (($# >= 2)) || die "missing value for $1"
+      artifact_dir="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -78,6 +91,10 @@ while (($# > 0)); do
 done
 
 [[ -n "$profile" ]] || die "profile must not be empty"
+if [[ -z "$artifact_dir" ]]; then
+  artifact_dir="${DSH_NATIVE_TUI_ARTIFACT_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/dsh-native-tui}"
+fi
+[[ "$artifact_dir" == /* ]] || die "artifact directory must be an absolute path: $artifact_dir"
 command -v pnpm >/dev/null 2>&1 || die "pnpm is required (https://pnpm.io)"
 command -v dsh >/dev/null 2>&1 || die "dsh is required but was not found on PATH"
 
@@ -152,26 +169,17 @@ else
 fi
 
 if [[ "$mode" == 'pack' ]]; then
-  mkdir -p .tmp
-  # A tarball left by an earlier run would otherwise be picked up by a
-  # "which one did I just build" check, and installing a stale build is hard
-  # to notice. nullglob keeps the glob from expanding to a literal name when
-  # .tmp holds no tarball yet.
-  shopt -s nullglob
-  stale=(.tmp/*.tgz)
-  shopt -u nullglob
-  ((${#stale[@]} == 0)) || rm -f "${stale[@]}"
-  echo "==> pnpm pack"
-  pack_json="$(pnpm pack --pack-destination .tmp --json)"
+  mkdir -p "$artifact_dir"
+  # Pack into a persistent per-user directory. A .tmp path cannot survive a
+  # cleanup and would leave the profile dependency pointing at a missing file.
+  echo "==> pnpm pack (artifact directory: $artifact_dir)"
+  pack_json="$(pnpm pack --pack-destination "$artifact_dir" --json)"
   target="$(printf '%s' "$pack_json" | node -e 'let s = ""; process.stdin.on("data", d => { s += d }); process.stdin.on("end", () => { try { process.stdout.write(JSON.parse(s).filename ?? "") } catch {} })')"
   [[ -n "$target" ]] || die "could not read the packed tarball path from pnpm pack"
   [[ -f "$target" ]] || die "pnpm pack reported $target but no such file exists"
-  # pnpm returns an absolute path for --pack-destination; a build that ends up
-  # next to the checkout instead would make "which tarball is installed"
-  # ambiguous, so keep the install pinned to the .tmp copy.
   case "$target" in
-    "$repo_root"/.tmp/*) ;;
-    *) die "pnpm packed outside .tmp ($target); remove stale tarballs and retry" ;;
+    "$artifact_dir"/*) ;;
+    *) die "pnpm packed outside the artifact directory ($target); remove stale tarballs and retry" ;;
   esac
   # pnpm skips resolution when the profile lockfile already pins the same
   # tarball path and version, so a rebuilt tarball would otherwise stay stale.

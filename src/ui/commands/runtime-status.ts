@@ -123,6 +123,27 @@ export async function agentsCommand(ctx: CommandContext): Promise<void> {
     return
   }
   try {
+    if (typeof subagents.listDescendants === 'function') {
+      const rows = await subagents.listDescendants(ctx.active.id)
+      if (rows.length === 0) {
+        ctx.notice('info', 'No subagents for this session.')
+        return
+      }
+      ctx.notice('info', 'Subagents:' + NL + rows.map(row => {
+        const indent = '  '.repeat(Math.max(0, row.depth - 1))
+        if (row.kind === 'diagnostic') return indent + '[unavailable] ' + row.id + '  (' + (row.reason ?? 'unknown') + ')'
+        const name = row.path ?? row.name ?? row.id
+        return indent + name + '  ' + (row.mode ?? 'unknown')
+          + (row.label === undefined ? '' : '  ' + row.label)
+          + '  ' + (row.activity === 'running' ? 'running' : 'inactive')
+          + (row.hasChildren === true ? '  (has children)' : '')
+      }).join(NL))
+      return
+    }
+    if (typeof subagents.listChildren !== 'function') {
+      ctx.notice('warning', 'This Host exposes no subagent listing.')
+      return
+    }
     const rows = await subagents.listChildren(ctx.active.id)
     if (rows.length === 0) {
       ctx.notice('info', 'No subagents for this session.')

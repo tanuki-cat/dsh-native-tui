@@ -7,6 +7,7 @@ Session、模型、工具、审批、压缩、MCP、插件都由 Host 提供，�
 > 设计方案与差距清单：[Host-native 方案](docs/design-task-feature-dsh-native-tui-host-native.md)
 > 实施进度、验证证据与未验收项：[实施进度](docs/progress-dsh-native-tui.md)
 > rc.1 适配范围与验收：[版本评估和实施记录](docs/design-task-upgrade-dsh-0-2-2-rc-1.md)
+> rc.2 适配与能力同步：[升级方案](docs/design-task-upgrade-dsh-0-2-2-rc-2.md)
 
 ## 快速开始
 
@@ -14,7 +15,7 @@ Session、模型、工具、审批、压缩、MCP、插件都由 Host 提供，�
 
 - Node `>=24.9.0`
 - pnpm（仓库使用 `pnpm-lock.yaml`，不要用 npm / yarn）
-- 全局安装的 `dsh` 0.2.2-rc.1
+- 全局安装的 `dsh` 0.2.2-rc.2
 
 ### 安装
 
@@ -37,14 +38,15 @@ dsh plugin --profile tui add /absolute/path/to/dsh-native-tui
 |---|---|
 | `-p, --profile <name>` | 安装到指定 profile，默认 `tui` |
 | `--no-build` | 跳过 install 与 build 前置步骤 |
-| `--pack` | 先打包，再移除旧安装并安装独立副本（版本号未变也会装新内容） |
+| `--pack` | 先打包到稳定 artifact 目录，再移除旧安装并安装独立副本（版本号未变也会装新内容） |
+| `--artifact-dir <dir>` | 指定 `--pack` 的产物目录；默认 `$XDG_DATA_HOME/dsh-native-tui` 或 `~/.local/share/dsh-native-tui` |
 | `--command <name>` | 自定义生成的启动命令名 |
 
 `pnpm` 版本：脚本默认让 pnpm 使用**已安装的版本**，跳过 `package.json` 中 `packageManager: pnpm@12.14.0` 的自动下载。原因见下节。需要严格使用锁定版本时，设 `DSH_NATIVE_TUI_STRICT_PNPM_VERSION=1`。
 
 > 为什么跳过版本自举：pnpm 12 会先把锁定版本下载到 `~/Library/pnpm/package-manager-store` 再执行。该下载在只读 home、沙箱或 store 中只存有旧版原生二进制时会失败，报 `no @pnpm/exe.darwin-arm64 native binary was found for this host`，看起来像 lockfile 损坏，实际是 CLI 自身无法就位。依赖图来自 `pnpm-lock.yaml`，`packageManager` 只决定 CLI 版本，因此用已安装的 pnpm 是安全的。脚本执行前还会探测一次 `pnpm --version`，失败时给出明确修复提示而不是把 pnpm 的原始报错直接抛给用户。
 
-`--pack` 会在打包前清空 `.tmp/*.tgz`，并校验 `pnpm pack` 的产物确实落在 `.tmp` 内，避免装到旧包或检出的根目录遗留 tgz。
+`--pack` 将 tarball 写入稳定的 per-user 目录（默认 `$XDG_DATA_HOME/dsh-native-tui`，未设置时为 `~/.local/share/dsh-native-tui`；可用 `--artifact-dir` 或 `DSH_NATIVE_TUI_ARTIFACT_DIR` 覆盖），并校验 `pnpm pack` 的产物确实落在该目录内。profile 的依赖因此不会再指向仓库 `.tmp`；从旧版 `.tmp` 安装升级时，重新执行 `--pack` 会把依赖迁移到稳定路径。旧版本 tarball 会保留，避免正在使用它的其他 profile 失效。
 
 安装成功后脚本在 `$XDG_BIN_HOME`（未设置时为 `~/.local/bin`）写入启动命令：`tui` profile 为 `dnt`，其他 profile 为 `dnt-<profile>`，等价于 `dsh --profile <profile>` 且原样透传参数。
 
@@ -232,12 +234,12 @@ Plan 保留工具目录，用策略和最终 guard 限制受控调用；`exit_pl
 
 | 命令 | 作用 |
 |---|---|
-| `/mcp [add\|list\|remove <name>]` | 配置、查看或删除 MCP 服务 |
-| `/plugins [list\|market [query]\|inspect <spec>\|install <spec>\|remove <bundle>\|versions <bundle>\|update <bundle> [version]\|enable <entryId>\|disable <entryId>]` | 管理 bundle 与插件项；registry 第三方 bundle 可查询并确认更新，link/tgz 安装不支持此更新入口 |
+| `/mcp [add\|list\|reload [name]\|probe <name>\|remove <name>]` | 配置、查看、重启、探测或删除 MCP 服务 |
+| `/plugins [list\|market [query]\|inspect <spec>\|install <spec>\|remove <bundle>\|versions <bundle>\|update <bundle> [version] [git-spec]\|enable <entryId>\|disable <entryId>]` | 管理 bundle 与插件项；registry 与 Git 安装的第三方 bundle 可确认更新（Git 需目标版本与 full-commit spec），link/tgz 不支持此更新入口 |
 | `/workspaces [new <path>\|use <id\|path>\|pin\|unpin\|archive\|unarchive]` | 列出/创建/切换/固定/归档 workspace 会话 |
 | `/schedule [list [offset] [all\|active\|inactive]\|add <seconds> <title>\|create [JSON]\|view\|edit\|pause\|resume\|run\|delete\|history <id>]` | 宿主全部任务的分页、创建、编辑、暂停/恢复、立即投递、删除和历史；新任务默认投递到当前 Session |
 | `/jobs [kill <id>]` | 列出或终止后台任务 |
-| `/agents` | 列出直接子代理 |
+| `/agents` | 列出子代理树，含层级、名称、活动状态与无法读取的子树 |
 | `/settings [tui\|host\|edit [ns]\|items <ns> <field>\|set <ns> <json>]` | 引导式 TUI 配置页、Host 命名空间编辑器，或脚本化写入 |
 
 ### 文件与导出
@@ -517,12 +519,13 @@ Schedule 新存储格式不支持旧程序直接打开。正式升级前备份 D
 
 ## MCP 服务
 
-默认 bundle 集成官方 `mcp-client` 与 `mcp-resources`。TUI 通过 `mcp-manager` 管理服务配置：
+默认 bundle 集成官方 `@deepseek-ai/dsh-mcp-manager`、`mcp-client` 与 `mcp-resources`。TUI 通过核心 manager 管理服务配置：
 
 ~~~text
 /mcp list
 /mcp add
 /mcp reload [name]
+/mcp probe <name>
 /mcp remove <name>
 ~~~
 
@@ -531,20 +534,21 @@ Schedule 新存储格式不支持旧程序直接打开。正式升级前备份 D
 - `stdio`：command、args（空格分隔或 JSON 数组）、env JSON；args/env 留空表示无参数、无额外环境变量。
 - `streamable-http`：URL、headers JSON。
 
-配置写入 profile 的 `mcp-manager.servers`。mcp-manager 把每个条目映射为官方 `mcp-client` Loader row，并在 Loader fiber 激活后记录状态；settings 变更会实时 reconcile 这组 row，因此新增、修改、删除服务都无需重启 TUI。
+配置写入 profile 的 `mcp-manager.servers`。核心 manager 直接创建和回收 `mcp-client` 实例，settings 变更会实时 reconcile，因此新增、修改、删除服务都无需重启 TUI。
 
-`/mcp list` 每行显示 `connected` / `starting` / `error: ...` / `disconnected: ...` / `not loaded`。mcp-manager 使用 `failOnStartupError` 并 await fiber，初始连接失败会显示错误而不是静默成功。
+`/mcp list` 显示核心状态：`connected · N tools`、`connecting`、`reconnecting`、`waiting for credentials`、`disabled`、`closed`、`failed: ...`。核心 manager 使用非严格启动，初始连接失败只进入状态，不会静默成功。
 
-mcp-manager 自己拥有断线判定与重建，因为 mcp-client 只通过传输 close 信号发现断线，而 Streamable HTTP 传输在服务端重启后不会发出该信号——工具一直保持注册，每次调用都以连接错误失败。因此：
+断线自愈：核心 `mcp-client` 只通过传输 close 信号发现断线，而 Streamable HTTP 服务端重启不会发出该信号——工具一直保持注册，每次调用都以连接错误失败。TUI 因此保留 `tools/result` 观察器：
 
-- **工具调用是健康信号**：某次调用以连接类错误失败即标记 `disconnected` 并自动重建该服务的 row；调用成功则清除退避预算。判定以 SDK 的 `ConnectionClosed` 错误码为准，其次才匹配 `Connection closed`、`server is disconnected`、`fetch failed`、`socket hang up`、`ECONNRESET` 等传输层固定文案；工具自身输出里出现 `terminated`、`not connected` 之类的业务措辞不会被当成断线。
-- **工具注销仍会被识别**：mcp-client 放弃重连后注销工具，manager 通过 `tools/change` 观测到并同样进入重建。
-- **已判定故障的服务不会被 `tools/change` 翻回 `connected`**：故障 row 在重建前一直保留旧的工具注册，只有调用成功或重建成功才清除故障标记。这条保证任何一次不相关的工具注册变化都不会把断开的服务显示成已连接。
-- **重建使用 500 ms 起、上限 30 s、最多 5 次的指数退避**；用尽后状态停在 `disconnected` 并提示 `/mcp reload <name>`。正常重启场景下首次重试即恢复（约 500 ms）。
+- 某次 MCP 工具调用以连接类错误失败时，按核心状态决定：`connected`（活连接已失效）、`failed` 或状态未知时节流 `restart`；`connecting`/`reconnecting`/`disabled`/`waiting-credentials` 交给核心处理。
+- 不做前置 `probe`：probe 会另开连接，成功不能证明活实例可用；`/mcp probe` 只用于手动连通性测试。
+- 同一服务 30 秒内最多触发一次，避免每次调用都重建。
+- 判定以 SDK 的 `ConnectionClosed` 错误码为准，其次匹配 `Connection closed`、`server is disconnected`、`fetch failed`、`socket hang up`、`ECONNRESET` 等传输层固定文案；工具自身输出里的业务措辞不会被当成断线。
+- 正常调用成功不改变节流窗口；核心 `mcp-client` 自己的重连策略仍然生效。
 
-`/mcp reload [name]` 是手动重建入口：不带参数重建全部服务，带参数只重建一个，并立即显示重建后的状态。它和自动重建走同一条 Loader 路径，但**总是把退避预算重置为 0**，因此是退避耗尽后唯一的恢复方式。重建以当前 settings 快照为准且只读，不会改写 `mcp-manager.servers`；对未配置的服务名会直接报错而不是静默忽略。
+`/mcp reload [name]` 调用核心 `restart`：不带参数重启全部已配置服务，带参数只重启一个，并显示重启后的状态。`/mcp probe <name>` 做一次性连接与工具列表测试，不改动活实例；失败会给出 connect/list 阶段。
 
-新增或修改配置后 mcp-manager 立即装载（`/mcp list` 会短暂显示 `not loaded` / `starting`），无需重启。MCP tools 以 `mcp__<serverName>__<toolName>` 暴露。
+MCP tools 以 `mcp__<serverName>__<toolName>` 暴露。
 
 ## 开发与验证
 
@@ -568,7 +572,7 @@ pnpm build      # tsc -p tsconfig.build.json → dist/（gitignored）
 ~~~sh
 pnpm build
 pnpm pack --pack-destination .tmp
-DSH_HOME=/tmp/dsh-native-tui-approval-home dsh plugin --profile tui add .tmp/dsh-native-tui-0.2.2-rc.1.tgz
+DSH_HOME=/tmp/dsh-native-tui-approval-home dsh plugin --profile tui add .tmp/dsh-native-tui-0.2.2-rc.2.tgz
 DSH_HOME=/tmp/dsh-native-tui-approval-home node scripts/fake-tty-approval.mjs
 ~~~
 
@@ -594,7 +598,7 @@ node scripts/fake-tty-slash-autocomplete.mjs       # 普通/全屏 × 100/50 列
 node scripts/fake-tty-permission-restart.mjs       # minimal 同会话 Agent 重建、取消及权限恢复；使用终端 fence fixture，不依赖物理 PTY
 ~~~
 
-升级核心时，`scripts/upgrade-core-e2e.mjs` 要求 `DSH_CLI_ENTRY` 指向已安装的 `0.2.2-rc.1` CLI 的 `lib/bin.js`；探针使用独立的 `.tmp/upgrade-core-*` profile 和本地 mock provider，保留输出证据。通用 fake-TTY 入口同样支持该变量，不设置时仍使用既有全局安装路径。`scripts/rc1-capabilities-e2e.mjs` 使用同一变量，验证 Schedule 宿主级管理、补丁默认关闭、原生/PTC 显式启用、未读编辑拒绝，以及多文件增删移动的真实磁盘效果。
+升级核心时，`scripts/upgrade-core-e2e.mjs` 要求 `DSH_CLI_ENTRY` 指向已安装的 `0.2.2-rc.2` CLI 的 `lib/bin.js`；探针使用独立的 `.tmp/upgrade-core-*` profile 和本地 mock provider，保留输出证据。通用 fake-TTY 入口同样支持该变量，不设置时仍使用既有全局安装路径。`scripts/rc1-capabilities-e2e.mjs` 使用同一变量，验证 Schedule 宿主级管理、补丁默认关闭、原生/PTC 显式启用、未读编辑拒绝，以及多文件增删移动的真实磁盘效果。
 
 普通终端环境可运行真实 PTY 冒烟：
 
@@ -607,8 +611,8 @@ python3 scripts/pty-smoke.py
 推送 `v<version>` tag 触发 `release.yml`：校验 tag 与 `package.json` 的 `version` 一致，重跑 `pnpm check`，打出 `.tgz`，按 Conventional Commits 自动汇总变更并创建 GitHub Release；带 `-rc` / `-alpha` 的 tag 自动标记为 Pre-release。
 
 ~~~sh
-git tag -a v0.2.2-rc.1 -m "v0.2.2-rc.1"
-git push origin v0.2.2-rc.1
+git tag -a v0.2.2-rc.2 -m "v0.2.2-rc.2"
+git push origin v0.2.2-rc.2
 ~~~
 
 npm 路径预留在 `publish-npm` job，默认跳过：需要仓库变量 `NPM_PUBLISH=true`、移除 `package.json` 的 `private`、补公开包名与 `publishConfig`、配置 `NPM_TOKEN`；预发布版本还要指定 dist-tag。
@@ -646,7 +650,9 @@ npm 路径预留在 `publish-npm` job，默认跳过：需要仓库变量 `NPM_P
 
 ## 兼容性
 
-- DSH 依赖统一为 `0.2.2-rc.1`，Cordis 为 `4.1.0`；使用隔离安装的目标 CLI 通过四套预设的新建、恢复、模型路由及 reload 探针，不依赖全局 CLI 版本。旧核心不在本版本支持范围。
+- DSH 依赖统一为 `0.2.2-rc.2`，Cordis 为 `4.1.0`；使用隔离安装的目标 CLI 通过四套预设的新建、恢复、模型路由及 reload 探针，不依赖全局 CLI 版本。旧核心不在本版本支持范围，peer 范围从 rc.2 起。
+- 三套 preset 显式设置 `tool-subagent-control.interrupt: false`，模型不再获得 `interrupt_agent`；需要在 profile patch 中覆盖该行以恢复。
+- 从 rc.1 升级时，若 profile 的 `cordis.patch.yml` 含 `- id: mcp-manager` / `name: dsh-native-tui/mcp-manager` 覆盖，需改为 `name: '@deepseek-ai/dsh-mcp-manager'` 并保留原 `servers` 配置；否则 rc.2 会跳过该行（`name mismatch`），其中的 MCP 服务不会加载。`serverName` 是多余字段，可以保留。
 - Preset patch 从 `@deepseek-ai/dsh-web-app` 的 standard/ptc/minimal/cordis 复制而来：standard/ptc/minimal 需要 `subagent-model-selection-settings` Host 行，cordis 需要 cordis host-runner 与 `tool-cordis/host`。
 - `@file` 补全依赖 `@deepseek-ai/dsh-file-reference-local`。
 - pi-tui 1.4.0；Node `>=24.9.0`。

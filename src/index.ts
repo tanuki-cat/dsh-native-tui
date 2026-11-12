@@ -4,6 +4,7 @@ import { startTerminalApp, type TerminalApp } from './ui/app.js'
 import { RESUME_ENV, resumeIdFromEnv } from './runtime/reload.js'
 import { ensureLauncher, parseProfileArg } from './runtime/launcher.js'
 import { debug } from './debug.js'
+import { installMcpRecovery } from './runtime/mcp-recovery.js'
 
 /** Cordis plugin name. */
 export const name = 'native-tui'
@@ -79,6 +80,8 @@ export async function apply(ctx: Context, config: TuiConfig): Promise<void> {
   const offSettings = (ctx as unknown as { on(event: string, callback: (ns: string) => void): () => void })
     .on('settings/document-updated', (ns) => { if (ns === 'native-tui') syncLiveSettings() })
   ctx.effect(() => offSettings)
+  const offMcpRecovery = installMcpRecovery(ctx)
+  ctx.effect(() => offMcpRecovery)
 
   const exit = (code: number): void => {
     if (exiting) return

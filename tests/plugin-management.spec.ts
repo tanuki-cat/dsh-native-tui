@@ -88,3 +88,30 @@ describe('explicit registry bundle updates', () => {
     expect(f.notices.filter(row => row.tone === 'error')).toHaveLength(2)
   })
 })
+describe('explicit git bundle updates', () => {
+  it('passes the target version and full-commit spec after confirmation', async () => {
+    vi.mocked(showChoice).mockResolvedValue('yes')
+    const manager = {
+      listBundles: vi.fn(async () => [{ name: 'example', version: '1.0.0', update: 'git', source: 'git+ssh://example/repo#old' }]),
+      updateBundle: vi.fn(async () => ({ from: '1.0.0', to: '2.0.0', step: 'install', result: applied })),
+      cancelInstall: vi.fn(async () => ({ status: 'not-running' })),
+    }
+    const spec = 'git+ssh://example/repo#0123456789abcdef0123456789abcdef01234567'
+    const f = commandFixture({ pluginManager: manager })
+    await pluginsCommand(f.ctx, 'update example 2.0.0 ' + spec)
+    expect(manager.updateBundle).toHaveBeenCalledWith('example', '2.0.0', { spec, requestId: expect.any(String) })
+    expect(f.text()).toContain('1.0.0')
+  })
+  it('explains the git update shape instead of listing registry versions', async () => {
+    const manager = {
+      listBundles: vi.fn(async () => [{ name: 'example', version: '1.0.0', update: 'git', source: 'git+ssh://example/repo#old' }]),
+      listVersions: vi.fn(),
+      updateBundle: vi.fn(),
+      cancelInstall: vi.fn(),
+    }
+    const f = commandFixture({ pluginManager: manager })
+    await pluginsCommand(f.ctx, 'versions example')
+    expect(manager.listVersions).not.toHaveBeenCalled()
+    expect(f.text()).toContain('/plugins update example <version> <git-spec>')
+  })
+})
