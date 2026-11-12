@@ -12,6 +12,7 @@
 - `AssistantStream` 按 provider index 累积 text/reasoning；每次投影使用已收到的完整内容。只有 block-start 且尚无内容时展示 thinking 占位。
 - `block-end` 和 durable settlement 直接采用完整内容；正文、工具和下一步不等待人为播放或 grace，可在同一帧按事件顺序展示。
 - `TranscriptRenderer` 只在事件或显示选项变化时更新内容，不保留 reveal progress，也不自行续订动画帧。`grapheme-preview.ts` 仅负责 compact 预览裁剪。
+- transcript 外层仅保留上下留白，`MessageBody` 复用已完成显示行；自适应分帧按实际完整 paint 计时。完整绘制路径的性能回归与边界见[长会话流式渲染修复](design-task-fix-stream-rendering-performance.md)。
 - 固定 chrome 行从 turn/start 开始显示 working，贯穿正文和工具执行；turn/end 和会话切换清除。新 attempt 或恢复收到 chunk 时清除 retry 标签，但不结束 working，计时保持本轮起点。
 - `llm/retry` 立即替换为 Host 给定的次数和原因。失败、取消和中断 notice 直接展示，不受正文进度影响。网络卡住时 working 仍存在，但不代表网络健康；是否超时、是否重试由 Host/provider 决定。
 

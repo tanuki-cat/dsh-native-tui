@@ -559,6 +559,16 @@ pnpm build      # tsc -p tsconfig.build.json → dist/（gitignored）
 
 测试文件与用例数量以 `pnpm test` 当次输出为准。代码风格见仓库根目录 `AGENTS.md`：TypeScript ESM（NodeNext），两空格缩进、单引号、无分号，单个源文件不超过 1000 行。
 
+### 流式绘制性能
+
+~~~sh
+pnpm build
+node scripts/bench-stream-paint.mjs
+node scripts/bench-stream-paint.mjs --legacy-box
+~~~
+
+基准使用固定合成数据，覆盖约 8,400 行历史、500 行活动 thinking 及后续正文，分别报告 rebuild 和完整 pi-tui paint 的全部样本与中位数。`--legacy-box` 恢复外层全量行测量作为负对照；两种模式使用相同输入和可见输出。基准不读取个人会话，不包含模型、网络、真实 stdout 或终端模拟器开销，也不设置机器耗时 CI 阈值。修复设计与验证见[长会话流式渲染](docs/design-task-fix-stream-rendering-performance.md)。
+
 ### 真实 Host 探针
 
 开发环境无法创建 PTY，因此用 fake TTY 包装器跑真实 Host。`scripts/` 下约有 100 个 `fake-tty-*.mjs` 探针，每个验证一类用户可见行为；它们都会打印 `EXIT ... pass true/false` 与抓取到的终端输出。

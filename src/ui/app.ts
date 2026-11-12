@@ -1,6 +1,5 @@
 import { spawn } from 'node:child_process'
 import {
-  Box,
   ProcessTerminal,
   ScrollView,
   Spacer,
@@ -40,9 +39,10 @@ import { openTuiSettings, showHostSettings } from './commands/settings.js'
 import { errorMessage } from './commands/shared.js'
 import { subscribeSessionEvents } from './session-events.js'
 import { streamingRowKey, type TranscriptBlock, type TranscriptEntry } from './transcript.js'
-import { frameCostMs, frameOverrunMs, nextFrameDelay, nextStreamInterval, STREAM_MIN_INTERVAL_MS, transcriptFrameChanged } from './stream-pacing.js'
+import { nextFrameDelay, StreamPacer, transcriptFrameChanged } from './stream-pacing.js'
 import { TranscriptRenderer } from './transcript-renderer.js'
-import { TranscriptMainScreen } from './transcript-main-screen.js'
+import { TranscriptBody } from './transcript-body.js'
+import { TimedAltScreen, TimedMainScreen } from './paint-timing.js'
 import { WAIT_ROW_TICK_MS, WaitStatusLine, TurnStatus, type WaitRetry } from './waiting.js'
 import { holdProcessWarnings, type WarningGuard } from './warnings.js'
 import { consoleTone, holdConsoleOutput, type ConsoleGuard } from './console-guard.js'
@@ -123,8 +123,8 @@ export async function startTerminalApp(
   let reasoningEffort: string | undefined
   const terminal = new ProcessTerminal()
   const tui = config.fullscreen
-    ? new TuiAltScreen(terminal, false, undefined, { mouse: true })
-    : new TranscriptMainScreen(terminal, false)
+    ? new TimedAltScreen(terminal, false, undefined, { mouse: true })
+    : new TimedMainScreen(terminal, false)
   // Every row uses the width the terminal reports: no stored horizontal inset,
   // so transcript, status and prompt share one left edge
   // and stay aligned through a resize.
@@ -151,8 +151,7 @@ export async function startTerminalApp(
 
   // Vertical breathing room only: the transcript shares the full-width column
   // with the header, status and prompt.
-  const transcript = new Box(0, 1)
-  transcript.addChild(renderer.container)
+  const transcript = new TranscriptBody(renderer.container)
 
   if (tui instanceof TuiAltScreen) {
     tui.setLayoutRoot(new VStack([
@@ -250,11 +249,7 @@ export async function startTerminalApp(
   let pendingAttachments: PendingAttachment[] = []
   const drafts = new SessionDrafts()
   let transcriptTimer: ReturnType<typeof setTimeout> | undefined
-  /** When the pending frame is due, so a late one can measure what held the loop. */
-  let frameDueAt: number | undefined
-  let transcriptInterval = STREAM_MIN_INTERVAL_MS
-  /** The previous frame was a cold rebuild, so its paint cost is not steady cost. */
-  let coldPaintPending = false
+  const streamPacer = new StreamPacer()
   /** Bumped whenever a rebuild changes the rows the transcript paints. */
   let transcriptRevision = 0
   /** What the last painted frame showed, so an identical one can be skipped. */
@@ -272,6 +267,16 @@ export async function startTerminalApp(
   let contextReserved: number | undefined
   let modelSelection = bindModelSelection(active.agent)
   reasoningEffort = modelSelection.current?.reasoningEffort
+
+  tui.onPaint = paintMs => {
+    const cost = streamPacer.paint(paintMs)
+    if (cost !== undefined) debug(`stream paint: paint=${paintMs.toFixed(1)}ms cost=${cost.toFixed(1)}ms interval=${String(streamPacer.interval)}ms live=${String(renderer.liveContentLength)}`)
+    if (cost !== undefined && transcriptTimer !== undefined) {
+      clearTimeout(transcriptTimer)
+      transcriptTimer = undefined
+      scheduleTranscript()
+    }
+  }
 
   const summaryCwd = (): string | undefined => active.agent.session.header.cwd ?? config.cwd
 
@@ -308,6 +313,7 @@ export async function startTerminalApp(
     if (entries.length === 0) return
     renderer.set(entries, localNotices, summaryCwd())
     renderer.container.render(Math.max(1, terminal.columns))
+    streamPacer.prepare(0, true)
   }
 
   /**
@@ -320,12 +326,6 @@ export async function startTerminalApp(
    */
   const renderTranscript = (): void => {
     if (disposed) return
-    // Measured before anything runs, so it covers only time the loop spent on
-    // work other than this frame: delivery of other events, timers, and above
-    // all the previous paint. Taking it after the rebuild would charge that
-    // work twice.
-    const slippedMs = frameOverrunMs(frameDueAt, performance.now())
-    frameDueAt = undefined
     const started = performance.now()
     renderer.set(entries, localNotices, summaryCwd())
     const pendingText = turnStatus.text()
@@ -336,31 +336,11 @@ export async function startTerminalApp(
     if (renderer.retainedFrom > 0) entries = entries.slice(renderer.retainedFrom)
     const rebuildMs = performance.now() - started
     const sincePaint = performance.now() - lastPaintAt
-    // The previous frame's whole cost is the slip plus this rebuild: pi-tui's
-    // cursor resolution, line resets and differential write all happen after
-    // this function returns, so the only way to see them is the next frame's
-    // lateness. That lateness also contains unrelated loop work, so the pacer
-    // caps it at the interval the frame ran on; one stall doubles the interval
-    // once instead of commanding an arbitrary backoff, while a paint that keeps
-    // overrunning still doubles it every frame until twice its cost fits.
-    // Pacing on the rebuild alone let a 2000-row window paint every 33 ms at
-    // ~90 ms a paint, which starved the loop that reads the model stream and
-    // stretched the timings the decode rate is measured from — the fall a long
-    // session showed in tok/s.
-    // A cold rebuild re-creates every row (session open, resume, density
-    // change). Letting that one-off cost steer the pacer would hold streaming at
-    // twice its duration for seconds, which reads as stutter; resume from the
-    // floor instead and let the next frames measure the steady cost.
-    const cold = renderer.coldRebuild
-    const frameMs = frameCostMs(rebuildMs, coldPaintPending ? 0 : slippedMs, transcriptInterval)
-    transcriptInterval = cold || coldPaintPending
-      ? STREAM_MIN_INTERVAL_MS
-      : nextStreamInterval(transcriptInterval, frameMs)
-    coldPaintPending = cold
-    debug(`stream frame: rebuild=${rebuildMs.toFixed(1)}ms slipped=${slippedMs.toFixed(1)}ms cost=${frameMs.toFixed(1)}ms sincePaint=${sincePaint.toFixed(1)}ms interval=${String(transcriptInterval)}ms live=${String(renderer.liveContentLength)}`)
+    debug(`stream frame: rebuild=${rebuildMs.toFixed(1)}ms sincePaint=${sincePaint.toFixed(1)}ms interval=${String(streamPacer.interval)}ms live=${String(renderer.liveContentLength)}`)
     const mark = { revision, wait: pendingText }
     if (transcriptFrameChanged(painted, mark)) {
       painted = mark
+      streamPacer.prepare(rebuildMs, renderer.coldRebuild)
       lastPaintAt = performance.now()
       tui.requestRender()
     }
@@ -374,21 +354,16 @@ export async function startTerminalApp(
   const scheduleTranscript = (immediate = false): void => {
     if (disposed) return
     const elapsed = performance.now() - lastPaintAt
-    if (immediate && elapsed >= transcriptInterval) {
+    if (immediate && elapsed >= streamPacer.interval) {
       if (transcriptTimer !== undefined) {
         clearTimeout(transcriptTimer)
         transcriptTimer = undefined
       }
-      // An inline frame has no scheduled due time and charges no timer slip.
-      frameDueAt = undefined
       renderTranscript()
       return
     }
     if (transcriptTimer !== undefined) return
-    const delay = nextFrameDelay(transcriptInterval, elapsed)
-    // Due time, so the frame can tell scheduling from blocking: anything past
-    // it is work that held the loop between two frames.
-    frameDueAt = performance.now() + delay
+    const delay = nextFrameDelay(streamPacer.interval, elapsed)
     transcriptTimer = setTimeout(() => {
       transcriptTimer = undefined
       renderTranscript()
@@ -640,6 +615,7 @@ export async function startTerminalApp(
       liveSeq = 0
       localNotices = []
       renderer.clear()
+      streamPacer.reset()
       tui.setFocus(editor)
       modelSelection = bindModelSelection(active.agent)
       contextWindow = undefined
@@ -770,6 +746,7 @@ export async function startTerminalApp(
       entries = []
       localNotices = []
       renderer.clear()
+      streamPacer.reset()
       scheduleTranscript(true)
     },
     exit: requestExit,
@@ -948,7 +925,7 @@ export async function startTerminalApp(
     warmTranscript()
     subscribeActive()
     tui.start()
-    terminalTheme.connect(tui, () => { renderer.refreshPalette(); paintStatus(); tui.requestRender(true) })
+    terminalTheme.connect(tui, () => { renderer.refreshPalette(); streamPacer.reset(); paintStatus(); tui.requestRender(true) })
     tui.setFocus(editor)
     tui.requestRender()
     void refreshContextWindow()
@@ -963,11 +940,13 @@ export async function startTerminalApp(
     setDisplayModes: (thinkingDisplay, runCodeDisplay) => {
       if (disposed) return
       renderer.setDisplayModes(thinkingDisplay, runCodeDisplay)
+      streamPacer.reset()
       tui.requestRender()
     },
     setMaxEntries: maxEntries => {
       if (disposed) return
       renderer.setMaxEntries(maxEntries)
+      streamPacer.reset()
       tui.requestRender()
     },
     setTitle: next => {

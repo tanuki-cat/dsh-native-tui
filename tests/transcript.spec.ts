@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import { createPalette, markdownTheme } from '../src/ui/theme.js'
 import { contentText, reduceTranscript, reduceTranscriptWindow, type TranscriptBlock, type TranscriptEntry } from '../src/ui/transcript.js'
-import { frameCostMs, frameOverrunMs, nextFrameDelay, nextStreamInterval, STREAM_MIN_INTERVAL_MS, STREAM_PAINT_CEILING_MS, transcriptFrameChanged } from '../src/ui/stream-pacing.js'
+import { nextFrameDelay, nextStreamInterval, STREAM_MIN_INTERVAL_MS, STREAM_PAINT_CEILING_MS, transcriptFrameChanged } from '../src/ui/stream-pacing.js'
 import { renderTranscriptBlock } from '../src/ui/transcript-render.js'
 import { TranscriptRenderer } from '../src/ui/transcript-renderer.js'
 import { formatToolArguments } from '../src/ui/tool-preview.js'
@@ -824,45 +824,6 @@ describe('reduceTranscript', () => {
   it('ignores an unusable attempt stream', () => {
     const entries: TranscriptEntry[] = [durable('assistant/attempt', { turn: 1, step: 1, stream: [{ type: 'chunk', time: 0, chunk: { type: 'block-start', index: 0, blockType: 'unknown' } }] }, 1)]
     expect(reduceTranscript(entries, options)).toHaveLength(0)
-  })
-})
-
-describe('frameOverrunMs', () => {
-  it('measures lateness against the due time', () => {
-    expect(frameOverrunMs(1_000, 1_012)).toBe(12)
-    expect(frameOverrunMs(1_000, 990)).toBe(0)
-  })
-
-  it('reports zero for an inline frame or an unusable clock', () => {
-    expect(frameOverrunMs(undefined, 1_000)).toBe(0)
-    expect(frameOverrunMs(Number.NaN, 1_000)).toBe(0)
-    expect(frameOverrunMs(1_000, Number.POSITIVE_INFINITY)).toBe(0)
-  })
-})
-
-describe('frameCostMs', () => {
-  it('adds the rebuild to the measured slip', () => {
-    expect(frameCostMs(4, 20, 33)).toBe(24)
-  })
-
-  it('caps the slip at the interval the frame ran on', () => {
-    // A 300 ms stall unrelated to the paint doubles the interval once instead
-    // of commanding a 600 ms backoff.
-    expect(frameCostMs(0, 300, 33)).toBe(33)
-  })
-
-  it('still backs off a genuinely expensive paint to twice its cost', () => {
-    // The cap moves with the interval, so each late frame doubles it until the
-    // paint fits in half of the loop.
-    let interval = STREAM_MIN_INTERVAL_MS
-    for (const expected of [66, 132, 264, 500]) {
-      interval = nextStreamInterval(interval, frameCostMs(0, 250, interval))
-      expect(interval).toBe(expected)
-    }
-  })
-
-  it('ignores non-finite measurements', () => {
-    expect(frameCostMs(Number.NaN, Number.NaN, 33)).toBe(0)
   })
 })
 

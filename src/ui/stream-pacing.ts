@@ -59,47 +59,38 @@ export function nextStreamInterval(current: number, frameMs: number): number {
   return Math.max(STREAM_MIN_INTERVAL_MS, Math.min(STREAM_PAINT_CEILING_MS, Math.round(stepped)))
 }
 
-/**
- * How far a frame slipped past the moment it was due.
- *
- * The transcript component times only its own subtree; pi-tui's own line work —
- * cursor resolution, line resets, the differential write — happens after that,
- * grows with the rows on screen, and holds the same event loop the model stream
- * is read on. Measuring the slip captures all of it, so pacing can back off on
- * what the terminal actually cost even when no single component is slow.
- *
- * The slip also covers work that has nothing to do with the paint, so
- * {@link frameCostMs} caps it before it reaches the pacer.
- * @param dueAt - when the frame was scheduled to run, or undefined when it was
- *   triggered directly (a burst or the first frame).
- * @param now - the current wall clock.
- * @returns slipped milliseconds, or 0 for an on-time or unscheduled frame.
- */
-export function frameOverrunMs(dueAt: number | undefined, now: number): number {
-  if (dueAt === undefined || !Number.isFinite(dueAt) || !Number.isFinite(now)) return 0
-  return Math.max(0, now - dueAt)
+function duration(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, value) : 0
 }
 
-/**
- * Cost of one frame to pace the next interval against.
- *
- * The rebuild is measured directly. The paint and pi-tui's line work are only
- * visible as the next frame's lateness, which also contains unrelated loop work
- * — stream parsing, GC, an approval dialog, OS scheduling — so the slip is
- * capped at the interval the measured frame ran on. One stall can therefore
- * only double the interval once; a genuinely expensive frame still doubles it
- * on every frame until twice its cost fits, because each frame's slip is then
- * compared against the larger interval.
- * @param rebuildMs - measured rebuild and reduction time.
- * @param slipMs - milliseconds the frame started after it was due.
- * @param interval - interval the measured frame was scheduled on.
- * @returns cost in milliseconds, never negative or non-finite.
- */
-export function frameCostMs(rebuildMs: number, slipMs: number, interval: number): number {
-  const rebuild = Number.isFinite(rebuildMs) ? Math.max(0, rebuildMs) : 0
-  const rawSlip = Number.isFinite(slipMs) ? Math.max(0, slipMs) : 0
-  const cap = Number.isFinite(interval) && interval > 0 ? interval : Number.POSITIVE_INFINITY
-  return rebuild + Math.min(rawSlip, cap)
+/** Associates coalesced transcript rebuilds with the actual paint they requested. */
+export class StreamPacer {
+  private currentInterval = STREAM_MIN_INTERVAL_MS
+  private rebuildMs: number | undefined
+  private cold = false
+
+  get interval(): number { return this.currentInterval }
+
+  prepare(rebuildMs: number, cold = false): void {
+    this.rebuildMs = (this.rebuildMs ?? 0) + duration(rebuildMs)
+    this.cold ||= cold
+  }
+
+  /** Chrome-only paints have no pending transcript cost and leave pacing alone. */
+  paint(paintMs: number): number | undefined {
+    if (this.rebuildMs === undefined) return undefined
+    const cost = this.rebuildMs + duration(paintMs)
+    this.currentInterval = this.cold ? STREAM_MIN_INTERVAL_MS : nextStreamInterval(this.currentInterval, cost)
+    this.rebuildMs = undefined
+    this.cold = false
+    return cost
+  }
+
+  reset(): void {
+    this.currentInterval = STREAM_MIN_INTERVAL_MS
+    this.rebuildMs = undefined
+    this.cold = false
+  }
 }
 
 /**
