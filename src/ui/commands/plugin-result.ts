@@ -16,6 +16,8 @@ export function pluginChangeSuffix(result: PluginChangeResult): string {
     if (run.output.trim() !== '') lines.push(run.output)
     if (run.truncated) lines.push('[Output truncated by Host; see the complete log.]')
     if (run.logPath !== undefined) lines.push('Full log: ' + run.logPath)
+    const unmet = (run as { readonly unmet?: unknown }).unmet
+    if (typeof unmet === 'string') lines.push('unmet: ' + unmet)
   }
   return sanitizeTerminalText(lines.join('\n'))
 }

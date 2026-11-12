@@ -31,8 +31,12 @@ export async function pluginsCommand(ctx: CommandContext, args: string): Promise
       }
       ctx.notice('info', 'Bundles:' + NL + bundles.map(bundle => {
         const state = bundle.enabled ? '[on] ' : '[off] '
+        const failure = (bundle as { error?: { code?: string; diagnostic?: string } }).error
+        const reason = failure === undefined ? ''
+          : '  (not running: ' + failure.code + (failure.diagnostic === undefined ? '' : ': ' + failure.diagnostic) + ')'
+        const update = bundle.update === undefined ? '' : '  (' + bundle.update + ' update)'
         return state + bundle.name + (bundle.version === undefined ? '' : '  ' + bundle.version)
-          + (bundle.installed ? '' : '  (not installed)')
+          + (bundle.installed ? '' : '  (not installed)') + update + reason
       }).join(NL) + NL + 'Use /plugins list for plugin entries; /plugins enable|disable <entryId> to change one.')
     } catch (error) {
       ctx.notice('error', 'Could not list bundles: ' + errorMessage(error))

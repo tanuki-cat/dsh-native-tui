@@ -176,4 +176,56 @@ describe('scripts/install.sh pnpm handling', () => {
     const script = readFileSync(join(f.root, 'repo', 'scripts', 'install.sh'), 'utf8')
     expect(script).toContain('npm_config_manage_package_manager_versions=false')
   })
+
+  /** A pnpm stub that writes one fake tarball into --pack-destination. */
+  function packStub(): string {
+    return [
+      'if [ "$1" = "--version" ]; then echo 12.14.0; exit 0; fi',
+      'if [ "$1" = "pack" ]; then',
+      '  dest=""; prev=""',
+      '  for arg in "$@"; do',
+      '    [ "$prev" = "--pack-destination" ] && dest="$arg"',
+      '    prev="$arg"',
+      '  done',
+      '  [ -n "$dest" ] || exit 9',
+      '  mkdir -p "$dest" || exit 9',
+      '  file="$dest/dsh-native-tui-0.2.2-rc.2.tgz"',
+      '  printf "fake tarball\n" > "$file" || exit 9',
+      '  printf \'{"filename":"%s"}\\n\' "$file"',
+      '  exit 0',
+      'fi',
+    ].join('\n')
+  }
+
+  it('packs into a stable per-user directory instead of .tmp', () => {
+    const f = fixture()
+    stubPnpm(f, packStub())
+    const result = f.run('--pack')
+    expect(result.status, result.stderr).toBe(0)
+    const expected = join(f.root, 'home', '.local', 'share', 'dsh-native-tui', 'dsh-native-tui-0.2.2-rc.2.tgz')
+    expect(existsSync(expected)).toBe(true)
+    const log = readFileSync(f.log, 'utf8')
+    expect(log).toContain('dsh plugin --profile tui add ' + expected)
+    expect(log).not.toContain('.tmp/dsh-native-tui')
+  })
+
+  it('accepts an explicit artifact directory', () => {
+    const f = fixture()
+    stubPnpm(f, packStub())
+    const artifacts = join(f.root, 'artifacts')
+    const result = f.run('--pack', '--artifact-dir', artifacts)
+    expect(result.status, result.stderr).toBe(0)
+    const expected = join(artifacts, 'dsh-native-tui-0.2.2-rc.2.tgz')
+    expect(existsSync(expected)).toBe(true)
+    expect(readFileSync(f.log, 'utf8')).toContain('dsh plugin --profile tui add ' + expected)
+  })
+
+  it('accepts DSH_NATIVE_TUI_ARTIFACT_DIR for the packed install', () => {
+    const f = fixture()
+    stubPnpm(f, packStub())
+    const artifacts = join(f.root, 'env-artifacts')
+    const result = f.runWith({ DSH_NATIVE_TUI_ARTIFACT_DIR: artifacts }, '--pack')
+    expect(result.status, result.stderr).toBe(0)
+    expect(existsSync(join(artifacts, 'dsh-native-tui-0.2.2-rc.2.tgz'))).toBe(true)
+  })
 })

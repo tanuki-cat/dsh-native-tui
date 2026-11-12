@@ -157,6 +157,7 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - Choice/TextInput/Approval、Markdown/Text Pager、Image 弹窗统一使用全宽 opaque dialogFrame；标题按行 wrap、长 reason 限制、每行补齐背景，避免底层 transcript 透出和串行。
 - 已验证 `/mcp add` 写入 `mcp-manager.servers.demo`；mcp-manager 等待 mcp-client fiber 激活并通过 `mcpManagerStatus` 暴露状态。
 - 已验证 `/mcp list` 对可用 fake MCP server 显示 `connected`，对失败 server 显示 `error: mcp-client(demo): initial connection or tool synchronization failed`。
+- 2026-11-12 rc.2 迁移：`mcp-manager` 改由核心 `@deepseek-ai/dsh-mcp-manager` 承担，删除本仓库 505 行 Loader 行管理器与 28 项旧测试；`/mcp list|reload|probe` 读取核心 `list()`/`restart()`/`probe()`，`tools/result` 只保留为静默重启自愈（连接类失败 → probe → restart，30 秒节流）。真实 rc.2 探针 `/mcp add` 后 `/mcp list` 显示 `demo  stdio  …  connected · 1 tools`。存量条目中的 `serverName` 经核心 Config 解析确认保留为额外字段且不参与校验，迁移不会因它失败。
 - 已验证把 `sk-proj-...` 填入 env 字段会被拒绝且不写 profile；缺 env 时同样不保存。
 - 默认 Agent Preset 已设为 ptc：全新 profile 启动后 `/status` 显示 `Preset: ptc`；既有 Session 仍按其记录恢复。
 - 已验证空白 Session 的 `/preset minimal` 直接切换当前 Session，`/status` 显示 minimal。

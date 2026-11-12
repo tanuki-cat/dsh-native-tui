@@ -231,15 +231,21 @@ async function listProviders(
       }
       else {
         let stored = false
+        let masked: string | undefined
         if (credentials !== undefined) {
           try {
-            stored = (await credentials.resolve(env))?.value !== undefined
+            const info = await credentials.describe?.(env)
+            if (info === undefined) stored = (await credentials.resolve(env))?.value !== undefined
+            else {
+              stored = info.configured ?? info.masked !== undefined
+              masked = info.masked
+            }
           }
           catch {
             // A credential-store read failure is shown as unset, not as a provider error.
           }
         }
-        envState = '  ' + env + (stored ? ' (stored)' : ' (not set)')
+        envState = '  ' + env + (masked === undefined ? stored ? ' (stored)' : ' (not set)' : ' (' + masked + ')')
       }
     }
     rows.push(route + '  ' + String(count) + ' model(s)' + envState)
@@ -377,6 +383,7 @@ async function addProvider(ctx: CommandContext, state: WizardState): Promise<voi
       { value: 'openai-completions', label: 'Custom OpenAI-compatible gateway', description: 'Chat Completions endpoint; you supply baseURL and model' },
       { value: 'openai-responses', label: 'Custom OpenAI Responses gateway', description: 'Responses API endpoint; you supply baseURL and model' },
       { value: 'anthropic-messages', label: 'Custom Anthropic-compatible gateway', description: 'Messages API endpoint; you supply baseURL and model' },
+      { value: 'google-generative-ai', label: 'Custom Google Gemini gateway', description: 'Generative Language API endpoint; you supply baseURL and model' },
       { value: 'catalog', label: 'Built-in pi-ai catalog route', description: 'Use a shipped provider catalog (for example openai, anthropic)' },
     ], 'Enter selects · Esc cancels', ctx.signal)
     if (kind === undefined)

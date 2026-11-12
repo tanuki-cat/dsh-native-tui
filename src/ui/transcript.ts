@@ -77,6 +77,12 @@ export type TranscriptBlock = ({
   readonly turn?: number
   readonly result?: string
   readonly isError?: boolean
+  /** Host-reported failure identity; absent on older logs and successful calls. */
+  readonly errorName?: string
+  /** Host-reported stable failure code, shown on the collapsed error row. */
+  readonly errorCode?: string
+  /** Raw user-facing failure reason, kept outside the model-facing result. */
+  readonly errorReason?: string
   /** A patch stopped after retaining zero or more committed operations. */
   readonly stopped?: boolean
   readonly pending: boolean
@@ -156,6 +162,69 @@ export interface TranscriptOptions {
    * of the retained transcript window.
    */
   readonly toolMemory?: ToolCallMemory
+}
+
+/** Context-form fields recent Hosts attach to user-message sources. */
+interface ContextSourceForm {
+  readonly form?: unknown
+  readonly sections?: unknown
+  readonly summary?: unknown
+}
+
+/** One rendered context row derived from a source's declared form. */
+interface ContextShape {
+  readonly label: string
+  readonly text: string
+}
+
+/** Strip the reminder envelope old snapshots used before `form` existed. */
+function stripReminder(text: string): string {
+  return text.replace(/^\s*<system-reminder>\s*/iu, '').replace(/\s*<\/system-reminder>\s*$/iu, '')
+}
+
+/**
+ * Describe a context-form message for the transcript.
+ * Recent Hosts declare `form`: a snapshot carries named sections, a notice a
+ * bounded summary. Older logs carry neither, so the caller keeps their text.
+ * @param source - the user message's source.
+ * @param label - fallback row label.
+ * @returns the shaped row, or undefined when the source declares no form.
+ */
+function contextShape(source: unknown, label: string): ContextShape | undefined {
+  if (source === null || typeof source !== 'object') return undefined
+  const form = source as ContextSourceForm
+  if (form.form === 'snapshot' && Array.isArray(form.sections)) {
+    const sections = form.sections.flatMap((value): { name: string; text: string }[] => {
+      if (value === null || typeof value !== 'object') return []
+      const section = value as { name?: unknown; text?: unknown }
+      return [{ name: typeof section.name === 'string' ? section.name : 'context',
+        text: typeof section.text === 'string' ? section.text : '' }]
+    })
+    if (sections.length === 0) return { label: label + ' · cleared', text: '' }
+    return {
+      label: clip(label + ' · ' + sections.map(section => section.name).join(', '), 120),
+      text: sections.map(section => section.name + '\n' + section.text).join('\n\n'),
+    }
+  }
+  if (form.form === 'notice' && typeof form.summary === 'string' && form.summary.trim() !== '') {
+    return { label: clip(label + ' · ' + form.summary, 120), text: '' }
+  }
+  return undefined
+}
+
+/** Read a Host failure identity from a tool result payload. */
+function failureFieldsOf(error: unknown): {
+  errorName?: string
+  errorCode?: string
+  errorReason?: string
+} {
+  if (error === null || typeof error !== 'object') return {}
+  const value = error as { name?: unknown; code?: unknown; reason?: unknown }
+  return {
+    ...(typeof value.name === 'string' ? { errorName: value.name } : {}),
+    ...(typeof value.code === 'string' ? { errorCode: value.code } : {}),
+    ...(typeof value.reason === 'string' ? { errorReason: value.reason } : {}),
+  }
 }
 
 /** Read visible assistant/user text from content blocks. */
@@ -521,6 +590,7 @@ export function createTranscriptReducer(options: TranscriptOptions) {
               ...(turn === undefined ? {} : { turn }),
               result: contentText(ptcContent(data?.content)),
               ...(data?.isError === true ? { isError: true } : {}),
+              ...failureFieldsOf(data?.error),
               ...(resultStopped(data?.meta) ? { stopped: true } : {}),
               ...(diffs === undefined ? {} : { diffs }),
               ...(operation === undefined ? {} : { operation }),
@@ -562,12 +632,14 @@ export function createTranscriptReducer(options: TranscriptOptions) {
             }
           }
           else {
-            const text = contentText(event.data.content)
-            if (text.trim() !== '') {
-              const label = 'plugin' in source && typeof source.plugin === 'string'
-                ? source.plugin
-                : source.kind
-              blocks.push({ kind: 'context', label, text, seq })
+            const raw = contentText(event.data.content)
+            const label = 'plugin' in source && typeof source.plugin === 'string'
+              ? source.plugin
+              : source.kind
+            const shaped = contextShape(source, String(label))
+            const text = shaped?.text ?? (String(source.kind) === 'runtime-context' ? stripReminder(raw) : raw)
+            if (text.trim() !== '' || shaped !== undefined) {
+              blocks.push({ kind: 'context', label: shaped?.label ?? String(label), text, seq })
             }
           }
           break
@@ -651,6 +723,7 @@ export function createTranscriptReducer(options: TranscriptOptions) {
           }
           const result = toolResultText(event.data.message)
           const isError = event.data.message.isError === true
+          const failureFields = failureFieldsOf((event.data as { error?: unknown }).error)
           const diffs = resultFileDiffs(event.data.meta, prior?.kind === 'tool' ? prior.args : '')
           const operation = resultOperation(event.data.meta)
           if (index === undefined) {
@@ -662,6 +735,7 @@ export function createTranscriptReducer(options: TranscriptOptions) {
               ...(event.data.turn === undefined ? {} : { turn: event.data.turn }),
               result,
               ...(isError ? { isError: true } : {}),
+              ...failureFields,
               ...(resultStopped(event.data.meta) ? { stopped: true } : {}),
               ...(diffs === undefined ? {} : { diffs }),
               ...(operation === undefined ? {} : { operation }),
@@ -674,6 +748,7 @@ export function createTranscriptReducer(options: TranscriptOptions) {
               ...prior,
               result,
               ...(isError ? { isError: true } : {}),
+              ...failureFields,
               ...(resultStopped(event.data.meta) ? { stopped: true } : {}),
               ...(diffs === undefined ? {} : { diffs }),
               ...(operation === undefined ? {} : { operation }),

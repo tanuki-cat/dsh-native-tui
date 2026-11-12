@@ -61,13 +61,18 @@ function withHint(message: string): string {
   return hint === undefined || message.includes(hint) ? message : message + '\n\n' + hint
 }
 
+/** Build an error carrying a provider-chosen failure code. */
+function providerFailure(message: string, code: string, options?: ConstructorParameters<typeof LlmError>[2]): LlmError {
+  return new LlmError(message, code as ConstructorParameters<typeof LlmError>[1], options)
+}
+
 /** One failure for an in-band error object or a non-2xx body. */
 function upstreamError(route: string, status: number, text: string, businessCode?: number): LlmError {
   const kind = classifyFailure(status, text)
   const code = businessCode ?? gatewayCodeOf(parseJson(text))
   const detail = errorMessageOf(parseJson(text)) ?? redact(text.slice(0, 300))
   const label = status === 0 ? route : route + ' HTTP ' + String(status)
-  return new LlmError(
+  return providerFailure(
     withHint(label + ' (code ' + String(code ?? '?') + '): ' + detail),
     failureCodeOf(kind),
     status === 0 ? {} : { status },
@@ -416,7 +421,7 @@ export async function* toStreamChunks(
   }
 
   if (!sawTerminal) {
-    throw new LlmError(model + ': upstream stream ended without a finish frame (code could not be resumed)', 'INCOMPLETE_STREAM')
+    throw providerFailure(model + ': upstream stream ended without a finish frame (code could not be resumed)', 'INCOMPLETE_STREAM')
   }
   if (textBlock === undefined && reasoningBlock === undefined && toolBlocks.size === 0) {
     throw new LlmError(model + ': upstream returned a completion with no content', 'EMPTY_RESPONSE')

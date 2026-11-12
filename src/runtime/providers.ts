@@ -1,5 +1,5 @@
 /** Supported hand-declared pi-ai wire protocols. */
-export const PROVIDER_PROTOCOLS = ['openai-completions', 'openai-responses', 'anthropic-messages'] as const
+export const PROVIDER_PROTOCOLS = ['openai-completions', 'openai-responses', 'anthropic-messages', 'google-generative-ai'] as const
 
 /** Input modalities a hand-declared provider model may claim. */
 export const PROVIDER_INPUT_MODALITIES = ['text', 'image'] as const
