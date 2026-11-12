@@ -43,17 +43,38 @@ export function toolHeading(text: string, palette: Palette, state: ToolState, ta
 
 /** A message marker appears once; subsequent wrapped lines keep the same inset. */
 export class MessageBody implements Component {
+  private width = -1
+  private sources: string[] = []
+  private lines: string[] = []
+
   constructor(private readonly body: Component, private readonly palette: Palette, private readonly marker: string) {}
 
   render(width: number): string[] {
     const inset = Math.min(2, Math.max(0, width - 1))
-    return this.body.render(Math.max(1, width - inset)).map((line, index) => {
+    const source = this.body.render(Math.max(1, width - inset))
+    if (this.width !== width) {
+      this.width = width
+      this.sources = []
+      this.lines = []
+    }
+    for (const [index, line] of source.entries()) {
+      if (this.sources[index] === line) continue
       const prefix = index === 0 ? this.marker.slice(0, inset) : ' '.repeat(inset)
-      return clipLine(this.palette.dim(prefix) + line, width, this.palette)
-    })
+      this.lines[index] = clipLine(this.palette.dim(prefix) + line, width, this.palette)
+      // StreamText mutates its returned array, so retain each source value.
+      this.sources[index] = line
+    }
+    this.sources.length = source.length
+    this.lines.length = source.length
+    return this.lines
   }
 
-  invalidate(): void { this.body.invalidate?.() }
+  invalidate(): void {
+    this.width = -1
+    this.sources = []
+    this.lines = []
+    this.body.invalidate?.()
+  }
 }
 
 /** Fill a changed diff row through the viewport without carrying background state. */

@@ -7,6 +7,7 @@ import { TranscriptRenderer } from '../src/ui/transcript-renderer.js'
 import { WaitStatusLine, waitingText } from '../src/ui/waiting.js'
 import { PromptEditor } from '../src/ui/prompt-editor.js'
 import { TranscriptMainScreen } from '../src/ui/transcript-main-screen.js'
+import { TimedMainScreen } from '../src/ui/paint-timing.js'
 
 /**
  * The renderer under test needs a terminal, but the assertion is about pi-tui's
@@ -85,7 +86,7 @@ describe('main-screen card lifecycle', () => {
     Object.defineProperty(terminal, 'columns', { get: () => columns })
     const written: string[] = []
     terminal.write = (data?: string) => { if (data !== undefined) written.push(data) }
-    const tui = protectedScreen ? new TranscriptMainScreen(terminal as never, false) : new TuiMainScreen(terminal as never, false)
+    const tui = protectedScreen ? new TimedMainScreen(terminal as never, false) : new TuiMainScreen(terminal as never, false)
     const renderer = new TranscriptRenderer(options)
     tui.addChild(new Text(FILLER, 0, 0))
     tui.addChild(renderer.container)
