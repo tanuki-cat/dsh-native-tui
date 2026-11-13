@@ -407,3 +407,10 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - 现象：MacBook 盒盖休眠再唤醒后，transcript 连续出现 4 条黄色 notice，分别是 `[llm-deepseek-account]` 与 `[llm-deepseek-api-key]` 的 `model listing from https://api.deepseek.com/models failed (…); keeping the previous catalog` 各两行。定位：休眠期间定时器冻结，唤醒瞬间两个 provider 的 10 分钟目录刷新（`modelsMaxAgeMs = 600000`）同时到期，而网络/连接池尚未就绪 → `fetch` 传输失败；宿主对同一 scope 的连续失败只记一次，因此每轮「成功后再失败」两个 route 各出一行，4 行对应两轮（通常是两次开合盖）。宿主行为本身正确：失败保留上一份目录并在下一次刷新自愈，与插件无关；插件只是按既有设计把 `console.warn` 转成了 notice。
 - 处理：`src/ui/console-guard.ts` 新增 `LISTING_FAILURE` 识别 `[llm-deepseek-*] model listing from <url> failed (<原因>); <fallback>`，按「URL + 原因」作为同一告警的身份（route 与 `keeping the previous catalog`/`using the bundled catalog` 不参与身份），首次投递照旧成为 notice，之后的副本带 `repeat: true`；`src/ui/app.ts` 对 `repeat` 只写 `DSH_NATIVE_TUI_DEBUG=1` 追踪（`console.warn (repeat): …`），不再占 transcript 行。其它 `warn`/`error` 的去重语义不变，仍只合并相邻重复行。
 - 验证：`pnpm check` 通过（102 个文件 / 1467 项测试、类型检查、构建）；`tests/console-guard.spec.ts` 18 → 21 例，覆盖跨 route/跨重试只播报一次、成功行不重置身份、bundled 与 previous 两种 fallback 同族、无关告警不误判为重复；真实 Host 探针 `scripts/fake-tty-console-lines.mjs` 注入「故障行 → 普通告警 → 同一故障行」后输出 `{"infoOnScreen":false,"warningAsNotice":true,"errorAsNotice":true,"catalogueFailureAsNotice":true,"catalogueRepeatTraced":true,"rawDiagnosticWrite":false,"infoTraced":true}`，PASS。
+
+## 2026-11-13：状态行显示 Git 分支
+
+- 输入框下方主状态行在 workspace 目录后显示 `git <branch>`：`git ` 标签用次级文本、分支名用强调蓝；窄屏先去掉 `git ` 标签，随后与目录一起隐藏。
+- 分支直接读仓库 `HEAD`（含 linked worktree / submodule 的 `.git` 文件），不启动 `git` 子进程；从子目录向上查找所属仓库，detached HEAD 显示 7 位短 commit。目录不在仓库内或 `HEAD` 不可读时不显示该字段。读到的值按 workspace 缓存 1 秒，checkout 后无需重启即可在下次重绘更新。
+- 验证：`pnpm check` 通过（122 个文件 / 1791 项测试，类型检查与构建成功）；`node scripts/fake-tty-git-branch.mjs` 真实 Host + 本地 mock provider 两组 PASS：仓库内为 `…/checkout · git probe-branch · Ready · Context — · preset minimal`，仓库外同一位置不含 `git` 字段；`node scripts/fake-tty-statusline.mjs` 四组复验 PASS（仓库外 workspace 不出现该字段）。
+- 方案：状态行输入新增可选 `gitBranch`，读取逻辑在 [`src/runtime/git-branch.ts`](../src/runtime/git-branch.ts)。
