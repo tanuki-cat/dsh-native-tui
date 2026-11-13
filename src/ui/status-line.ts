@@ -29,6 +29,8 @@ export interface StatusInput {
   readonly title: string
   readonly sessionId: string
   readonly cwd: string
+  /** Branch of the workspace's repository; absent when the directory is outside Git. */
+  readonly gitBranch?: string
   readonly running: boolean
   readonly provider: string
   readonly model: string
@@ -121,7 +123,16 @@ export function renderStatusRows(
     text: palette.workspace(cwd),
     compact: palette.workspace(cwd.split(/[\\/]/u).filter(Boolean).at(-1) ?? cwd),
     priority: 2,
-  }, { text: state }]
+  }]
+  // The branch belongs to the workspace beside it, and a directory outside Git
+  // has none, so the row then names the path alone.
+  const branch = input.gitBranch === undefined ? '' : label(input.gitBranch)
+  if (branch !== '') status.push({
+    text: palette.dim('git ') + palette.accent(branch),
+    compact: palette.accent(branch),
+    priority: 2,
+  })
+  status.push({ text: state })
   const percent = metrics.contextPercent
   const context = palette.context(percent, metrics.contextCompactPercent)
   status.push({

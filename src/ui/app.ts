@@ -18,6 +18,7 @@ import { findLauncher, parseProfileArg, resumeHint } from '../runtime/launcher.j
 import { assertResumed, reloadArgs, RESUME_ENV } from '../runtime/reload.js'
 import { skillRows } from '../runtime/skill-catalog.js'
 import { createSessionMetricsMemo, type SessionMetrics, type SessionStats } from '../runtime/metrics.js'
+import { createGitBranchReader } from '../runtime/git-branch.js'
 import { showApproval, showQuestionBatch } from './dialogs.js'
 import { approvalArguments, approvalReceipt } from './approval-preview.js'
 import type { PendingAttachment } from '../runtime/attachments.js'
@@ -280,6 +281,9 @@ export async function startTerminalApp(
 
   const summaryCwd = (): string | undefined => active.agent.session.header.cwd ?? config.cwd
 
+  /** Branch of the workspace the row names; cached so a repaint does not re-read Git. */
+  const workspaceBranch = createGitBranchReader()
+
   /**
    * Name the workspace in the terminal tab.
    *
@@ -471,11 +475,13 @@ export async function startTerminalApp(
     reasoningEffort = modelSelection.current?.reasoningEffort
     const options = active.agent.options
     const inputs = contextInputs()
+    const cwd = summaryCwd() ?? config.cwd
     statusRows.reset()
     renderStatusRows(statusRows.rows, palette, {
       title,
       sessionId: active.id,
-      cwd: summaryCwd() ?? config.cwd,
+      cwd,
+      gitBranch: workspaceBranch(cwd),
       running: active.agent.status === 'running',
       provider: modelSelection.current?.provider ?? options.provider ?? 'deepseek-official',
       model: modelSelection.current?.model ?? options.model ?? 'deepseek-flash',

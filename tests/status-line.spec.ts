@@ -81,6 +81,24 @@ describe('renderStatusRows', () => {
     expect(full(footer)).not.toContain('permission ')
   })
 
+  it('names the workspace branch beside its directory and omits it outside Git', () => {
+    const { status } = painted({ gitBranch: 'feat/status-line' })
+    expect(full(status)).toContain('provider/model max · /tmp/work · git feat/status-line · Ready')
+    expect(full(painted().status)).not.toContain('git ')
+  })
+
+  it('colors the branch label dim and the branch name with the accent', () => {
+    const dark = createPalette('dark')
+    const line = full(painted({ gitBranch: 'main' }, 'dark').status)
+    expect(line).toContain(dark.dim('git ') + dark.accent('main'))
+  })
+
+  it('drops the git label before the branch name in a narrow row', () => {
+    const line = painted({ gitBranch: 'main' }).status.render(50)[0]!
+    expect(line).toContain('work · main · Ready')
+    expect(line).not.toContain('git main')
+  })
+
   it('shows Working and running shortcuts while omitting an unset reasoning level', () => {
     const { status, footer } = painted({ running: true, reasoningEffort: undefined })
     expect(full(status)).toContain('provider/model · /tmp/work · Working')
@@ -141,7 +159,7 @@ describe('renderStatusRows', () => {
   it('cleans terminal instructions and flattens multiline labels before adding styling', () => {
     const label = 'safe\u001B]52;c;UFJPT0Y=\u0007\u001B[2Jend\nnext\tline'
     const { state, status, footer } = painted({ title: label, sessionId: label, cwd: label, provider: label,
-      model: label, preset: label, reasoningEffort: label, permissionPreset: label })
+      model: label, preset: label, reasoningEffort: label, permissionPreset: label, gitBranch: label })
     for (const text of [state.header, full(status), full(footer)]) {
       expect(text).not.toContain('\u001B')
       expect(text).toContain('safeend next line')
