@@ -63,6 +63,8 @@ export interface TerminalApp {
   setImageThumbnails(enabled: boolean): void
   /** Replace the product title shown in the header and status row. */
   setTitle(title: string): void
+  /** Session currently on screen; an in-process plugin replacement reopens it. */
+  activeSessionId(): string
   dispose(): Promise<void>
 }
 
@@ -968,6 +970,7 @@ export async function startTerminalApp(
       syncWindowTitle()
       renderStatus()
     },
+    activeSessionId: () => active.id,
     dispose: async () => {
       await dispose()
     },
