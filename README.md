@@ -15,7 +15,7 @@ Session、模型、工具、审批、压缩、MCP、插件都由 Host 提供，�
 
 - Node `>=24.9.0`
 - pnpm（仓库使用 `pnpm-lock.yaml`，不要用 npm / yarn）
-- 全局安装的 `dsh` 0.2.2-rc.2
+- 全局安装的 `dsh` 0.2.2-rc.3
 
 ### 安装
 
@@ -585,7 +585,7 @@ node scripts/bench-stream-paint.mjs --legacy-box
 ~~~sh
 pnpm build
 pnpm pack --pack-destination .tmp
-DSH_HOME=/tmp/dsh-native-tui-approval-home dsh plugin --profile tui add .tmp/dsh-native-tui-0.2.2-rc.2.tgz
+DSH_HOME=/tmp/dsh-native-tui-approval-home dsh plugin --profile tui add .tmp/dsh-native-tui-0.2.2-rc.3.tgz
 DSH_HOME=/tmp/dsh-native-tui-approval-home node scripts/fake-tty-approval.mjs
 ~~~
 
@@ -612,7 +612,7 @@ node scripts/fake-tty-slash-autocomplete.mjs       # 普通/全屏 × 100/50 列
 node scripts/fake-tty-permission-restart.mjs       # minimal 同会话 Agent 重建、取消及权限恢复；使用终端 fence fixture，不依赖物理 PTY
 ~~~
 
-升级核心时，`scripts/upgrade-core-e2e.mjs` 要求 `DSH_CLI_ENTRY` 指向已安装的 `0.2.2-rc.2` CLI 的 `lib/bin.js`；探针使用独立的 `.tmp/upgrade-core-*` profile 和本地 mock provider，保留输出证据。通用 fake-TTY 入口同样支持该变量，不设置时仍使用既有全局安装路径。`scripts/rc1-capabilities-e2e.mjs` 使用同一变量，验证 Schedule 宿主级管理、补丁默认关闭、原生/PTC 显式启用、未读编辑拒绝，以及多文件增删移动的真实磁盘效果。
+升级核心时，`scripts/upgrade-core-e2e.mjs` 要求 `DSH_CLI_ENTRY` 指向已安装的 `0.2.2-rc.3` CLI 的 `lib/bin.js`；探针使用独立的 `.tmp/upgrade-core-*` profile 和本地 mock provider，保留输出证据。通用 fake-TTY 入口同样支持该变量，不设置时仍使用既有全局安装路径。`scripts/rc1-capabilities-e2e.mjs` 使用同一变量，验证 Schedule 宿主级管理、补丁默认关闭、原生/PTC 显式启用、未读编辑拒绝，以及多文件增删移动的真实磁盘效果。
 
 普通终端环境可运行真实 PTY 冒烟：
 
@@ -664,7 +664,7 @@ npm 路径预留在 `publish-npm` job，默认跳过：需要仓库变量 `NPM_P
 
 ## 兼容性
 
-- DSH 依赖统一为 `0.2.2-rc.2`，Cordis 为 `4.1.0`；使用隔离安装的目标 CLI 通过四套预设的新建、恢复、模型路由及 reload 探针，不依赖全局 CLI 版本。旧核心不在本版本支持范围，peer 范围从 rc.2 起。
+- DSH 依赖统一为 `0.2.2-rc.3`，Cordis 为 `4.1.0`；使用隔离安装的目标 CLI 通过四套预设的新建、恢复、模型路由及 reload 探针，不依赖全局 CLI 版本。旧核心不在本版本支持范围，peer 范围从 rc.3 起。
 - 三套 preset 显式设置 `tool-subagent-control.interrupt: false`，模型不再获得 `interrupt_agent`；需要在 profile patch 中覆盖该行以恢复。
 - 从 rc.1 升级时，若 profile 的 `cordis.patch.yml` 含 `- id: mcp-manager` / `name: dsh-native-tui/mcp-manager` 覆盖，需改为 `name: '@deepseek-ai/dsh-mcp-manager'` 并保留原 `servers` 配置；否则 rc.2 会跳过该行（`name mismatch`），其中的 MCP 服务不会加载。`serverName` 是多余字段，可以保留。
 - Preset patch 从 `@deepseek-ai/dsh-web-app` 的 standard/ptc/minimal/cordis 复制而来：standard/ptc/minimal 需要 `subagent-model-selection-settings` Host 行，cordis 需要 cordis host-runner 与 `tool-cordis/host`。
