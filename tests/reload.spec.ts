@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { assertResumed, reloadArgs, resumeIdFromEnv } from '../src/runtime/reload.js'
+import { assertResumed, clearReloadSession, peekReloadSession, rememberReloadSession, reloadArgs, resumeIdFromEnv } from '../src/runtime/reload.js'
 
 describe('reload arguments', () => {
   it('keeps launcher flags and appends the current session', () => {
@@ -42,5 +42,18 @@ describe('resume handoff', () => {
     expect(() => assertResumed(undefined, 'fresh')).not.toThrow()
     expect(() => assertResumed('session-1', 'session-1')).not.toThrow()
     expect(() => assertResumed('session-1', 'session-2')).toThrow('instead of the requested')
+  })
+})
+
+describe('in-process reload handoff', () => {
+  it('hands the on-screen session to a replacement and clears it once opened', () => {
+    clearReloadSession()
+    expect(peekReloadSession()).toBeUndefined()
+    rememberReloadSession('native-tui-a')
+    expect(peekReloadSession()).toBe('native-tui-a')
+    rememberReloadSession('native-tui-b')
+    expect(peekReloadSession()).toBe('native-tui-b')
+    clearReloadSession()
+    expect(peekReloadSession()).toBeUndefined()
   })
 })

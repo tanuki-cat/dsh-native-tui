@@ -71,3 +71,43 @@ export function assertResumed(requested: string | undefined, actual: string): vo
   if (requested === undefined || requested === actual) return
   throw new Error('native-tui: the Host resumed session ' + actual + ' instead of the requested ' + requested)
 }
+
+/** Process-global slot an in-place plugin replacement reads back. */
+const RELOAD_SESSION = Symbol.for('dsh-native-tui.reload-session')
+
+/** The Session a replacement must reopen; the symbol slot survives module replacement. */
+interface ReloadSessionSlot {
+  sessionId?: string
+}
+
+function reloadSessionSlot(): ReloadSessionSlot {
+  const holder = globalThis as typeof globalThis & { [key: symbol]: ReloadSessionSlot | undefined }
+  return (holder[RELOAD_SESSION] ??= {})
+}
+
+/**
+ * Remember the Session an in-process plugin replacement must reopen.
+ *
+ * HMR can replace this plugin while the terminal owns a live Session. The
+ * replacement runs `apply()` again with the original configuration, so without
+ * a handoff it would open a new Session and clear the conversation on screen.
+ * The slot lives on `globalThis` because the replacement is a new module
+ * instance in the same process.
+ * @param sessionId - Session currently displayed by the terminal.
+ */
+export function rememberReloadSession(sessionId: string): void {
+  reloadSessionSlot().sessionId = sessionId
+}
+
+/**
+ * Read the Session a replacement must reopen, without consuming it.
+ * @returns the remembered Session id, or undefined when none is pending.
+ */
+export function peekReloadSession(): string | undefined {
+  return reloadSessionSlot().sessionId
+}
+
+/** Drop the remembered Session once a replacement has opened it. */
+export function clearReloadSession(): void {
+  delete reloadSessionSlot().sessionId
+}

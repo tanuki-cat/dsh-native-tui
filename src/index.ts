@@ -1,7 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { Config, parseResumeArg, resolveConfig, resolveDisplayMode, resolveVolatileValue, type Config as TuiConfig } from './config.js'
 import { startTerminalApp, type TerminalApp } from './ui/app.js'
-import { RESUME_ENV, resumeIdFromEnv } from './runtime/reload.js'
+import { clearReloadSession, peekReloadSession, rememberReloadSession, RESUME_ENV, resumeIdFromEnv } from './runtime/reload.js'
 import { ensureLauncher, parseProfileArg } from './runtime/launcher.js'
 import { debug } from './debug.js'
 import { installMcpRecovery } from './runtime/mcp-recovery.js'
@@ -57,10 +57,13 @@ export async function apply(ctx: Context, config: TuiConfig): Promise<void> {
   // Consume the handoff so a shell or dsh started inside this Session does not
   // inherit a resume request that belongs to this process image.
   if (inherited !== undefined) delete process.env[RESUME_ENV]
-  const resume = flagged ?? inherited
+  // HMR can replace this plugin inside the same process; the replacement must
+  // reopen the Session that was on screen instead of creating a new one.
+  const replaced = flagged === undefined && inherited === undefined ? peekReloadSession() : undefined
+  const resume = flagged ?? inherited ?? replaced
   debug('resume: ' + (resume === undefined
     ? 'new session'
-    : resume + ' (' + (flagged === undefined ? 'env' : 'flag') + ')'))
+    : resume + ' (' + (flagged !== undefined ? 'flag' : inherited !== undefined ? 'env' : 'hmr') + ')'))
   const resolved = resolveConfig(resume === undefined ? config : { ...config, sessionId: resume })
   let app: TerminalApp | undefined
   let exiting = false
@@ -95,6 +98,7 @@ export async function apply(ctx: Context, config: TuiConfig): Promise<void> {
   try {
     debug('apply: starting terminal')
     app = await startTerminalApp(ctx, resolved, exit)
+    if (replaced !== undefined) clearReloadSession()
     syncLiveSettings()
     debug('apply: terminal started')
   } catch (error) {
@@ -102,6 +106,9 @@ export async function apply(ctx: Context, config: TuiConfig): Promise<void> {
   }
 
   ctx.effect(() => async () => {
+    // A reload unloads the plugin before mounting its replacement; hand the
+    // Session on screen to that replacement. A deliberate exit keeps no claim.
+    if (!exiting && app !== undefined) rememberReloadSession(app.activeSessionId())
     await app?.dispose()
   }, 'native-tui: terminal lifecycle')
 }
