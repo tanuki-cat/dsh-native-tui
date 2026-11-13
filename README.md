@@ -144,9 +144,10 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 - `/open` 预览文本（16 KiB 上限），Markdown 以 pi-tui Markdown 样式分页渲染。
 - `/preview` 渲染 PNG/JPEG/GIF/WebP；终端不支持时显示文本占位。
 - `/files` 浏览目录并预览文件（Enter 进入目录 / 预览，Esc 退出，含 `../`）。
-- `/attach` 暂存文件 / 图片 / 剪贴板图片并随下一条 prompt 发送（8 MiB 上限），`/attach preview <i>` 可内联预览，`/attachments` 打开暂存附件管理器。
-- 粘贴本地图片路径或文字中的 `@图片路径` 会自动暂存为图片，在输入面板中以 `[Image #1] [Image #2]` 与文字同行展示，长路径不占用草稿。支持图片协议的终端自动显示最多两张缩略预览；窄终端标签换行，不支持预览时保留标签。支持引号、shell 转义与 `file://`；读取失败保留原文。空输入框按 Backspace 移除最后一张图片，`/attachments` 可完整预览或移除，`/attach clear` 清空。发送成功清除标签和缩略图，发送失败保留图片与文字草稿；历史用户消息也使用编号图片标签。
-缩略预览沿用 pi-tui 的图片协议和格式支持；全屏模式下 pi-tui 禁用 iTerm2 图片协议，此时保留文字标签。
+- `/attach` 暂存文件 / 图片 / 剪贴板图片并随下一条 prompt 发送（8 MiB 上限），`/attach preview <i>` 打开预览，`/attachments` 打开暂存附件管理器。
+- 粘贴本地图片路径或文字中的 `@图片路径` 会自动暂存为图片，在输入面板中以 `[Image #1] [Image #2]` 与文字同行展示，长路径不占用草稿。先输入独立的 `@` 再粘贴图片路径时，导入成功会消耗这个标记并关闭文件补全，可直接按 Enter 发送。自动缩略图默认关闭，可在 `/settings` → `Image thumbnails` 选择 on/off，再用 `Save and apply` 保存，立即生效；开启后支持图片协议的终端最多展示两张自适应缩略图。关闭时保留图片标签与手动预览，不自动读取缩略图。窄终端标签换行，不支持预览时保留标签。支持引号、shell 转义与 `file://`；读取失败保留原文。空输入框按 Backspace 移除最后一张图片，`/attachments` 可完整预览或移除，`/attach clear` 清空。发送成功清除标签和缩略图，发送失败保留图片与文字草稿；历史用户消息也使用编号图片标签。
+缩略预览沿用 pi-tui 的图片协议和格式支持。iTerm2 在全屏模式下通过插件适配层显示图片：先绘制文字，再按最终位置绘制图片；普通输入和状态更新不重复上传稳定的缩略图，移除、移动或缩放时清除旧图片。终端未检测到图片协议时保留文字标签。
+单图缩略图最大占用 16 列、4 行，多图与短窗口自动缩小。输入框中按 `Alt+I` 打开图片查看器；全屏模式也可点击缩略图或 `[Image #n]` 标签打开对应图片。在查看器中用 `←/→` 切换待发送图片，`Enter/Esc` 返回草稿，图片按窗口大小显示；加载失败会显示错误信息。不支持图片协议时保留图片信息与文字占位，关闭预览保留草稿、光标和附件。
 - `/deliverables` 列出、打开 panel、预览或用系统文件管理器定位 `present` 交付文件。
 - `/changes` 查看最近一轮 workspace 变更文件与单文件 diff。
 - `/tools` / `/tool <index>` 列出工具调用或分页查看完整参数与结果；`/diff [index]` 查看 write/edit 的独立 diff。三者使用相同的最近 50 次调用索引，包含原生调用和 PTC 子调用；`/diff` 无参数时打开其中最近一次有实际 diff 的调用。
@@ -175,6 +176,7 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 | 点击工具或 context 首行 | 仅 fullscreen：切换该项的展开状态 |
 | `Ctrl+N` | 打开同 workspace、preset 的空白 Session，没有匹配项时新建 |
 | `Alt+S` | 打开 Session 选择器，切换时保留各自的草稿与附件 |
+| `Alt+I` | 打开待发送图片查看器；`←/→` 切图，`Enter/Esc` 返回草稿 |
 | `Shift+Tab` | 输入框中循环切换当前模型提供的思考强度，保留草稿；弹窗中不触发 |
 
 ### 会话与界面
@@ -266,6 +268,7 @@ Plan 保留工具目录，用策略和最终 guard 限制受控调用；`exit_pl
     sessionId: native-tui-fixed   # 可选：恢复固定 Session
     cwd: /path/to/workspace
     showReasoning: true           # legacy boolean；false 等价于 thinkingDisplay: hidden
+    showImageThumbnails: false    # 输入区自动缩略图；默认关闭，可在 /settings 中即时切换
     thinkingDisplay: detailed     # hidden | compact | detailed
     runCodeDisplay: detailed      # hidden 隐藏代码执行；compact/detailed 选择 PTC 预览，shell 输出默认保留末尾 5 行
     maxTranscriptEntries: 600     # 每帧重绘的行预算；越大流式帧越慢
@@ -277,7 +280,7 @@ Plan 保留工具目录，用策略和最终 guard 限制受控调用；`exit_pl
 
 | 字段 | 生效时机 |
 |---|---|
-| `thinkingDisplay` / `runCodeDisplay` / `showReasoning` / `maxTranscriptEntries` / `title` | 立即 |
+| `thinkingDisplay` / `runCodeDisplay` / `showReasoning` / `showImageThumbnails` / `maxTranscriptEntries` / `title` | 立即 |
 | `theme` / `fullscreen` | 重启后 |
 | `cwd` / `sessionId` / `agentPreset` | 下次启动 |
 
@@ -294,7 +297,7 @@ Plan 保留工具目录，用策略和最终 guard 限制受控调用；`exit_pl
 
 ### /settings
 
-`/settings`（或 `/settings tui`）打开引导式 TUI 配置页，覆盖全部 native-tui 字段：thinking / code execution 显示模式、Show reasoning（legacy）、transcript entries、theme、fullscreen、header title、cwd、resume session、agent preset。
+`/settings`（或 `/settings tui`）打开引导式 TUI 配置页，覆盖全部 native-tui 字段：thinking / code execution 显示模式、Show reasoning（legacy）、image thumbnails、transcript entries、theme、fullscreen、header title、cwd、resume session、agent preset。
 
 - 每行显示当前有效值、字段说明与生效时机；编辑先暂存。
 - `Save and apply` 以一次 path-addressed mutation 写入（revision 冲突自动按新 revision 重试一次），然后关闭页面并输出保存回执；`Discard changes` 丢弃暂存。

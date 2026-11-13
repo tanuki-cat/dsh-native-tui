@@ -11,6 +11,7 @@ const config: ResolvedConfig = {
   sessionId: undefined,
   cwd: '/tmp/workspace',
   showReasoning: true,
+  showImageThumbnails: false,
   thinkingDisplay: 'detailed',
   runCodeDisplay: 'detailed',
   maxTranscriptEntries: 100,

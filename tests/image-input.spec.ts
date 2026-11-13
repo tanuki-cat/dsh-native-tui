@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir, homedir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { CombinedAutocompleteProvider, CURSOR_MARKER, Editor, getCapabilities, setCapabilities, stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui'
+import { CombinedAutocompleteProvider, CURSOR_MARKER, Editor, getCapabilities, setCapabilities, stripTerminalSequences, visibleWidth, type Component } from '@earendil-works/pi-tui'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { imagePathReferences, importImagePaste } from '../src/runtime/image-input.js'
 import type { AttachmentsService, PendingAttachment } from '../src/runtime/attachments.js'
@@ -11,6 +11,7 @@ import { PromptEditor } from '../src/ui/prompt-editor.js'
 import { enqueuePrompt, submitDraft } from '../src/ui/prompt-submission.js'
 import type { CommandContext } from '../src/ui/commands/context.js'
 import { createPalette, editorTheme } from '../src/ui/theme.js'
+import { TuiAutocompleteProvider } from '../src/ui/autocomplete.js'
 
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=', 'base64')
 const roots: string[] = []
@@ -40,11 +41,21 @@ async function harness() {
     attachments: { pending }, palette: createPalette('plain'), modelSelection: {},
     signal: new AbortController().signal, isCurrent, notice: vi.fn(), renderStatus: vi.fn(),
   } as unknown as CommandContext
-  const editor = new PromptEditor({ terminal: { rows: 30 }, requestRender: vi.fn() } as never, editorTheme(ctx.palette))
+  let focused: Component | undefined
+  const tui = { terminal: { rows: 30 }, requestRender: vi.fn(), getFocusedComponent: () => focused,
+    hasOverlay: () => focused !== undefined && focused !== editor,
+    showOverlay: vi.fn((component: Component) => {
+      focused = component
+      return { hide: () => { focused = editor }, focus() {} }
+    }),
+  }
+  Object.assign(ctx, { tui })
+  const editor = new PromptEditor(tui as never, editorTheme(ctx.palette))
+  focused = editor
   editor.focused = true
   wireImageInput(editor, () => ctx)
   const run = (text: string) => importImagePaste(text, { cwd: root, attachments, pending, isCurrent: () => ctx.isCurrent?.() ?? true, onError: ctx.notice as never })
-  return { root, path, pending, saveImages, ctx, editor, run, isCurrent }
+  return { root, path, pending, saveImages, ctx, editor, run, isCurrent, tui }
 }
 
 describe('image path references', () => {
@@ -103,6 +114,156 @@ describe('image imports', () => {
 })
 
 describe('image composer', () => {
+  it('routes queued Enter to the viewer opened after an asynchronous image paste', async () => {
+    const h = await harness(), followup = vi.fn()
+    h.editor.onSubmit = text => { submitDraft(text, h.editor, () => enqueuePrompt({ status: 'idle', followup, steer: vi.fn() }, text, h.pending)) }
+    h.editor.handleInput('@')
+    h.editor.handleInput(paste('"' + h.path + '"'))
+    h.editor.handleInput('\x1bi')
+    h.editor.handleInput('\r')
+    h.editor.handleInput('after preview')
+    await h.editor.whenInputIdle()
+    expect(h.tui.showOverlay).toHaveBeenCalledOnce()
+    expect(h.tui.hasOverlay()).toBe(false)
+    expect(followup).not.toHaveBeenCalled()
+    expect(h.pending).toHaveLength(1)
+    expect(h.editor.getText()).toBe('after preview')
+    h.editor.handleInput('\r')
+    expect(followup).toHaveBeenCalledOnce()
+  })
+
+  it.each(['quoted', 'escaped', 'file-url', 'relative', 'explicit'])('consumes a typed marker before a %s image reference', async kind => {
+    const h = await harness()
+    const references: Record<string, string> = {
+      quoted: '"' + h.path + '"', escaped: h.path.replaceAll(' ', '\\ '),
+      'file-url': pathToFileURL(h.path).href, relative: '"long screenshot 中文.png"',
+      explicit: '@"' + h.path + '"',
+    }
+    h.editor.handleInput('@')
+    h.editor.handleInput(paste(references[kind]!))
+    h.editor.handleInput('describe')
+    await h.editor.whenInputIdle()
+    expect(h.pending).toHaveLength(1)
+    expect(h.editor.getText()).toBe('describe')
+    const lines = h.editor.render(80).map(line => stripTerminalSequences(line).replace(CURSOR_MARKER, ''))
+    expect(lines[1]).toContain('› [Image #1] describe')
+    expect(lines.join('\n')).not.toContain('@')
+  })
+
+  it('uses a typed marker to recognize an unquoted relative image name', async () => {
+    const h = await harness()
+    await writeFile(join(h.root, 'shot.png'), png)
+    h.editor.handleInput('@')
+    h.editor.handleInput(paste('shot.png'))
+    await h.editor.whenInputIdle()
+    expect(h.pending).toHaveLength(1)
+    expect(h.editor.getText()).toBe('')
+  })
+
+  it('consumes a typed attachment marker and closes file completion before the queued Enter', async () => {
+    const h = await harness(), followup = vi.fn()
+    h.editor.setAutocompleteProvider(new TuiAutocompleteProvider({
+      getAgent: () => h.ctx.active.agent, getCommands: () => [], getSkills: async () => [],
+      getFileReferences: () => ({ list: async () => [{ path: 'docs', kind: 'directory' }] }) as never,
+      getSessionReferences: () => undefined,
+    }))
+    h.editor.onSubmit = text => { submitDraft(text, h.editor, () => enqueuePrompt({ status: 'idle', followup, steer: vi.fn() }, text, h.pending)) }
+    h.editor.handleInput('@')
+    await vi.waitFor(() => expect(h.editor.isShowingAutocomplete()).toBe(true))
+    h.editor.handleInput(paste('"' + h.path + '"'))
+    h.editor.handleInput('\r')
+    await h.editor.whenInputIdle()
+    expect(followup).toHaveBeenCalledTimes(1)
+    expect(followup.mock.calls[0]?.[0].content).toMatchObject([{ type: 'image' }])
+    expect(h.editor.getText()).toBe('')
+    expect(h.editor.isShowingAutocomplete()).toBe(false)
+    expect(h.pending).toHaveLength(0)
+  })
+
+  it('preserves a multiline draft and cursor when importing in the middle of a line', async () => {
+    const h = await harness()
+    h.editor.setText('上一行😀\n参考 @ 后文')
+    for (let index = 0; index < 3; index += 1) h.editor.handleInput('\x1b[D')
+    expect(h.editor.getCursor()).toEqual({ line: 1, col: 4 })
+    h.editor.handleInput(paste('"' + h.path + '"'))
+    h.editor.handleInput('说明')
+    await h.editor.whenInputIdle()
+    expect(h.editor.getText()).toBe('上一行😀\n参考 说明 后文')
+    expect(h.editor.getCursor()).toEqual({ line: 1, col: 5 })
+    h.editor.handleInput('\x1f')
+    expect(h.editor.getText()).toBe('上一行😀\n参考  后文')
+    h.editor.handleInput('\x1f')
+    expect(h.editor.getText()).toBe('上一行😀\n参考 @ 后文')
+  })
+
+  it('preserves existing large-paste expansion when consuming the marker', async () => {
+    const h = await harness(), text = 'previous pasted text '.repeat(100)
+    h.editor.handleInput(paste(text))
+    h.editor.handleInput(' @')
+    h.editor.handleInput(paste('"' + h.path + '"'))
+    await h.editor.whenInputIdle()
+    expect(h.editor.getExpandedText()).toBe(text + ' ')
+    h.editor.handleInput('\x1f')
+    expect(h.editor.getExpandedText()).toBe(text + ' @')
+  })
+
+  it.each(['@@', 'user@', '@src/', 'earlier @ mention '])('preserves existing text before the pasted image: %s', async draft => {
+    const h = await harness()
+    h.editor.setText(draft)
+    h.editor.handleInput(paste('"' + h.path + '"'))
+    await h.editor.whenInputIdle()
+    expect(h.pending).toHaveLength(1)
+    expect(h.editor.getText()).toBe(draft)
+  })
+
+  it('retains the marker and exact pasted path when storage fails', async () => {
+    const h = await harness(), text = '"' + h.path + '"'
+    h.saveImages.mockRejectedValueOnce(new Error('storage unavailable'))
+    h.editor.handleInput('@')
+    h.editor.handleInput(paste(text))
+    await h.editor.whenInputIdle()
+    expect(h.editor.getText()).toBe('@' + text)
+    expect(h.pending).toHaveLength(0)
+    expect(h.ctx.notice).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([true, false])('consumes the marker only when the first image succeeds: %s', async firstSucceeds => {
+    const h = await harness(), good = '"' + h.path + '"', bad = '"' + join(h.root, 'missing.png') + '"'
+    h.editor.handleInput('@')
+    h.editor.handleInput(paste(firstSucceeds ? good + ' ' + bad : bad + ' ' + good))
+    await h.editor.whenInputIdle()
+    expect(h.pending).toHaveLength(1)
+    expect(h.editor.getText()).toBe(firstSucceeds ? ' ' + bad : '@' + bad + ' ')
+    expect(h.ctx.notice).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps a typed marker before ordinary pasted text', async () => {
+    const h = await harness()
+    h.editor.handleInput('@')
+    h.editor.handleInput(paste('docs/readme.md'))
+    await h.editor.whenInputIdle()
+    expect(h.editor.getText()).toBe('@docs/readme.md')
+    expect(h.pending).toHaveLength(0)
+  })
+
+  it('does not delete a marker from a changed draft during image storage', async () => {
+    const h = await harness()
+    let finish!: () => void
+    const stored = new Promise<void>(resolve => { finish = resolve })
+    h.saveImages.mockImplementationOnce(async inputs => {
+      await stored
+      return [{ attachmentId: inputs[0]!.name, mediaType: 'image/png' } as never]
+    })
+    h.editor.handleInput('@')
+    h.editor.handleInput(paste('"' + h.path + '"'))
+    await vi.waitFor(() => expect(h.saveImages).toHaveBeenCalledTimes(1))
+    h.editor.setText('new @')
+    finish()
+    await h.editor.whenInputIdle()
+    expect(h.editor.getText()).toBe('new @')
+    expect(h.pending).toHaveLength(1)
+  })
+
   it('orders fragmented paste, continued typing and immediate Enter after image storage', async () => {
     const h = await harness(), followup = vi.fn()
     h.editor.onSubmit = text => { submitDraft(text, h.editor, () => enqueuePrompt({ status: 'idle', followup, steer: vi.fn() }, text, h.pending)) }

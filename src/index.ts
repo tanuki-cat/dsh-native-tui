@@ -71,6 +71,7 @@ export async function apply(ctx: Context, config: TuiConfig): Promise<void> {
     resolved.title = resolveVolatileValue(config.title) ?? 'DeepSeek Harness'
     app?.setDisplayModes(thinking, runCode)
     app?.setMaxEntries(resolveVolatileValue(config.maxTranscriptEntries) ?? 600)
+    app?.setImageThumbnails(resolveVolatileValue(config.showImageThumbnails) ?? false)
     app?.setTitle(resolved.title)
   }
   ctx.inject(['settings'], (child) => {
