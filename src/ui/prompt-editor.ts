@@ -1,4 +1,4 @@
-import { CURSOR_MARKER, Editor, matchesKey, renderFakeCursor, sliceByColumn, stripTerminalSequences, truncateToWidth, visibleWidth, type AutocompleteProvider, type EditorTheme, type TUI, type TuiMouseEvent, type TuiMouseEventResult } from '@earendil-works/pi-tui'
+import { CURSOR_MARKER, Editor, matchesKey, renderFakeCursor, sliceByColumn, stripTerminalSequences, truncateToWidth, visibleWidth, type AutocompleteProvider, type Component, type EditorTheme, type TUI, type TuiMouseEvent, type TuiMouseEventResult } from '@earendil-works/pi-tui'
 import { PasteInput } from './paste-input.js'
 import { selectedRow } from './selection-row.js'
 
@@ -8,6 +8,16 @@ const COMPLETION_CHROME_ROWS = 9
 export interface AttachmentPresentation {
   readonly labels: string
   readonly preview: readonly string[]
+  readonly labelWidths?: readonly number[]
+  readonly targets?: readonly AttachmentTarget[]
+}
+
+export interface AttachmentTarget {
+  readonly index: number
+  readonly row: number
+  readonly column: number
+  readonly width: number
+  readonly height: number
 }
 
 /** A shaded native editor with a display-only prompt in its reserved padding. */
@@ -19,10 +29,12 @@ export class PromptEditor extends Editor {
   private attachmentRows = 0
   private attachmentColumns = 0
   private panelStart = 0
+  private attachmentTargets: readonly AttachmentTarget[] = []
   private readonly pasteInput: PasteInput
   attachmentPresentation?: (width: number, maxRows: number) => AttachmentPresentation | undefined
   onPaste?: (text: string) => string | Promise<string>
   onRemoveAttachment?: () => boolean
+  onPreviewAttachment?: (index: number) => void
   placeholder = ''
 
   constructor(tui: TUI, theme: EditorTheme, private readonly highlightSuggestion = theme.selectList.selectedText,
@@ -44,7 +56,26 @@ export class PromptEditor extends Editor {
 
   cancelPendingInput(): void { this.pasteInput.cancel() }
 
+  /** Consume the imported image's marker without resetting native paste or cursor state. */
+  consumeAttachmentPrefix(draft: string, cursor: { line: number; col: number }): void {
+    const current = this.getCursor()
+    if (this.getText() !== draft || current.line !== cursor.line || current.col !== cursor.col) return
+    if (!/(?:^|\s)@$/u.test(this.getLines()[cursor.line]?.slice(0, cursor.col) ?? '')) return
+    // Native Shift+Backspace bypasses the async input queue and keeps deletion undoable.
+    super.handleInput('\x1b[127;2u')
+    if (this.isShowingAutocomplete()) super.handleInput('\x1b')
+  }
+
   private handleNativeInput(data: string): void {
+    const focused = (this.tui as TUI & { getFocusedComponent?(): Component | null }).getFocusedComponent?.()
+    if (focused != null && focused !== this) {
+      focused.handleInput?.(data)
+      return
+    }
+    if (matchesKey(data, 'alt+i') && this.onPreviewAttachment !== undefined) {
+      this.onPreviewAttachment(0)
+      return
+    }
     if (this.getText() === '' && matchesKey(data, 'backspace') && this.onRemoveAttachment?.()) {
       this.tui.requestRender()
       return
@@ -83,6 +114,16 @@ export class PromptEditor extends Editor {
     this.attachmentRows = extra.length
     const lines = this.renderEditor(width - this.attachmentColumns, width, inline ? labels : '', attachments !== undefined)
     const insertAt = this.panelStart + 1
+    this.attachmentTargets = (attachments?.targets ?? []).map(target => ({ ...target, row: insertAt + target.row }))
+    let column = inline ? this.renderedPadding : 0
+    for (const [index, labelWidth] of (attachments?.labelWidths ?? []).entries()) {
+      const end = Math.min(column + labelWidth, (inline ? this.renderedPadding : 0) + visibleWidth(labels))
+      if (end > column) this.attachmentTargets = [...this.attachmentTargets, {
+        index, row: insertAt + (inline ? extra.length : attachments!.preview.length),
+        column, width: end - column, height: 1,
+      }]
+      column += labelWidth + 1
+    }
     lines.splice(insertAt, 0, ...extra.map(line => {
       // Protocol rows carry their own cell geometry and may include cursor movement.
       if (line.includes('\x1b_G') || line.includes('\x1b]1337;File=')) return line
@@ -133,6 +174,14 @@ export class PromptEditor extends Editor {
   }
 
   override handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    if (event.type === 'click' && event.button === 'left') {
+      const target = this.attachmentTargets.find(target => event.y >= target.row && event.y < target.row + target.height
+        && event.x >= target.column && event.x < target.column + target.width)
+      if (target !== undefined && this.onPreviewAttachment !== undefined) {
+        this.onPreviewAttachment(target.index)
+        return { handled: true, focus: false, render: false }
+      }
+    }
     const previewStart = this.panelStart + 1
     if (event.y >= previewStart && event.y < previewStart + this.attachmentRows) return undefined
     if (event.y >= previewStart) event = { ...event, y: event.y - this.attachmentRows }

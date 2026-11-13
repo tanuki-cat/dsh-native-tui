@@ -86,6 +86,7 @@ describe('terminal setting defaults', () => {
     expect(settingOf('fullscreen').fallback(empty, config)).toBe(false)
     expect(settingOf('title').fallback(empty, config)).toBe('DeepSeek Harness')
     expect(settingOf('showReasoning').fallback(empty, config)).toBe(true)
+    expect(settingOf('showImageThumbnails').fallback(empty, config)).toBe(false)
     expect(settingOf('cwd').fallback(empty, config)).toBe(process.cwd())
     expect(settingOf('sessionId').fallback(empty, config)).toBeUndefined()
     expect(settingOf('agentPreset').fallback(empty, config)).toBeUndefined()
@@ -93,6 +94,21 @@ describe('terminal setting defaults', () => {
 })
 
 describe('applyTuiSettingInput', () => {
+  it('stages thumbnail toggles and restores the disabled default', () => {
+    const draft = new Map<string, TuiStagedValue>()
+    const setting = settingOf('showImageThumbnails')
+    expect(setting).toMatchObject({ kind: 'boolean', apply: 'live', section: 'Display' })
+    expect(applyTuiSettingInput(draft, setting, false, false, 'on')).toBe('on')
+    expect(draft.get(setting.key)).toEqual({ value: true })
+    expect(applyTuiSettingInput(draft, setting, false, false, 'off')).toBe('off')
+    expect(draft.has(setting.key)).toBe(false)
+    expect(applyTuiSettingInput(draft, setting, true, true, 'off')).toBe('off')
+    expect(draft.get(setting.key)).toEqual({ value: false })
+    applyTuiSettingInput(draft, setting, true, true, SETTINGS_RESET)
+    expect(draft.get(setting.key)).toEqual({ unset: true })
+    expect(settingsSaveReceipt([{ setting, staged: { value: true } }])).toBe('Saved TUI settings: showImageThumbnails (live).')
+  })
+
   it('stages a changed choice and returns its display text', () => {
     const draft = new Map<string, TuiStagedValue>()
     const setting = settingOf('thinkingDisplay')

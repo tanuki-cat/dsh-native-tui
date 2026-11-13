@@ -103,6 +103,16 @@ export const TUI_SETTINGS: readonly TuiSetting[] = [
     fallback: () => true,
   },
   {
+    key: 'showImageThumbnails',
+    label: 'Image thumbnails',
+    section: 'Display',
+    description: 'Automatically show staged image thumbnails above the prompt. Off by default; Alt+I still opens images.',
+    apply: 'live',
+    kind: 'boolean',
+    placeholder: 'on | off',
+    fallback: () => false,
+  },
+  {
     key: 'maxTranscriptEntries',
     label: 'Transcript entries',
     section: 'Display',

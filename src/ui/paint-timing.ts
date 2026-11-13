@@ -1,8 +1,8 @@
-import { TuiAltScreen } from '@earendil-works/pi-tui'
+import { ImageAltScreen } from './image-alt-screen.js'
 import { TranscriptMainScreen } from './transcript-main-screen.js'
 
 /** Reports the complete synchronous paint, including layout and terminal writes. */
-export class TimedAltScreen extends TuiAltScreen {
+export class TimedAltScreen extends ImageAltScreen {
   onPaint: ((durationMs: number) => void) | undefined
 
   protected override doRender(): void {

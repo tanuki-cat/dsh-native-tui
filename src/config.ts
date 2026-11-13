@@ -25,6 +25,8 @@ export interface Config {
   cwd?: string | Volatile<string>
   /** Legacy boolean: false hides reasoning unless thinkingDisplay is explicitly set. */
   showReasoning?: boolean | Volatile<boolean>
+  /** Automatically show thumbnails for staged images above the prompt. */
+  showImageThumbnails?: boolean | Volatile<boolean>
   /** Reasoning/thinking block rendering: hidden, compact one-line preview, or detailed. */
   thinkingDisplay?: DisplayConfig
   /** Code-execution tool (run_code/bash/pwsh) block rendering: hidden, compact summary, or detailed arguments/result. */
@@ -46,6 +48,7 @@ export interface ResolvedConfig {
   sessionId: string | undefined
   cwd: string
   showReasoning: boolean
+  showImageThumbnails: boolean
   thinkingDisplay: DisplayMode
   runCodeDisplay: DisplayMode
   maxTranscriptEntries: number
@@ -94,6 +97,9 @@ export const Config = z.object({
   showReasoning: z.boolean().default(true)
     .description('Legacy switch used only while Thinking display is unset. Prefer the Thinking display setting.')
     .volatile(),
+  showImageThumbnails: z.boolean().default(false)
+    .description('Automatically show staged image thumbnails above the prompt. Off by default; Alt+I still opens images. Applies immediately.')
+    .volatile(),
   thinkingDisplay: z.union(['hidden', 'compact', 'detailed'] as const)
     .description('How reasoning blocks render: hidden, a one-line preview, or the full block.')
     .volatile(),
@@ -138,6 +144,7 @@ export function resolveConfig(config: Config | undefined): ResolvedConfig {
     sessionId: resolveVolatileValue(config?.sessionId),
     cwd: resolveVolatileValue(config?.cwd) ?? process.cwd(),
     showReasoning,
+    showImageThumbnails: resolveVolatileValue(config?.showImageThumbnails) ?? false,
     thinkingDisplay: resolveDisplayMode(config?.thinkingDisplay) ?? (showReasoning ? 'detailed' : 'hidden'),
     runCodeDisplay: resolveDisplayMode(config?.runCodeDisplay) ?? 'detailed',
     maxTranscriptEntries: resolveVolatileValue(config?.maxTranscriptEntries) ?? 600,

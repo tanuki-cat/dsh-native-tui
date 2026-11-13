@@ -46,6 +46,7 @@ export async function importImagePaste(
     readonly pending: PendingAttachment[]
     isCurrent(): boolean
     onError(path: string, error: unknown): void
+    onImported?(ref: ImagePathReference): void
   },
 ): Promise<string> {
   const refs = imagePathReferences(text)
@@ -65,6 +66,7 @@ export async function importImagePaste(
       options.pending.push(pending)
       result += text.slice(offset, ref.start)
       offset = ref.end
+      options.onImported?.(ref)
     }
     catch (error) {
       if (!options.isCurrent()) return text

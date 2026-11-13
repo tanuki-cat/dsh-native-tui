@@ -5,6 +5,7 @@ describe('resolveConfig', () => {
   it('applies terminal defaults', () => {
     const config = resolveConfig(undefined)
     expect(config.showReasoning).toBe(true)
+    expect(config.showImageThumbnails).toBe(false)
     expect(config.thinkingDisplay).toBe('detailed')
     expect(config.runCodeDisplay).toBe('detailed')
     expect(config.maxTranscriptEntries).toBe(600)
@@ -38,12 +39,14 @@ describe('resolveConfig', () => {
       sessionId: ref('session-2'),
       cwd: ref('/tmp/volatile'),
       showReasoning: ref(false),
+      showImageThumbnails: ref(true),
       title: ref('Volatile TUI'),
       agentPreset: ref('minimal'),
     })
     expect(config.sessionId).toBe('session-2')
     expect(config.cwd).toBe('/tmp/volatile')
     expect(config.showReasoning).toBe(false)
+    expect(config.showImageThumbnails).toBe(true)
     expect(config.thinkingDisplay).toBe('hidden')
     expect(config.title).toBe('Volatile TUI')
     expect(config.agentPreset).toBe('minimal')
@@ -68,5 +71,9 @@ describe('resolveConfig', () => {
     expect(config.theme).toBe('plain')
     expect(config.agentPreset).toBe('minimal')
     expect(config.title).toBe('TUI')
+  })
+
+  it.each([true, false])('keeps the explicit image thumbnail setting: %s', showImageThumbnails => {
+    expect(resolveConfig({ showImageThumbnails }).showImageThumbnails).toBe(showImageThumbnails)
   })
 })

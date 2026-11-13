@@ -59,6 +59,7 @@ import { pickStoredSession } from './commands/sessions.js'
 export interface TerminalApp {
   setDisplayModes(thinkingDisplay: DisplayMode, runCodeDisplay: DisplayMode): void
   setMaxEntries(maxEntries: number): void
+  setImageThumbnails(enabled: boolean): void
   /** Replace the product title shown in the header and status row. */
   setTitle(title: string): void
   dispose(): Promise<void>
@@ -947,6 +948,11 @@ export async function startTerminalApp(
       if (disposed) return
       renderer.setMaxEntries(maxEntries)
       streamPacer.reset()
+      tui.requestRender()
+    },
+    setImageThumbnails: enabled => {
+      if (disposed || config.showImageThumbnails === enabled) return
+      config.showImageThumbnails = enabled
       tui.requestRender()
     },
     setTitle: next => {

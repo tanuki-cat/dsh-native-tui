@@ -1,6 +1,4 @@
 import {
-  Container,
-  Image,
   Input,
   Markdown,
   Text,
@@ -211,20 +209,6 @@ class TextInputDialog implements Component {
 
   handleInput(data: string): void { this.input.handleInput(data) }
   invalidate(): void { this.input.invalidate() }
-}
-
-/** Frame an arbitrary overlay component with the shared opaque dialog surface. */
-class FramedOverlay implements Component {
-  constructor(
-    private readonly child: Component,
-    private readonly palette: Palette,
-  ) {}
-
-  render(width: number): string[] {
-    return dialogFrame(this.child.render(Math.max(1, width - 4)), width, this.palette)
-  }
-
-  invalidate(): void { this.child.invalidate?.() }
 }
 
 /** Show one keyboard-selected choice. */
@@ -556,60 +540,14 @@ export function showComponentPager(
 }
 
 /** Show an image overlay; Enter or Escape closes it. */
-export function showImagePreview(
+export async function showImagePreview(
   tui: TUI,
   palette: Palette,
   image: ImagePreview,
   signal?: AbortSignal,
 ): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted === true) {
-      resolve()
-      return
-    }
-    let handle: ReturnType<TUI['showOverlay']> | undefined
-    let off: (() => void) | undefined
-    let settled = false
-    const finish = (): void => {
-      if (settled) return
-      settled = true
-      signal?.removeEventListener('abort', onAbort)
-      off?.()
-      handle?.hide()
-      resolve()
-    }
-    const onAbort = (): void => { finish() }
-    try {
-      const container = new Container()
-      container.addChild(new Text(
-        palette.bold('Image · ' + sanitizeTerminalText(image.name) + ' · ' + sanitizeTerminalText(image.mediaType) + ' · ' + String(image.bytes) + ' bytes'),
-        0,
-        0,
-      ))
-      container.addChild(new Image(image.base64, image.mediaType, {
-        fallbackColor: text => palette.dim(text),
-      }, {
-        filename: sanitizeTerminalText(image.name),
-        maxWidthCells: 76,
-        maxHeightCells: 30,
-      }))
-      container.addChild({ render: width => new Text(palette.dim('Enter/Esc closes'), 0, 0).render(width), invalidate: () => {} })
-      off = tui.addInputListener((data) => {
-        if (data === String.fromCharCode(27) || data === '\r' || data === '\n') {
-          finish()
-          return { consume: true }
-        }
-        return undefined
-      })
-      handle = tui.showOverlay(new FramedOverlay(container, palette), { width: 80, maxHeight: '85%', anchor: 'center' })
-      handle.focus()
-    } catch (error) {
-      off?.()
-      reject(error)
-      return
-    }
-    bindAbort(signal, onAbort)
-  })
+  const { showImageViewer } = await import('./image-viewer.js')
+  await showImageViewer(tui, palette, [{ name: image.name, load: async () => image }], 0, signal)
 }
 
 /** Present the exact pending call; inspecting its arguments never grants approval. */

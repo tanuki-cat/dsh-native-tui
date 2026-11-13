@@ -10,6 +10,9 @@ import { fileURLToPath } from 'node:url'
 import { crc32, deflateSync } from 'node:zlib'
 
 const repo = dirname(dirname(fileURLToPath(import.meta.url)))
+const protocols = process.argv.slice(2)
+if (protocols.length === 0) protocols.push('none', 'kitty', 'iterm2')
+assert.ok(protocols.every(protocol => ['none', 'kitty', 'iterm2'].includes(protocol)), 'protocols must be none, kitty, or iterm2')
 const root = mkdtempSync(join(tmpdir(), 'native-tui-image-input-'))
 const pngChunk = (type, data) => {
   const size = Buffer.alloc(4), crc = Buffer.alloc(4), body = Buffer.concat([Buffer.from(type), data])
@@ -47,8 +50,7 @@ const server = createServer((req, res) => {
 async function run(fullscreen, protocol) {
   requests.length = 0
   const label = (fullscreen ? 'fullscreen' : 'main-screen') + '-' + protocol
-  // pi-tui disables iTerm2 images in the alternate screen because they cannot be placed reliably.
-  const supportsThumbnails = protocol !== 'none' && !(fullscreen && protocol === 'iterm2')
+  const supportsThumbnails = protocol !== 'none'
   const home = join(root, label), profile = join(home, 'profiles/tui'), workspace = join(home, 'workspace'), log = join(home, 'frames.jsonl')
   mkdirSync(join(profile, 'node_modules'), { recursive: true })
   for (const dir of [workspace, join(home, 'agents'), join(home, 'bundled')]) mkdirSync(dir)
@@ -68,7 +70,7 @@ async function run(fullscreen, protocol) {
   const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !/KEY|TOKEN|SECRET|CREDENTIAL/.test(key))),
     DSH_HOME: home, DSH_AGENTS_HOME: join(home, 'agents'), DSH_BUNDLED_SKILL_DIR: join(home, 'bundled'),
     MOCK_API_KEY: 'dummy', TERM: 'xterm-256color', FAKE_TTY_IMAGE_PROTOCOL: protocol,
-    FAKE_TTY_COLUMNS: '100', FAKE_TTY_GEOMETRY_LOG: log, FAKE_TTY_FRAME_SNAPSHOT: '1' }
+    FAKE_TTY_COLUMNS: '100', FAKE_TTY_GEOMETRY_LOG: log, FAKE_TTY_FRAME_SNAPSHOT: '1', FAKE_TTY_TRACE_OVERLAYS: '1' }
   delete env.DSH_PERMISSION_MODE; delete env.DSH_TOOLS_MODE
   const child = spawn(process.execPath, ['--import', join(repo, 'scripts/fake-tty-chrome-trace.mjs'), join(repo, 'scripts/fake-tty-entry.mjs'), '--profile', 'tui'],
     { cwd: workspace, env, stdio: ['pipe', 'pipe', 'pipe'] })
@@ -79,7 +81,8 @@ async function run(fullscreen, protocol) {
   const waitFor = async (predicate, stage) => {
     const until = Date.now() + 20_000
     while (!predicate(strip(out), frames())) {
-      if (Date.now() > until || child.exitCode !== null || child.signalCode !== null) throw new Error(label + ': ' + stage + ' failed')
+      if (Date.now() > until || child.exitCode !== null || child.signalCode !== null) throw new Error(label + ': ' + stage
+        + ' failed (exit=' + child.exitCode + ', signal=' + child.signalCode + ', stdout=' + out.length + ', stderr=' + err.length + ')')
       await new Promise(resolve => setTimeout(resolve, 40))
     }
   }
@@ -87,10 +90,70 @@ async function run(fullscreen, protocol) {
   const thumbnail = line => protocol === 'kitty' ? line.includes('\x1b_G') : line.includes('\x1b]1337;File=')
   const hasThumbnail = frame => frame.rawLines.some(thumbnail)
   const paste = text => child.stdin.write('\x1b[200~' + text + '\x1b[201~')
+  const openAttachmentMenu = async () => {
+    const start = frames().length
+    child.stdin.write('@')
+    await waitFor((_text, records) => records.slice(start).some(frame =>
+      frame.lines.some(line => line.startsWith('› @')) && frame.lines.some(line => line.includes('package.json'))), 'typed attachment marker menu')
+  }
+  const waitForViewer = async (start, number, total) => {
+    await waitFor((_text, records) => records.slice(start).some(frame => frame.overlay
+      && frame.lines.some(line => line.includes('Image · ' + number + '/' + total))
+      && frame.lines.some(line => line.includes('image/png'))), 'image viewer ' + number + '/' + total)
+    const frame = recordsWithViewer(number, total).at(-1)
+    if (supportsThumbnails) {
+      const line = frame.rawLines.find(thumbnail)
+      assert.ok(line?.includes(png.toString('base64')), 'viewer preserves the full image protocol payload')
+    }
+    else assert.ok(!frame.rawLines.some(thumbnail), 'viewer keeps text fallback without an image protocol')
+  }
+  const recordsWithViewer = (number, total) => frames().filter(frame => frame.overlay
+    && frame.lines.some(line => line.includes('Image · ' + number + '/' + total)))
+  const thumbnailSetting = () => /^\s+showImageThumbnails:\s*(true|false)\s*$/mu.exec(readFileSync(join(profile, 'cordis.patch.yml'), 'utf8'))?.[1]
+  const setThumbnails = async enabled => {
+    const offset = frames().length
+    child.stdin.write('/settings\r')
+    await waitFor((_text, records) => records.slice(offset).some(frame => frame.overlay
+      && frame.lines.some(line => line.includes('TUI settings'))), 'thumbnail settings page')
+    let start = frames().length
+    child.stdin.write('image thumbnails')
+    await waitFor((_text, records) => records.slice(start).some(frame => frame.lines.some(line => line.includes('› Image thumbnails'))), 'find thumbnail setting')
+    start = frames().length
+    child.stdin.write('\r')
+    await waitFor((_text, records) => records.slice(start).some(frame => frame.lines.some(line => line.includes('Use default'))), 'thumbnail setting choices')
+    start = frames().length
+    // The submenu preselects the current value: off -> on goes up, on -> off goes down.
+    child.stdin.write(enabled ? '\x1b[A' : '\x1b[B')
+    child.stdin.write('\r')
+    await waitFor((_text, records) => records.slice(start).some(frame => frame.lines.some(line => line.includes('TUI settings · 1 pending change'))), 'stage thumbnail setting')
+    start = frames().length
+    child.stdin.write('\x15')
+    child.stdin.write('save')
+    await waitFor((_text, records) => records.slice(start).some(frame => frame.lines.some(line => line.includes('› Save and apply'))), 'find settings save action')
+    start = frames().length
+    child.stdin.write('\r')
+    await waitFor((_text, records) => records.slice(start).some(frame => frame.lines.some(line => line.includes('Save TUI settings'))), 'confirm settings save')
+    start = frames().length
+    const saving = out.length
+    child.stdin.write('\r')
+    await waitFor((_text, records) => {
+      const frame = records.at(-1)
+      return strip(out.slice(saving)).includes('Saved TUI settings: showImageThumbnails (live).')
+        && thumbnailSetting() === String(enabled) && records.length > start && frame !== undefined && !frame.overlay
+        && frame.lines.some(line => line.startsWith('› [Image #1]')) && (enabled || !hasThumbnail(frame))
+    }, 'thumbnail setting saved and applied live')
+  }
   try {
     await waitFor(text => text.includes('enter send'), 'startup')
-    paste('@"' + imagePath + '"')
+    await openAttachmentMenu()
+    paste('"' + imagePath + '"')
     await waitFor((_text, records) => imageFrames(records).some(frame => frame.lines.some(line => line.includes('[Image #1]'))), 'first image chip')
+    const imported = imageFrames(frames()).at(-1)
+    assert.ok(imported.lines.some(line => line.trimEnd() === '› [Image #1]'), 'successful import consumes the typed marker')
+    assert.ok(!imported.lines.some(line => line.includes('package.json')), 'successful import closes file completion')
+    assert.ok(!hasThumbnail(imported), 'image thumbnails are disabled by default')
+    assert.equal(thumbnailSetting(), undefined, 'the initial profile does not override the default')
+    await setThumbnails(true)
     if (supportsThumbnails) {
       await waitFor((_text, records) => imageFrames(records).some(hasThumbnail), 'automatic thumbnail')
       const frame = imageFrames(frames()).find(hasThumbnail)
@@ -98,10 +161,30 @@ async function run(fullscreen, protocol) {
       const inputRow = frame.lines.findLastIndex(line => line.startsWith('› [Image #'))
       assert.ok(imageRow < inputRow, 'thumbnail precedes the text input inside the composer')
       const line = frame.rawLines[imageRow]
-      if (protocol === 'kitty') assert.match(line, /c=4,r=2(?:,|;)/)
-      else assert.ok(line.includes('width=4;'), 'iTerm2 thumbnail is bounded to four cells')
+      if (protocol === 'kitty') assert.match(line, /c=8,r=4(?:,|;)/)
+      else assert.ok(line.includes('width=8;'), 'iTerm2 thumbnail is bounded to eight cells')
     }
     let offset = frames().length
+    child.stdin.write('preview draft')
+    child.stdin.write('\x1bi')
+    await waitForViewer(offset, 1, 1)
+    offset = frames().length
+    child.stdin.write('\x1b')
+    await waitFor((_text, records) => records.slice(offset).some(frame => !frame.overlay
+      && frame.lines.some(line => line.startsWith('› [Image #1] preview draft'))), 'return to the unchanged draft')
+    assert.equal(requests.length, 0, 'previewing never sends a model request')
+    // Escape clears the text draft after the viewer has returned keyboard focus.
+    child.stdin.write('\x1b')
+    await waitFor((_text, records) => records.slice(offset).some(frame => !frame.overlay
+      && frame.lines.some(line => line.trimEnd() === '› [Image #1]')), 'clear preview draft')
+    await setThumbnails(false)
+    assert.ok(!hasThumbnail(frames().at(-1)), 'disabling thumbnails removes the displayed picture')
+    // The scripted settings path shares the same live-update bridge as the guided settings page.
+    offset = frames().length
+    child.stdin.write('/settings set native-tui {"showImageThumbnails":true}\r')
+    await waitFor((_text, records) => thumbnailSetting() === 'true' && records.slice(offset).some(frame => !frame.overlay
+      && frame.lines.some(line => line.startsWith('› [Image #1]')) && (!supportsThumbnails || hasThumbnail(frame))), 'scripted thumbnail enable applies live')
+    offset = frames().length
     child.stdin.write('\x7f')
     await waitFor((_text, records) => records.slice(offset).some(frame => imageFrames([frame]).length === 0 && !frame.status.includes('1 attached')), 'backspace removal')
     assert.ok(!hasThumbnail(frames().at(-1)), 'removal clears the thumbnail')
@@ -109,10 +192,32 @@ async function run(fullscreen, protocol) {
     paste('@"' + imagePath + '" @"' + imagePath + '"')
     await waitFor((_text, records) => imageFrames(records.slice(offset)).some(frame => frame.lines.some(line => line.includes('[Image #1] [Image #2]'))), 'two image chips')
     if (supportsThumbnails) await waitFor((_text, records) => records.slice(offset).some(frame => frame.rawLines.filter(thumbnail).length === 2), 'two thumbnails')
+    offset = frames().length
+    if (fullscreen) {
+      const frame = frames().at(-1)
+      const position = '15;' + String(frame.editorRow + 1)
+      child.stdin.write('\x1b[<0;' + position + 'M\x1b[<0;' + position + 'm')
+      await waitForViewer(offset, 2, 2)
+      offset = frames().length
+      child.stdin.write('\x1b[D')
+      await waitForViewer(offset, 1, 2)
+    } else {
+      child.stdin.write('\x1bi')
+      await waitForViewer(offset, 1, 2)
+    }
+    offset = frames().length
+    child.stdin.write('\x1b[C')
+    await waitForViewer(offset, 2, 2)
+    offset = frames().length
+    child.stdin.write('\r')
+    await waitFor((_text, records) => records.slice(offset).some(frame => !frame.overlay
+      && frame.lines.some(line => line.includes('[Image #1] [Image #2]'))), 'close viewer without sending images')
+    assert.equal(requests.length, 0, 'Enter closes the viewer without submitting the composer')
     child.stdin.write('/attach clear\r')
     await waitFor(text => text.includes('Cleared 2 staged'), 'clear images')
+    await openAttachmentMenu()
     // Enter follows the paste without waiting for attachment persistence.
-    paste('@"' + imagePath + '"')
+    paste('"' + imagePath + '"')
     child.stdin.write('describe this image\r')
     await waitFor((_text, records) => records.some(frame => frame.status.includes('Ready') && frame.lines.some(line => line.includes('IMAGE INPUT RECEIVED'))), 'image answer')
     const hasHistoryImage = records => records.some(frame => imageFrames([frame]).length === 0 && frame.lines.some(line => line.includes('[Image #1]')))
@@ -125,10 +230,12 @@ async function run(fullscreen, protocol) {
     }
     const records = frames(), chips = imageFrames(records)
     assert.ok(chips.length > 0)
-    assert.ok(chips.every(frame => !frame.lines.some(line => line.includes('long-private-path-'))), 'pasted paths must stay out of rendered input')
+    assert.ok(chips.every(frame => !frame.lines.some(line => line.startsWith('› ') && line.includes('long-private-path-'))), 'pasted paths must stay out of rendered input')
     assert.ok(records.every(frame => !frame.overflow), 'all rendered rows fit')
     assert.ok(hasHistoryImage(records), 'user message retains its numbered image label')
     const input = requests.flatMap(body => body.input ?? [])
+    assert.ok(input.filter(item => item.role === 'user').flatMap(item => item.content ?? [])
+      .some(block => block.type === 'input_text' && block.text === 'describe this image'), 'the model receives the draft without a stray marker')
     const images = input.flatMap(item => item.content ?? []).filter(block => block.type === 'input_image')
     assert.equal(images.length, 1, 'removed and cleared attachments must not be sent')
     assert.ok(images[0].image_url.startsWith('data:image/png;base64,'))
@@ -137,10 +244,24 @@ async function run(fullscreen, protocol) {
     assert.equal(imageFrames([records.at(-1)]).length, 0, 'accepted submission clears the composer chips')
     assert.ok(!hasThumbnail(records.at(-1)), 'accepted submission clears the thumbnail')
     if (!supportsThumbnails) assert.ok(!records.some(frame => frame.rawLines.some(line => line.includes('\x1b_G') || line.includes('\x1b]1337;File='))))
+    if (fullscreen && protocol === 'iterm2') {
+      const paints = [...out.matchAll(/\x1b\[\?2026h([\s\S]*?)\x1b\[\?2026l/gu)]
+        .map(match => match[1]).filter(paint => paint.includes('\x1b]1337;File='))
+      assert.ok(paints.length > 0, 'fullscreen iTerm2 actually writes image payloads to the terminal')
+      for (const paint of paints) {
+        const firstImage = paint.indexOf('\x1b]1337;File=')
+        assert.ok(paint.lastIndexOf('\x1b[2K') < firstImage, 'all text clears precede image output')
+        assert.match(paint, /\x1b7\x1b\[\d+;\d+H\x1b\]1337;File=/, 'images use final absolute coordinates')
+        assert.ok(paint.endsWith('\x1b8'), 'image painting restores the editor cursor')
+        assert.ok(!paint.includes('height=auto'), 'fullscreen image height stays within its reserved rows')
+      }
+    }
     child.stdin.write('\x04')
     const [code, signal] = await closed
     assert.equal(code, 0); assert.equal(signal, null)
-    console.log(label, 'PASS', JSON.stringify({ chipFrames: chips.length, thumbnails: records.filter(hasThumbnail).length, imagesSent: images.length, originalBytes: true, overflow: false }))
+    console.log(label, 'PASS', JSON.stringify({ chipFrames: chips.length, thumbnails: records.filter(hasThumbnail).length,
+      thumbnailsDefaultOff: true, settingsToggledLive: true, viewer: true, gallery: true, mouse: fullscreen, draftRestored: true,
+      imagesSent: images.length, originalBytes: true, consumedAtMarker: true, completionClosed: true, overflow: false }))
   } catch (error) {
     child.kill('SIGTERM'); await closed
     console.error(label, strip(out).slice(-5000), err.slice(-2500))
@@ -150,11 +271,11 @@ async function run(fullscreen, protocol) {
 
 try {
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
-  for (const protocol of ['none', 'kitty', 'iterm2']) {
+  for (const protocol of protocols) {
     await run(false, protocol)
     await run(true, protocol)
   }
-  console.log('RESULT PASS 6 configurations')
+  console.log('RESULT PASS ' + String(protocols.length * 2) + ' configurations')
 } finally {
   server.closeAllConnections()
   await new Promise(resolve => server.close(resolve))
