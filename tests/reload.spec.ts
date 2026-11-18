@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { assertResumed, clearReloadSession, peekReloadSession, rememberReloadSession, reloadArgs, resumeIdFromEnv } from '../src/runtime/reload.js'
+import {
+  assertResumed,
+  clearReloadSession,
+  peekReloadSession,
+  RELOAD_SESSION_TTL_MS,
+  rememberReloadSession,
+  reloadArgs,
+  resumeIdFromEnv,
+} from '../src/runtime/reload.js'
 
 describe('reload arguments', () => {
   it('keeps launcher flags and appends the current session', () => {
@@ -55,5 +63,22 @@ describe('in-process reload handoff', () => {
     expect(peekReloadSession()).toBe('native-tui-b')
     clearReloadSession()
     expect(peekReloadSession()).toBeUndefined()
+  })
+
+  it('refuses a handoff older than its window instead of resuming it later', () => {
+    clearReloadSession()
+    rememberReloadSession('native-tui-a', 1_000)
+    expect(peekReloadSession(RELOAD_SESSION_TTL_MS, 2_000)).toBe('native-tui-a')
+    expect(peekReloadSession(RELOAD_SESSION_TTL_MS, 1_000 + RELOAD_SESSION_TTL_MS + 1)).toBeUndefined()
+    // The stale claim is gone, so a still-current read finds nothing either.
+    expect(peekReloadSession(RELOAD_SESSION_TTL_MS, 2_000)).toBeUndefined()
+  })
+
+  it('keeps a retry inside the window working', () => {
+    clearReloadSession()
+    rememberReloadSession('native-tui-a', 5_000)
+    expect(peekReloadSession(RELOAD_SESSION_TTL_MS, 6_000)).toBe('native-tui-a')
+    expect(peekReloadSession(RELOAD_SESSION_TTL_MS, 7_000)).toBe('native-tui-a')
+    clearReloadSession()
   })
 })

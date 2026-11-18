@@ -75,9 +75,21 @@ export function assertResumed(requested: string | undefined, actual: string): vo
 /** Process-global slot an in-place plugin replacement reads back. */
 const RELOAD_SESSION = Symbol.for('dsh-native-tui.reload-session')
 
+/**
+ * How long a handoff stays valid.
+ *
+ * A replacement that fails to mount can be retried moments later and must still
+ * find the Session on screen. A plugin that is re-enabled hours afterwards must
+ * not silently reopen a conversation the operator has long left — that is a new
+ * launch, and it belongs on whatever Session it asks for.
+ */
+export const RELOAD_SESSION_TTL_MS = 60_000
+
 /** The Session a replacement must reopen; the symbol slot survives module replacement. */
 interface ReloadSessionSlot {
   sessionId?: string
+  /** Wall clock of the handoff, so a stale claim can be refused. */
+  handedOffAt?: number
 }
 
 function reloadSessionSlot(): ReloadSessionSlot {
@@ -94,20 +106,37 @@ function reloadSessionSlot(): ReloadSessionSlot {
  * The slot lives on `globalThis` because the replacement is a new module
  * instance in the same process.
  * @param sessionId - Session currently displayed by the terminal.
+ * @param now - clock the handoff is stamped with, injectable for tests.
  */
-export function rememberReloadSession(sessionId: string): void {
-  reloadSessionSlot().sessionId = sessionId
+export function rememberReloadSession(sessionId: string, now = Date.now()): void {
+  const slot = reloadSessionSlot()
+  slot.sessionId = sessionId
+  slot.handedOffAt = now
 }
 
 /**
  * Read the Session a replacement must reopen, without consuming it.
+ *
+ * A handoff older than {@link RELOAD_SESSION_TTL_MS} is discarded instead of
+ * returned: the plugin may be enabled again long after the replacement died, and
+ * that launch must not resume a Session nobody asked for.
+ * @param maxAgeMs - how long a handoff may stand.
+ * @param now - clock the handoff age is measured with, injectable for tests.
  * @returns the remembered Session id, or undefined when none is pending.
  */
-export function peekReloadSession(): string | undefined {
-  return reloadSessionSlot().sessionId
+export function peekReloadSession(maxAgeMs = RELOAD_SESSION_TTL_MS, now = Date.now()): string | undefined {
+  const slot = reloadSessionSlot()
+  if (slot.sessionId === undefined) return undefined
+  if (slot.handedOffAt !== undefined && now - slot.handedOffAt > maxAgeMs) {
+    clearReloadSession()
+    return undefined
+  }
+  return slot.sessionId
 }
 
 /** Drop the remembered Session once a replacement has opened it. */
 export function clearReloadSession(): void {
-  delete reloadSessionSlot().sessionId
+  const slot = reloadSessionSlot()
+  delete slot.sessionId
+  delete slot.handedOffAt
 }
