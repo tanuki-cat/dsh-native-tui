@@ -27,20 +27,27 @@ function request(controller: AbortController, command = 'git status', type = 'to
 function details(overlay: Overlay) { for (let i = 0; i < 3; i++) overlay.handleInput('\x1b[B'); overlay.handleInput('\r') }
 
 describe('approval previews and details', () => {
-  it('numbers actions and requires Enter after a number focuses the selection', async () => {
+  it('opens on the fail-closed row so a stray Enter rejects', async () => {
     const h = harness(), controller = new AbortController()
     const running = showApproval(h.tui as never, palette, request(controller, 'git status'))
     const text = h.overlays[0]!.render(80).join('\n')
-    expect(text).toContain('1. Allow once')
-    expect(text).toContain('2. Reject')
+    expect(text).toContain('1. Reject')
+    expect(text).toContain('2. Allow once')
     expect(text).toContain('3. Cancel')
+    h.overlays[0]!.handleInput('\r')
+    expect(await running).toBe('rejected')
+  })
+
+  it('numbers actions and requires Enter after a number focuses the selection', async () => {
+    const h = harness(), controller = new AbortController()
+    const running = showApproval(h.tui as never, palette, request(controller, 'git status'))
     let settled = false
     void running.then(() => { settled = true })
     h.overlays[0]!.handleInput('2')
     await flush()
     expect(settled).toBe(false)
     h.overlays[0]!.handleInput('\r')
-    expect(await running).toBe('rejected')
+    expect(await running).toBe('allowed-once')
   })
   it.each(['tool/call', 'tool/ptc-dispatch-start'])('shows the actual %s command while keeping all choices visible', async type => {
     const h = harness(), controller = new AbortController()
@@ -75,7 +82,8 @@ describe('approval previews and details', () => {
     expect(settled).toBe(false)
     viewer.handleInput('\x1b'); await flush()
     expect(h.overlays).toHaveLength(3)
-    h.overlays[2]!.handleInput('\x1b[B'); h.overlays[2]!.handleInput('\r')
+    expect(h.overlays[2]!.render(80).join('\n')).toContain('1. Reject')
+    h.overlays[2]!.handleInput('\r')
     expect(await running).toBe('rejected')
     expect(h.hide).toHaveBeenCalledTimes(3)
   })

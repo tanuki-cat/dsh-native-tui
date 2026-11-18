@@ -157,7 +157,8 @@ try {
       answered = true; child.stdin.write('\x1b[B\r'); return
     }
     if (!answered && task.approval && fresh.includes('Approval required')) {
-      answered = true; child.stdin.write('\x1b[B\r'); return
+      // Every approval task here expects rejection, which is the list's default row.
+      answered = true; child.stdin.write('\r'); return
     }
     if (!answered && task.review && fresh.includes('Approve this plan and leave plan mode?')) {
       answered = true; child.stdin.write(task.review === 'keep' ? '\x1b[B\r' : '\r'); return

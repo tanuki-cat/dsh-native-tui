@@ -62,11 +62,12 @@ describe('dialog frame', () => {
       for (const key of keys) component!.handleInput(key)
       return { outcome: await promise, rendered }
     }
-    await expect(run(['\r'])).resolves.toMatchObject({ outcome: 'allowed-once' })
-    const rejected = await run(['\x1b[B', '\r'])
-    expect(rejected.outcome).toBe('rejected')
-    expect(rejected.rendered).toContain('Approval required · run_code')
-    expect(rejected.rendered).toContain('Write outside workspace')
+    // Enter confirms the row the list opens on, which is the fail-closed one.
+    await expect(run(['\r'])).resolves.toMatchObject({ outcome: 'rejected' })
+    const allowed = await run(['\x1b[B', '\r'])
+    expect(allowed.outcome).toBe('allowed-once')
+    expect(allowed.rendered).toContain('Approval required · run_code')
+    expect(allowed.rendered).toContain('Write outside workspace')
     // The dialog offers an explicit Cancel row; Esc settles the same outcome.
     const cancelled = await run(['\x1b[B', '\x1b[B', '\r'])
     expect(cancelled.outcome).toBe('cancelled')

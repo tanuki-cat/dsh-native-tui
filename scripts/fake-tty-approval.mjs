@@ -12,6 +12,9 @@
  *   cancel-row -> the explicit Cancel row denies the call as cancelled
  *   cancel-esc -> Esc denies the call as cancelled
  *
+ * The overlay lists Reject first, so it opens on the fail-closed row and every
+ * permissive answer is an explicit move away from it.
+ *
  * One-time setup (installs this repo's current build into a scratch home):
  *   pnpm pack --pack-destination .tmp
  *   DSH_HOME=/tmp/dsh-native-tui-approval-home dsh plugin --profile tui add .tmp/dsh-native-tui-0.2.1-rc.2.tgz
@@ -141,11 +144,11 @@ async function runMode(mode) {
         phase = 'answered'
         setTimeout(() => {
           try {
-            if (mode === 'allow') child.stdin.write('\r')
-            else if (mode === 'reject') {
+            if (mode === 'allow') {
               child.stdin.write('\x1b[B')
               setTimeout(() => { try { child.stdin.write('\r') } catch {} }, 250)
             }
+            else if (mode === 'reject') child.stdin.write('\r')
             else if (mode === 'cancel-row') {
               child.stdin.write('\x1b[B')
               setTimeout(() => { try { child.stdin.write('\x1b[B') } catch {} }, 250)

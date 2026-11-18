@@ -85,11 +85,11 @@ try {
     if (phase === 'mode' && fresh.includes('Mode: accept edits')) { baseline = text.length; input('DETAILSPROBE:reject\r'); phase = 'mcp'; return }
     if (phase === 'mcp' && fresh.includes('Approval required')) {
       checks.mcpPreview = fresh.includes('mcp fixture.lookup src/mcp-target.ts')
-      input('\r'); baseline = text.length; phase = 'todo'; return
+      input('\x1b[B\r'); baseline = text.length; phase = 'todo'; return
     }
     if (phase === 'todo' && fresh.includes('Approval required')) {
       checks.todoPreview = fresh.includes('todo_write 2 tasks') && fresh.includes('src/task-target.ts')
-      input('\r'); baseline = text.length; phase = 'bash'; return
+      input('\x1b[B\r'); baseline = text.length; phase = 'bash'; return
     }
     if (phase === 'bash' && fresh.includes('Approval required')) {
       checks.bashPreview = fresh.includes('bash printf TOOL_DETAILS_DENIED') && !fresh.includes('DESCRIPTION_IS_NOT_THE_COMMAND')
@@ -100,7 +100,8 @@ try {
       checks.fullDetails = true; checks.inspectionHasNoEffect = !existsSync(deniedFile)
       baseline = text.length; input('\x1b'); phase = 'reject'; return
     }
-    if (phase === 'reject' && fresh.includes('Approval required')) { input('\x1b[B\r'); baseline = text.length; phase = 'rejected'; return }
+    // Reject leads the list, so Enter fails the call closed.
+    if (phase === 'reject' && fresh.includes('Approval required')) { input('\r'); baseline = text.length; phase = 'rejected'; return }
     if (phase === 'rejected' && fresh.includes('DONE reject') && fresh.lastIndexOf('enter send') > fresh.lastIndexOf('DONE reject')) {
       checks.rejection = !existsSync(deniedFile) && /rejected/i.test(results.get('reject') ?? '')
       checks.skillSummary = text.includes('└ Skill fixture-alpha') && text.includes('    Skill fixture-beta')
@@ -109,7 +110,7 @@ try {
     }
     if (phase === 'allow' && fresh.includes('Approval required')) {
       checks.allowedPreview = fresh.includes('bash printf TOOL_DETAILS_ALLOWED')
-      input('\r'); baseline = text.length; phase = 'allowed'; return
+      input('\x1b[B\r'); baseline = text.length; phase = 'allowed'; return
     }
     if (phase === 'allowed' && fresh.includes('DONE allow') && fresh.lastIndexOf('enter send') > fresh.lastIndexOf('DONE allow')) {
       checks.allowEffect = existsSync(allowedFile) && readFileSync(allowedFile, 'utf8') === 'TOOL_DETAILS_ALLOWED'

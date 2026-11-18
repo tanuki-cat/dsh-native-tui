@@ -155,7 +155,8 @@ const tick = setInterval(() => {
   const text = strip(out)
   if (!approved && text.includes('Approval required')) {
     approved = true
-    try { child.stdin.write('\r') } catch {}
+    // Reject leads the approval list; one step down selects Allow once.
+    try { child.stdin.write('\x1b[B\r') } catch {}
   }
   if (phase === 'editor' && text.includes('enter send')) {
     phase = 'model'
