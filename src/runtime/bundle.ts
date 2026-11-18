@@ -1,13 +1,24 @@
-import { readFile, stat, writeFile } from 'node:fs/promises'
-import { basename, resolve } from 'node:path'
+import { createRequire } from 'node:module'
+import { readFile, realpath, stat, writeFile } from 'node:fs/promises'
+import { basename, isAbsolute, relative, resolve, sep } from 'node:path'
+import { Worker } from 'node:worker_threads'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import { strToU8, zipSync } from 'fflate'
+import { debug } from '../debug.js'
 
 /** Maximum attachment bytes included in one terminal ZIP bundle. */
 export const MAX_BUNDLE_ATTACHMENT_BYTES = 64 * 1024 * 1024
 /** Maximum bytes copied for one presented deliverable. */
 export const MAX_BUNDLE_DELIVERABLE_BYTES = 16 * 1024 * 1024
+/**
+ * Maximum bytes all presented deliverables may add to one bundle.
+ *
+ * The per-file cap bounds one deliverable but not their sum, so a session that
+ * presented many large files used to grow the archive without limit — and the
+ * compressor holds every payload in memory until the archive is written.
+ */
+export const MAX_BUNDLE_DELIVERABLE_TOTAL_BYTES = 32 * 1024 * 1024
 
 interface ImageRefLike {
   readonly attachmentId: string
@@ -128,6 +139,77 @@ async function collectFile(stream: AsyncIterable<Uint8Array>, maxBytes: number):
   return joined
 }
 
+/** Entry point the compression worker loads; resolved once per process. */
+const FFLATE_ENTRY = createRequire(import.meta.url).resolve('fflate')
+
+/**
+ * Worker entry that compresses the whole archive in one background thread.
+ *
+ * fflate's asynchronous `zip` starts a worker per entry of 160 KB or more, so a
+ * bundle with many attachments spawned one thread and one buffer copy each. One
+ * dedicated worker keeps the event loop free without that fan-out.
+ */
+const COMPRESSION_WORKER = `
+const { parentPort, workerData } = require('node:worker_threads')
+const { zipSync } = require(workerData.fflate)
+const files = {}
+for (const [name, bytes] of workerData.files) files[name] = bytes
+parentPort.postMessage(zipSync(files, { level: 6 }))
+`
+
+/**
+ * Compress the bundle off the event loop.
+ *
+ * The terminal's frame loop and the model-stream reader share one event loop, so
+ * a synchronous deflate of tens of megabytes freezes both for the length of the
+ * archive. Compression therefore runs in one worker, and a runtime that cannot
+ * start one falls back to the synchronous path on the intact caller buffers.
+ * @param files - archive entries by path.
+ * @returns the finished ZIP archive.
+ */
+async function compressBundle(files: Record<string, Uint8Array>): Promise<Uint8Array> {
+  try {
+    return await new Promise<Uint8Array>((resolveArchive, rejectArchive) => {
+      const worker = new Worker(COMPRESSION_WORKER, {
+        eval: true,
+        workerData: { fflate: FFLATE_ENTRY, files: Object.entries(files) },
+      })
+      let settled = false
+      /** Stop the worker once, and report its outcome only once. */
+      const settle = (error: Error | undefined, archive?: Uint8Array): void => {
+        if (settled) return
+        settled = true
+        void worker.terminate()
+        if (error === undefined) resolveArchive(archive as Uint8Array)
+        else rejectArchive(error)
+      }
+      worker.once('message', (archive: Uint8Array) => { settle(undefined, archive) })
+      worker.once('error', error => { settle(error) })
+      // An exit without a message means the archive never arrived; the buffers
+      // are still intact because the worker received copies.
+      worker.once('exit', code => { settle(new Error('bundle compression worker exited with code ' + String(code))) })
+    })
+  }
+  catch (error) {
+    // A runtime that cannot start the worker still has to produce a bundle; the
+    // opt-in debug trace is where a failing worker becomes visible.
+    debug('bundle compression fell back to the main thread: '
+      + (error instanceof Error ? error.message : String(error)))
+    return zipSync(files, { level: 6 })
+  }
+}
+
+/**
+ * Whether an absolute path lies outside a directory.
+ * @param root - absolute directory the bundle may carry files from.
+ * @param path - absolute path to test.
+ * @returns true when the path is the root's parent, a sibling, or on another drive.
+ */
+function outside(root: string, path: string): boolean {
+  const local = relative(root, path)
+  return local === '..' || local.startsWith('..' + sep) || isAbsolute(local)
+}
+
 /**
  * Write a portable ZIP bundle of the Session log, referenced attachments, and presented deliverables.
  * @param agent - active Agent whose durable log is exported.
@@ -205,6 +287,11 @@ export async function exportSessionBundle(
   }
 
   let deliverableIndex = 0
+  /** Bytes every included deliverable has added; the per-file cap does not bound this. */
+  let deliverableBytes = 0
+  /** Session workspace as the Session spells it, and its link-free form for containment. */
+  const root = resolve(cwd)
+  const workspace = await realpath(root).catch(() => root)
   for (const event of events) {
     if ((event.type as string) !== 'deliverables/presented') continue
     const presented = (event.data as { readonly files?: unknown }).files
@@ -215,8 +302,21 @@ export async function exportSessionBundle(
       if (typeof itemPath !== 'string') continue
       signal?.throwIfAborted()
       try {
-        const absolute = resolve(cwd, itemPath)
-        const info = await stat(absolute)
+        const absolute = resolve(root, itemPath)
+        // A presented path comes from the model; the bundle may only carry files
+        // the Session workspace owns. The lexical check rejects the obvious
+        // escape, and the real path then follows links so a symlink inside the
+        // workspace cannot pull in a file outside it.
+        if (outside(root, absolute)) {
+          skipped.push('deliverable ' + itemPath + ': outside the session workspace')
+          continue
+        }
+        const real = await realpath(absolute)
+        if (outside(workspace, real)) {
+          skipped.push('deliverable ' + itemPath + ': outside the session workspace')
+          continue
+        }
+        const info = await stat(real)
         if (!info.isFile()) {
           skipped.push('deliverable ' + itemPath + ': not a regular file')
           continue
@@ -225,7 +325,22 @@ export async function exportSessionBundle(
           skipped.push('deliverable ' + itemPath + ': size limit reached')
           continue
         }
-        const data = await readFile(absolute)
+        if (deliverableBytes + info.size > MAX_BUNDLE_DELIVERABLE_TOTAL_BYTES) {
+          skipped.push('deliverable ' + itemPath + ': bundle deliverable limit reached')
+          continue
+        }
+        const data = await readFile(real)
+        // The pre-read size only narrows the common case; the bytes that actually
+        // arrived own both caps.
+        if (data.byteLength > MAX_BUNDLE_DELIVERABLE_BYTES) {
+          skipped.push('deliverable ' + itemPath + ': size limit reached')
+          continue
+        }
+        if (deliverableBytes + data.byteLength > MAX_BUNDLE_DELIVERABLE_TOTAL_BYTES) {
+          skipped.push('deliverable ' + itemPath + ': bundle deliverable limit reached')
+          continue
+        }
+        deliverableBytes += data.byteLength
         deliverableIndex += 1
         const entry = 'deliverables/' + String(deliverableIndex) + '-' + safeName(basename(absolute), 'deliverable')
         files[entry] = data
@@ -256,7 +371,7 @@ export async function exportSessionBundle(
     + 'attachments/: binary attachments cited by the Session\n'
     + 'deliverables/: files declared with the present tool\n',
   )
-  const archive = zipSync(files, { level: 6 })
+  const archive = await compressBundle(files)
   await writeFile(path, archive, { flag: 'wx' })
   return {
     path,
