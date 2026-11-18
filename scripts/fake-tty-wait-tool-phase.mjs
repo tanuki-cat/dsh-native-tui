@@ -161,7 +161,8 @@ const tick = setInterval(() => {
     if (toolPhaseAt === undefined && argsOffset !== undefined && text.indexOf('• Working (', argsOffset) !== -1) toolPhaseAt = Date.now() - started
     if (!approved && text.includes('Approval required')) {
       approved = true
-      try { child.stdin.write('\r') } catch {}
+      // Reject leads the approval list; one step down selects Allow once.
+      try { child.stdin.write('\x1b[B\r') } catch {}
     }
     if (finalAt === undefined && text.includes('WAIT PHASE DONE')) {
       finalAt = Date.now() - started

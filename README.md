@@ -98,7 +98,7 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 - 审批与问答 waterfall。普通选择、输入、分页和图片 overlay 使用带边框的不透明背景；审批使用屏幕下方的编号选项与分隔线，突出实际调用和原因。审批按 toolName 与 callId 精确读取本次原生或 PTC 调用的参数，展示实际命令、目标路径或 MCP 方法；无法匹配时明确显示参数不可用，不借用相邻调用。`View full request details` 可查看完整 JSON，按视觉行翻页并随窗口缩放；Esc 返回原审批，查看详情本身不批准请求。长预览会标记截断，为批准、拒绝与取消保留空间。
 - 权限问答（`approval` intent）只提供调用方声明的批准、拒绝及可选持久授权，默认选中拒绝，不显示 Other 或跳过。动作保持可见，完整权限说明可分页查看，查看详情不会授权。展示标签与授权答案值分离；Esc 或请求中止不会批准。
 - 普通问答面板支持单选与多选：Space 勾选、Enter 提交，Other 提供自由文本（多选时会与已勾选项一并返回）；每题都有 `Skip this question` 行（无选项文本题为 `Answer… / Skip this question` 菜单），跳过只返回 `{ id, selected: [] }` 并继续批次；Esc 或请求 signal 中止会以 `UserQuestionError(ASK_ABORTED)` 取消整批。
-- 运行中 `Esc` / `Ctrl+C` 取消 turn；全屏浏览历史时 `Esc` 先回到末尾并保留草稿与运行状态；已在末尾时，输入框有草稿则 `Esc` 先清空草稿，空输入才取消（overlay 聚焦时不触发）。
+- 运行中 `Esc` / `Ctrl+C` 取消 turn；`/` 命令仍在执行时（保存配置后的连接等待、模型目录发现等）空输入的 `Esc` 取消该命令，handler 看到的是轮到本次命令的取消信号。全屏浏览历史时 `Esc` 先回到末尾并保留草稿与运行状态；已在末尾时，输入框有草稿则 `Esc` 先清空草稿，空输入才取消（overlay 聚焦时不触发）。
 
 ### 渲染与显示
 
@@ -124,7 +124,7 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 - 工具卡片的动作关键字单独以主题蓝色高亮（shell 仍整条突出实际命令），路径和搜索表达式使用普通文字。标签统一句首大写（如 `Todo write`），`grep` / `glob` / `find` 显示为 `Search`，MCP 前缀使用大写缩写；服务名、方法名、命令和路径保持原样。shell 运行中为 `• Running command` / `• Running PS> command`，结束后改为 `• Ran …`，文件工具为 `• Read path` / `• Write path` / `• Edit path`，MCP 为 `• MCP service/tool`，PTC 为 `• Running code` / `• Ran code`，执行卡片不再追加 `running…` 尾行；文件工具标题不随时态变化，运行中保留 `running…`。shell 首行最多 120 字符，多行命令标记省略行数；路径与查询等标签最多 160 字符，路径保留末尾。展开后查看原命令，正文仍有安全预览上限。
 - 成功的 read 默认收起，write 新建文件显示带行号的源码预览；shell 保留末尾 5 个视觉行，通用结果保留前 10 个视觉行，省略行数独立展示。工具、源码、diff、PTC 与 context 统一使用卡片底部的淡色 `Show details · ctrl+o` / `Hide details · ctrl+o`，每张卡片仅一个详情入口。折叠状态仍展示错误正文。edit 和有实际更新 diff 的 write 使用 Host 变更元数据，展示 `(+N -N)`、行号、红绿增删行和附近上下文，默认最多 24 个 diff 行；超出计算预算的变更范围用 `~` 标记估算计数，整文件替换保留删除和新增两侧样本。空文件、行尾换行不虚增行数；没有实际 diff 时不推测旧内容。`/diff` 可分页查看会话记录的 diff，仍受预览上限约束。
 - 工具首行的 `•` 用颜色区分状态：黄色运行、绿色完成、红色失败、灰色停止，不额外增加完成提示行；标题保持单行，错误/停止原因继续展示，`plain` 主题不着色。write 在 Host 确认更新后可由 `Write` 改为 `Edit`。main-screen 可见执行标题立即从 `Running` 改为 `Ran`；已进入终端滚动历史的标题和圆点延后到必要的完整重绘再刷新，避免为状态变化清空历史；fullscreen 直接使用最新状态。默认 main-screen 不支持点击卡片；fullscreen 下点击卡片首行或详情行可单独展开/收起，正文点击不切换。`Ctrl+O` 在两种模式下均切换所有保留工具卡片和 context 正文。
-- 审批在屏幕下方突出实际命令、原因与 cwd，所有操作带编号：方向键或编号键移动选择，Enter 才确认，Esc 取消；详情页完整展示调用参数。单次允许显示 `✓ You approved … this time`，拒绝和取消分别显示真实结果。只提供 Host 声明的操作和授权范围，原生单次审批不会增加长期授权选项。
+- 审批在屏幕下方突出实际命令、原因与 cwd，所有操作带编号：方向键或编号键移动选择，Enter 才确认，Esc 取消；列表以拒绝开头并默认选中它，误按 Enter 只会拒绝而不会放行，允许必须显式移动选择。详情页完整展示调用参数。单次允许显示 `✓ You approved … this time`，拒绝和取消分别显示真实结果。只提供 Host 声明的操作和授权范围，原生单次审批不会增加长期授权选项。
 - **main-screen 手动全局展开的代价**：视口上方的历史卡片高度变化时，pi-tui 会整屏重绘并清除终端 scrollback；Session 日志不受影响。这不属于自动结算零重绘的保证范围。只查看单次完整输出时，可使用 `/tools`、`/tool <index>` 的独立预览，避免全局重排。
 
 ### 输入与补全
@@ -140,7 +140,7 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 
 ### 文件、导出与预览
 
-- `/export` 导出 Session JSONL；`/export zip` 导出含 manifest、attachments、deliverables 的 ZIP bundle；`/export html` 导出静态 HTML transcript。三种导出都以 `wx` 写入，不覆盖已有文件。
+- `/export` 导出 Session JSONL；`/export zip` 导出含 manifest、attachments、deliverables 的 ZIP bundle；`/export html` 导出静态 HTML transcript。三种导出都以 `wx` 写入，不覆盖已有文件；未指定路径时默认名会自动让到第一个空闲的 `-1`、`-2` 变体，因此同一会话可以重复导出。ZIP 的附件总预算 64 MiB，交付文件单文件 16 MiB、合计 32 MiB，超出部分记入 manifest 的 `skipped`。
 - `/open` 预览文本（16 KiB 上限），Markdown 以 pi-tui Markdown 样式分页渲染。
 - `/preview` 渲染 PNG/JPEG/GIF/WebP；终端不支持时显示文本占位。
 - `/files` 浏览目录并预览文件（Enter 进入目录 / 预览，Esc 退出，含 `../`）。
@@ -543,11 +543,13 @@ Schedule 新存储格式不支持旧程序直接打开。正式升级前备份 D
 
 断线自愈：核心 `mcp-client` 只通过传输 close 信号发现断线，而 Streamable HTTP 服务端重启不会发出该信号——工具一直保持注册，每次调用都以连接错误失败。TUI 因此保留 `tools/result` 观察器：
 
-- 某次 MCP 工具调用以连接类错误失败时，按核心状态决定：`connected`（活连接已失效）、`failed` 或状态未知时节流 `restart`；`connecting`/`reconnecting`/`disabled`/`waiting-credentials` 交给核心处理。
+- 连接类失败要连续出现两次才触发 `restart`：工具自身的网络错误（例如 `fetch failed`）与死掉的传输层共用同一段文案，单次失败不足以证明连接消失。只要收到一次非连接类结果（成功或业务错误），计数就清零；超过一个节流窗口（30 秒）没有再次失败，计数同样清零。
+- SDK 的 `ConnectionClosed` 错误码无需佐证，一次即可重启。
+- 只有核心状态为 `connected`、`failed` 或状态未知时才由 TUI 重启；`connecting`/`reconnecting`/`disabled`/`waiting-credentials` 交给核心处理，并丢弃当前计数。
 - 不做前置 `probe`：probe 会另开连接，成功不能证明活实例可用；`/mcp probe` 只用于手动连通性测试。
 - 同一服务 30 秒内最多触发一次，避免每次调用都重建。
-- 判定以 SDK 的 `ConnectionClosed` 错误码为准，其次匹配 `Connection closed`、`server is disconnected`、`fetch failed`、`socket hang up`、`ECONNRESET` 等传输层固定文案；工具自身输出里的业务措辞不会被当成断线。
-- 正常调用成功不改变节流窗口；核心 `mcp-client` 自己的重连策略仍然生效。
+- 判定先看 SDK 的 `ConnectionClosed` 错误码，其次匹配 `Connection closed`、`server is disconnected`、`fetch failed`、`socket hang up`、`ECONNRESET` 等传输层固定文案；工具自身输出里的业务措辞不会被当成断线。
+- 正常调用成功不移动节流窗口，但会清零失败计数；核心 `mcp-client` 自己的重连策略仍然生效。
 
 `/mcp reload [name]` 调用核心 `restart`：不带参数重启全部已配置服务，带参数只重启一个，并显示重启后的状态。`/mcp probe <name>` 做一次性连接与工具列表测试，不改动活实例；失败会给出 connect/list 阶段。
 
@@ -610,6 +612,7 @@ node scripts/fake-tty-write-update-diff.mjs        # 原生/PTC × 普通/全屏
 node scripts/fake-tty-tool-keywords.mjs            # 原生/PTC × 普通/全屏 × 深浅/宽窄：Read/Search 关键字高亮范围、大小写和真实工具结果；PTC 组需要可用的内层 sandbox
 node scripts/fake-tty-slash-autocomplete.mjs       # 普通/全屏 × 100/50 列：向上命令补全、整行选中、键盘、子命令、输入框位置及全屏鼠标
 node scripts/fake-tty-permission-restart.mjs       # minimal 同会话 Agent 重建、取消及权限恢复；使用终端 fence fixture，不依赖物理 PTY
+node scripts/fake-tty-command-cancel.mjs           # Esc 取消执行中的 /provider 目录发现；本地挂起端点保证命令仍在飞行
 ~~~
 
 升级核心时，`scripts/upgrade-core-e2e.mjs` 要求 `DSH_CLI_ENTRY` 指向已安装的 `0.2.2-rc.3` CLI 的 `lib/bin.js`；探针使用独立的 `.tmp/upgrade-core-*` profile 和本地 mock provider，保留输出证据。通用 fake-TTY 入口同样支持该变量，不设置时仍使用既有全局安装路径。`scripts/rc1-capabilities-e2e.mjs` 使用同一变量，验证 Schedule 宿主级管理、补丁默认关闭、原生/PTC 显式启用、未读编辑拒绝，以及多文件增删移动的真实磁盘效果。

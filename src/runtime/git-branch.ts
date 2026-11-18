@@ -17,8 +17,21 @@ const BRANCH_REF_PREFIX = 'refs/heads/'
 /** Characters kept from a commit id when `HEAD` is detached. */
 const DETACHED_ID_CHARS = 7
 
-/** How long one cached reading stands before the next lookup re-reads `HEAD`. */
-const DEFAULT_REFRESH_MS = 1000
+/**
+ * How long one cached reading stands before the next lookup re-reads `HEAD`.
+ *
+ * A checkout is the only thing that changes it, and a status repaint must not
+ * pay a synchronous filesystem walk on its way to a frame.
+ */
+const DEFAULT_REFRESH_MS = 5000
+
+/** One workspace's last reading, including the git directory it was found at. */
+interface BranchReading {
+  readonly branch: string | undefined
+  readonly readAt: number
+  /** Git directory the reading came from, so a repaint does not walk the tree again. */
+  readonly gitDir: string | undefined
+}
 
 /**
  * Follow a `.git` file (a linked worktree or a submodule) to its git directory.
@@ -72,13 +85,30 @@ function readHead(gitDir: string): string | undefined {
  * @returns the branch name, a short commit id for a detached `HEAD`, or `undefined` outside any repository.
  */
 export function readGitBranch(cwd: string): string | undefined {
+  return readBranch(resolve(cwd), undefined).branch
+}
+
+/**
+ * Read the branch of one workspace, reusing an already-discovered git directory.
+ *
+ * The parent walk is what a slow or network-mounted workspace makes expensive:
+ * it visits every ancestor until it finds `.git`. A repository does not move
+ * between repaints, so only the `HEAD` read has to repeat — and the cached
+ * directory is revalidated before it is trusted.
+ * @param cwd - absolute directory to read.
+ * @param known - git directory an earlier reading found, when one did.
+ * @returns the branch and the git directory it came from.
+ */
+function readBranch(cwd: string, known: string | undefined): Pick<BranchReading, 'branch' | 'gitDir'> {
   try {
-    const gitDir = findGitDir(resolve(cwd))
-    return gitDir === undefined ? undefined : readHead(gitDir)
+    const gitDir = known !== undefined && statSync(known, { throwIfNoEntry: false })?.isDirectory() === true
+      ? known
+      : findGitDir(cwd)
+    return { branch: gitDir === undefined ? undefined : readHead(gitDir), gitDir }
   } catch {
     // An unreadable `.git` (permissions, a worktree whose target moved) leaves
     // no branch to show, and a status repaint must not fail over it.
-    return undefined
+    return { branch: undefined, gitDir: undefined }
   }
 }
 
@@ -97,14 +127,14 @@ export type GitBranchReader = (cwd: string) => string | undefined
  * @returns a lookup that reads at most once per workspace and interval.
  */
 export function createGitBranchReader(ttlMs = DEFAULT_REFRESH_MS, now: () => number = Date.now): GitBranchReader {
-  const readings = new Map<string, { readonly branch: string | undefined; readonly readAt: number }>()
+  const readings = new Map<string, BranchReading>()
   return (cwd: string): string | undefined => {
     const key = resolve(cwd)
     const at = now()
     const cached = readings.get(key)
     if (cached !== undefined && at - cached.readAt < ttlMs) return cached.branch
-    const branch = readGitBranch(key)
-    readings.set(key, { branch, readAt: at })
-    return branch
+    const reading = readBranch(key, cached?.gitDir)
+    readings.set(key, { ...reading, readAt: at })
+    return reading.branch
   }
 }

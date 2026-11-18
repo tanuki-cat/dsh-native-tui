@@ -568,9 +568,13 @@ export async function showApproval(
     cwd: typeof cwd === 'string' ? cwd : undefined,
   }
   while (!activeSignal.aborted) {
+    // Reject leads: the list opens with its first row selected and Enter confirms
+    // it, so an approval that lands while the operator is typing (or steering a
+    // running turn) must default to failing closed, as the permission question
+    // path already does.
     const choice = await showApprovalChoice(tui, palette, summary, [
-      { value: 'allow', label: 'Allow once', description: 'Approve this exact request only' },
       { value: 'reject', label: 'Reject', description: 'Fail the request closed' },
+      { value: 'allow', label: 'Allow once', description: 'Approve this exact request only' },
       { value: 'cancel', label: 'Cancel', description: 'Withdraw the request without a decision' },
       { value: 'details', label: 'View full request details', description: 'Inspect arguments without approving' },
     ], activeSignal)

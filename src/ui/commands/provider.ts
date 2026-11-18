@@ -288,6 +288,10 @@ async function fetchProviderModels(ctx: CommandContext, settings: SettingsServic
     }, AbortSignal.any([ctx.signal, discoveryAbort.signal]))
   }
   catch (error) {
+    if (ctx.signal.aborted) {
+      ctx.notice('info', 'Model discovery cancelled.')
+      return
+    }
     ctx.notice('error', 'Could not fetch models for ' + route + ': ' + errorMessage(error))
     return
   }
@@ -501,6 +505,10 @@ async function addProvider(ctx: CommandContext, state: WizardState): Promise<voi
         }, AbortSignal.any([ctx.signal, discoveryAbort.signal]))
       }
       catch (error) {
+        if (ctx.signal.aborted) {
+          ctx.notice('info', 'Model discovery cancelled.')
+          return
+        }
         ctx.notice('warning', 'Automatic model discovery failed: ' + errorMessage(error) + ' — falling back to manual model id.')
       }
       finally {

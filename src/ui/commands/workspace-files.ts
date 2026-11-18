@@ -8,6 +8,7 @@ import { resolve } from 'node:path'
 import { exportSessionBundle } from '../../runtime/bundle.js'
 import { exportSessionHtml } from '../../runtime/html.js'
 import { exportSessionLog } from '../../runtime/export.js'
+import { availableExportPath } from '../../runtime/export-path.js'
 import { isMarkdownPath, readTextPreview } from '../../runtime/files.js'
 import { readImagePreview } from '../../runtime/images.js'
 import type { AttachmentsService } from '../../runtime/attachments.js'
@@ -88,9 +89,13 @@ export async function presetCommand(
 
 /** The `/export` command. */
 export async function exportCommand(ctx: CommandContext, args: string): Promise<void> {
+  // A default name is derived from the Session, so a second export would collide
+  // with the first one's file; the operator's own path keeps its exact spelling.
+  const defaultTarget = (extension: 'jsonl' | 'html' | 'zip'): Promise<string> =>
+    availableExportPath(resolve(sessionCwd(ctx), 'dsh-session-' + ctx.active.id + '.' + extension))
   if (args === 'html' || args.startsWith('html ')) {
     const target = args === 'html'
-      ? 'dsh-session-' + ctx.active.id + '.html'
+      ? await defaultTarget('html')
       : args.slice('html '.length).trim()
     if (target === '') {
       ctx.notice('warning', 'Usage: /export html [path]')
@@ -107,7 +112,7 @@ export async function exportCommand(ctx: CommandContext, args: string): Promise<
   }
   if (args === 'zip' || args.startsWith('zip ')) {
     const target = args === 'zip'
-      ? 'dsh-session-' + ctx.active.id + '.zip'
+      ? await defaultTarget('zip')
       : args.slice('zip '.length).trim()
     if (target === '') {
       ctx.notice('warning', 'Usage: /export zip [path]')
@@ -130,7 +135,7 @@ export async function exportCommand(ctx: CommandContext, args: string): Promise<
     }
     return
   }
-  const target = args === '' ? 'dsh-session-' + ctx.active.id + '.jsonl' : args
+  const target = args === '' ? await defaultTarget('jsonl') : args
   try {
     const result = await exportSessionLog(ctx.active.agent, target, sessionCwd(ctx))
     ctx.notice('info', 'Exported ' + String(result.eventCount) + ' events to ' + result.path)

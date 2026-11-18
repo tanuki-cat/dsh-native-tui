@@ -17,6 +17,9 @@ interface DraftEntry {
   readonly started: boolean
 }
 
+/** Most visited sessions one terminal keeps a draft for. */
+export const MAX_DRAFTS = 32
+
 /** Per-session drafts and blank-session candidates visited by this terminal. */
 export class SessionDrafts {
   private readonly entries = new Map<SessionId, DraftEntry>()
@@ -26,10 +29,18 @@ export class SessionDrafts {
     const started = previous?.started === true || session.snapshotEvents().some(event =>
       event.type === 'turn/start' || event.type === 'user/message'
       || event.type === 'assistant/message' || event.type === 'assistant/attempt')
+    // Re-insert so map order tracks recency; the cap below then drops the session
+    // this terminal has not visited for longest instead of leaking one per switch.
+    this.entries.delete(session.id)
     this.entries.set(session.id, {
       draft, cwd: resolve(session.header.cwd ?? cwd),
       preset: sessionAgentPreset(session) ?? preset, started,
     })
+    while (this.entries.size > MAX_DRAFTS) {
+      const oldest = this.entries.keys().next()
+      if (oldest.done === true) break
+      this.entries.delete(oldest.value)
+    }
   }
 
   restore(id: SessionId): SessionDraft {

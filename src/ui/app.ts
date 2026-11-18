@@ -16,7 +16,6 @@ import type { DisplayMode, ResolvedConfig } from '../config.js'
 import { createHostSession, readContextBreakdown, readContextMeter, restartHostSession, resumeHostSession, sessionAgentPreset, type AgentPresetService, type HostSession } from '../runtime/agent.js'
 import { findLauncher, parseProfileArg, resumeHint } from '../runtime/launcher.js'
 import { assertResumed, reloadArgs, RESUME_ENV } from '../runtime/reload.js'
-import { skillRows } from '../runtime/skill-catalog.js'
 import { createSessionMetricsMemo, type SessionMetrics, type SessionStats } from '../runtime/metrics.js'
 import { createGitBranchReader } from '../runtime/git-branch.js'
 import { showApproval, showQuestionBatch } from './dialogs.js'
@@ -30,6 +29,8 @@ import { editorTheme, markdownTheme, type Palette } from './theme.js'
 import { createTerminalTheme } from './terminal-theme.js'
 import { debug } from '../debug.js'
 import { globalShortcut } from './keymap.js'
+import { CommandDispatchTracker } from './command-dispatch.js'
+import { SkillCatalogCache } from './skill-cache.js'
 import { LOCAL_COMMANDS } from './commands/catalog.js'
 import type { CommandContext } from './commands/context.js'
 import { runCommandLine } from './commands/router.js'
@@ -213,17 +214,8 @@ export async function startTerminalApp(
     }
   }
   /** User-invocable skills for the `/` menu and the unknown-command fallback. */
-  const loadSkills = async (): Promise<readonly SkillSuggestion[]> => {
-    const registry = skillRegistry()
-    if (registry === undefined) return []
-    try {
-      const list = await registry.list({ cwd: active.agent.session.header.cwd ?? config.cwd, scope: active.agent })
-      return skillRows(list).filter(skill => skill.userInvocable)
-    }
-    catch {
-      return []
-    }
-  }
+  const skills = new SkillCatalogCache(skillRegistry, () => config.cwd, agent => active.agent === agent)
+  const loadSkills = (): Promise<readonly SkillSuggestion[]> => skills.load(active.agent)
   const autocomplete = new TuiAutocompleteProvider({
     getAgent: () => active.agent,
     getCommands: () => [...LOCAL_COMMANDS, ...host.commands.list(active.agent)],
@@ -265,6 +257,8 @@ export async function startTerminalApp(
   let unsubscribeSession: (() => void) | undefined
   let interactionDisposers: Array<() => void> = []
   const interactionAbort = new AbortController()
+  /** The `/` dispatch in flight, so Escape can cancel the command being waited on. */
+  const commandDispatch = new CommandDispatchTracker(interactionAbort.signal)
   const attemptPositions = new Map<string, { turn: number; step: number }>()
   let contextWindow: number | undefined
   /** Output tokens one request reserves, as the compactor deducts them. */
@@ -622,6 +616,8 @@ export async function startTerminalApp(
       selectedPreset = sessionAgentPreset(active.agent.session) ?? selectedPreset
       entries = active.agent.session.snapshotEvents().map(event => ({ type: 'event', event }))
       liveSeq = 0
+      attemptPositions.clear()
+      skills.clear()
       localNotices = []
       renderer.clear()
       streamPacer.reset()
@@ -689,8 +685,9 @@ export async function startTerminalApp(
    * The handler-facing view of this application. It is built per command run so
    * a handler always sees the session that is on screen now, not the one that
    * was active when this closure was created.
+   * @param dispatchSignal - cancellation of the dispatch that asked for it.
    */
-  const commandContext = (): CommandContext => {
+  const commandContext = (dispatchSignal?: AbortSignal): CommandContext => {
     const attachments = pendingAttachments
     const session = active, owner = modelSelection
     const isCurrent = (): boolean => active === session && modelSelection === owner && !switching && !disposed && !exiting
@@ -707,7 +704,7 @@ export async function startTerminalApp(
         if (reopened === undefined || active !== reopened) throw new Error('Could not restore the Session after closing persistent shells; use /reload to retry.')
         return active
       },
-      signal: interactionAbort.signal,
+      signal: dispatchSignal ?? commandDispatch.signal(),
       isCurrent,
       notice: pushNotice,
       renderStatus,
@@ -746,26 +743,31 @@ export async function startTerminalApp(
    * cannot reach through its command context is injected here: the session
    * switch, prompts, the transcript reset, and the preset record.
    */
-  const runCommand = (line: string): Promise<void> => runCommandLine(line, {
-    context: commandContext,
-    switchTo,
-    openNewSession,
-    sendPrompt,
-    clearTranscript: () => {
-      entries = []
-      localNotices = []
-      renderer.clear()
-      streamPacer.reset()
-      scheduleTranscript(true)
-    },
-    exit: requestExit,
-    reload: requestReload,
-    preset: {
-      current: () => selectedPreset,
-      select: id => { selectedPreset = id },
-    },
-    skills: loadSkills,
-  })
+  const runCommand = (line: string): Promise<void> => {
+    const dispatch = commandDispatch.begin()
+    return runCommandLine(line, {
+      context: commandContext,
+      signal: dispatch.signal,
+      cancelled: dispatch.cancelled,
+      switchTo,
+      openNewSession,
+      sendPrompt,
+      clearTranscript: () => {
+        entries = []
+        localNotices = []
+        renderer.clear()
+        streamPacer.reset()
+        scheduleTranscript(true)
+      },
+      exit: requestExit,
+      reload: requestReload,
+      preset: {
+        current: () => selectedPreset,
+        select: id => { selectedPreset = id },
+      },
+      skills: loadSkills,
+    }).finally(dispatch.release)
+  }
 
   const handleSubmit = (text: string): void => {
     if (exiting) return
@@ -799,7 +801,9 @@ export async function startTerminalApp(
   }
 
   const onSignal = (): void => {
-    void dispose().finally(() => { process.exit(143) })
+    // Disposal may reject (the Host can fail to close a Session); leaving that
+    // unhandled would report a crash on a path that is already exiting.
+    void dispose().catch(() => undefined).then(() => { process.exit(143) })
   }
 
   const dispose = async (reportSession = true): Promise<void> => {
@@ -860,6 +864,7 @@ export async function startTerminalApp(
       running: active.agent.status === 'running',
       editorFocused: tui.getFocusedComponent() === editor,
       editorHasText: editor.getText() !== '',
+      commandRunning: commandDispatch.running,
       scrolledAway: tui instanceof TuiAltScreen && !tui.isFollowingOutput && !tui.hasOverlay(),
     })
     if (shortcut !== undefined && editor.isProcessingPaste && shortcut !== 'exit' && shortcut !== 'cancel-turn') {
@@ -901,6 +906,12 @@ export async function startTerminalApp(
       editor.setText('')
       tui.requestRender()
       return { consume: true }
+    }
+    if (shortcut === 'cancel-command') {
+      // A dialog owns Escape while it is open; its own cancel path unwinds the
+      // handler that opened it.
+      if (tui.hasOverlay()) return undefined
+      return commandDispatch.cancel() ? { consume: true } : undefined
     }
     if (shortcut === 'cancel-turn') {
       if (tui.hasOverlay()) return undefined

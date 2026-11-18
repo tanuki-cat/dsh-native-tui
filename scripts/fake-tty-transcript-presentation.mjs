@@ -116,8 +116,9 @@ async function run(fullscreen, decision, preset = 'standard', display = 'detaile
     await waitFor((_text, records) => records.some(frame => frame.rawLines.some(line => strip(line).includes(pendingHeading)
       && line.includes('\x1b[33m• '))), 'pending shell frame')
     writeFileSync(pendingAck, '')
-    await waitFor(text => text.includes('1. Allow once') && text.includes('Reason:'), 'approval')
-    child.stdin.write((decision === 'allow' ? '1' : '2') + '\r')
+    await waitFor(text => text.includes('2. Allow once') && text.includes('Reason:'), 'approval')
+    // The list opens on Reject, so Allow is the second numbered row.
+    child.stdin.write((decision === 'allow' ? '2' : '1') + '\r')
     const receiptText = decision === 'allow' ? 'You approved bash printf' : 'You rejected bash printf'
     if (decision === 'allow') {
       await waitFor((_text, records) => records.some(frame => {

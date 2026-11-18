@@ -411,6 +411,15 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 ## 2026-11-13：状态行显示 Git 分支
 
 - 输入框下方主状态行在 workspace 目录后显示 `git <branch>`：`git ` 标签用次级文本、分支名用强调蓝；窄屏先去掉 `git ` 标签，随后与目录一起隐藏。
-- 分支直接读仓库 `HEAD`（含 linked worktree / submodule 的 `.git` 文件），不启动 `git` 子进程；从子目录向上查找所属仓库，detached HEAD 显示 7 位短 commit。目录不在仓库内或 `HEAD` 不可读时不显示该字段。读到的值按 workspace 缓存 1 秒，checkout 后无需重启即可在下次重绘更新。
+- 分支直接读仓库 `HEAD`（含 linked worktree / submodule 的 `.git` 文件），不启动 `git` 子进程；从子目录向上查找所属仓库，detached HEAD 显示 7 位短 commit。目录不在仓库内或 `HEAD` 不可读时不显示该字段。读到的值按 workspace 缓存 1 秒（2026-11-18 放宽到 5 秒，见下方条目），checkout 后无需重启即可在下次重绘更新。
 - 验证：`pnpm check` 通过（122 个文件 / 1791 项测试，类型检查与构建成功）；`node scripts/fake-tty-git-branch.mjs` 真实 Host + 本地 mock provider 两组 PASS：仓库内为 `…/checkout · git probe-branch · Ready · Context — · preset minimal`，仓库外同一位置不含 `git` 字段；`node scripts/fake-tty-statusline.mjs` 四组复验 PASS（仓库外 workspace 不出现该字段）。
 - 方案：状态行输入新增可选 `gitBranch`，读取逻辑在 [`src/runtime/git-branch.ts`](../src/runtime/git-branch.ts)。
+
+## 2026-11-18：审查修复批次
+
+- 审批列表改为拒绝优先：`1. Reject` / `2. Allow once` / `3. Cancel` / `4. Details`，默认选中拒绝，误按 Enter 只会拒绝；README 与既有 fake-TTY 探针（approval、transcript-presentation、tool-details、interaction-modes、reasoning-tool-order、wait-tool-phase）同步到新顺序。
+- `/` 命令执行中空输入的 Esc 取消该命令。命令派发与取消移出 `app.ts`（`src/ui/command-dispatch.ts`），技能目录缓存移出（`src/ui/skill-cache.ts`），`app.ts` 回到 1000 行以内；取消提示只认本次 dispatch 的取消，终端退出时的 handler 失败仍按错误报告。
+- `/export` 未指定路径时自动让到第一个空闲的 `-1`、`-2` 变体（`src/runtime/export-path.ts`），同一会话可以重复导出。
+- ZIP bundle：交付文件合计上限 32 MiB；交付路径先做词法校验再 `realpath`，工作区内的软链不能带出外部文件；压缩改为单个 worker 内执行 `zipSync`，不再让 fflate 按每个 ≥160 KB 条目各起一个线程。
+- MCP 断线自愈：连接类失败需连续两次（`ConnectionClosed` 除外），非连接类结果与超过 30 秒的空档都会清零，核心已接管重连时丢弃计数。
+- 其他：`/reload` 的进程内交接 60 秒过期；Git 分支缓存放宽到 5 秒并复用已发现的 `.git` 目录；每会话草稿上限 32；`/` 菜单技能目录缓存 1 秒；SIGTERM/SIGHUP 退出时忽略 `dispose` 失败。

@@ -244,6 +244,48 @@ describe('command router', () => {
     expect(h.notices[0]?.tone).toBe('warning')
   })
 
+  it('hands the dispatch signal to the command context', async () => {
+    const h = harness()
+    const controller = new AbortController()
+    const seen: Array<AbortSignal | undefined> = []
+    await runCommandLine('/help', {
+      ...h.deps,
+      signal: controller.signal,
+      context: signal => { seen.push(signal); return h.deps.context() },
+    })
+    expect(seen).toEqual([controller.signal])
+  })
+
+  it('reports a cancelled command instead of a failure', async () => {
+    const h = harness()
+    const controller = new AbortController()
+    controller.abort()
+    const deps = {
+      ...h.deps,
+      signal: controller.signal,
+      cancelled: () => true,
+      skills: async () => { throw new Error('boom') },
+    }
+    await expect(runCommandLine('/missing-command', deps)).resolves.toBeUndefined()
+    expect(h.notices).toEqual([{ tone: 'info', text: 'Command cancelled.' }])
+  })
+
+  it('keeps the real failure when the terminal aborts without cancelling the command', async () => {
+    // Disposal aborts every dispatch signal; a handler that fails on the way out
+    // must still report what failed instead of blaming the operator.
+    const h = harness()
+    const controller = new AbortController()
+    controller.abort()
+    const deps = {
+      ...h.deps,
+      signal: controller.signal,
+      cancelled: () => false,
+      skills: async () => { throw new Error('boom') },
+    }
+    await runCommandLine('/missing-command', deps)
+    expect(h.notices).toEqual([{ tone: 'error', text: 'Command failed: boom' }])
+  })
+
   it('turns a throwing handler into one error notice instead of a rejection', async () => {
     // The terminal dispatches commands without awaiting them, so a rejection
     // here would escape as an unhandled rejection and end the process.
