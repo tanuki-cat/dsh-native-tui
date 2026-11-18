@@ -266,6 +266,29 @@ async function addServer(
   }
 }
 
+/**
+ * Pause between two status reads, ending early when the dispatch is cancelled.
+ * @param ms - how long to wait when nobody cancels.
+ * @param signal - cancellation of the command that is waiting.
+ */
+export function waitForRetry(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolvePause, rejectPause) => {
+    // An already-aborted signal never replays its event to a later listener, so
+    // the cancellation has to be read before the pause starts.
+    if (signal.aborted) {
+      rejectPause(signal.reason)
+      return
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const onAbort = (): void => {
+      if (timer !== undefined) clearTimeout(timer)
+      rejectPause(signal.reason)
+    }
+    timer = setTimeout(() => { signal.removeEventListener('abort', onAbort); resolvePause() }, ms)
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
 /** Wait for a newly configured server to leave its transient startup states. */
 async function waitForStatus(
   manager: McpManagerService,
@@ -276,7 +299,7 @@ async function waitForStatus(
     signal.throwIfAborted()
     const status = manager.list().find(view => view.name === name)?.status
     if (status !== undefined && status.state !== 'connecting' && status.state !== 'reconnecting') return status
-    await new Promise(resolve => setTimeout(resolve, 250))
+    await waitForRetry(250, signal)
   }
   return manager.list().find(view => view.name === name)?.status
 }

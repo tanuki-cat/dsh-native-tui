@@ -44,8 +44,21 @@ import { scheduleCommand } from './schedule.js'
 
 /** What the dispatcher needs that a command context does not carry. */
 export interface CommandRouterDeps {
-  /** The handler-facing application view, rebuilt for the session on screen now. */
-  readonly context: () => CommandContext
+  /**
+   * The handler-facing application view, rebuilt for the session on screen now.
+   * A dispatch passes the signal it may be cancelled through, so every handler
+   * sees one cancellation surface: the terminal's, narrowed to this command.
+   */
+  readonly context: (signal?: AbortSignal) => CommandContext
+  /** Cancellation for this dispatch; the terminal aborts it when Escape asks. */
+  readonly signal?: AbortSignal
+  /**
+   * Whether the operator cancelled this dispatch.
+   *
+   * The signal also aborts when the terminal disposes, and that shutdown must
+   * not relabel a handler failure as an operator cancellation.
+   */
+  readonly cancelled?: () => boolean
   /** Replace the visible session, disposing the previous one. */
   readonly switchTo: (next: () => Promise<HostSession>) => Promise<void>
   /** Reuse a matching blank visited in this terminal, or create one. */
@@ -83,7 +96,10 @@ export async function runCommandLine(line: string, deps: CommandRouterDeps): Pro
   }
   catch (error) {
     try {
-      deps.context().notice('error', 'Command failed: ' + errorMessage(error))
+      const ctx = deps.context(deps.signal)
+      // Cancellation is the operator's own decision, not a failure to report.
+      if (deps.cancelled?.() === true) ctx.notice('info', 'Command cancelled.')
+      else ctx.notice('error', 'Command failed: ' + errorMessage(error))
     }
     catch {
       // The context itself could not be built; there is nothing left to report to.
@@ -105,7 +121,7 @@ async function dispatchCommandLine(line: string, deps: CommandRouterDeps): Promi
   // session that is on screen and an `exit` line pays for nothing extra.
   let prepared: CommandContext | undefined
   const ctx = (): CommandContext => {
-    prepared ??= deps.context()
+    prepared ??= deps.context(deps.signal)
     return prepared
   }
 

@@ -46,6 +46,16 @@ describe('globalShortcut', () => {
     expect(globalShortcut('\x1b[27;1:3u', state({ editorHasText: true }))).toBeUndefined()
   })
 
+  it('cancels a running command with Escape unless a draft or history owns it', () => {
+    for (const data of ['\x1b', '\x1b[27u']) {
+      expect(globalShortcut(data, state({ commandRunning: true }))).toBe('cancel-command')
+      expect(globalShortcut(data, state({ commandRunning: true, running: true }))).toBe('cancel-command')
+      expect(globalShortcut(data, state({ commandRunning: true, editorHasText: true }))).toBe('clear-input')
+      expect(globalShortcut(data, state({ commandRunning: true, scrolledAway: true }))).toBe('jump-to-latest')
+      expect(globalShortcut(data, state({ commandRunning: false }))).toBeUndefined()
+    }
+  })
+
   it('maps Ctrl+C to cancel while running and exit while idle', () => {
     for (const data of ['\x03', '\x1b[99;5u']) {
       expect(globalShortcut(data, state({ running: true }))).toBe('cancel-turn')

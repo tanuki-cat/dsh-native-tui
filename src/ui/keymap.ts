@@ -1,7 +1,7 @@
 import { isKeyRelease, matchesKey } from '@earendil-works/pi-tui'
 
 /** One global terminal shortcut handled before the focused component. */
-export type GlobalShortcut = 'cancel-turn' | 'clear-input' | 'exit' | 'toggle-tool-previews' | 'new-session' | 'pick-session' | 'cycle-reasoning' | 'jump-to-latest'
+export type GlobalShortcut = 'cancel-turn' | 'cancel-command' | 'clear-input' | 'exit' | 'toggle-tool-previews' | 'new-session' | 'pick-session' | 'cycle-reasoning' | 'jump-to-latest'
 
 /** Terminal state that decides what a global shortcut means. */
 export interface ShortcutState {
@@ -11,6 +11,8 @@ export interface ShortcutState {
   editorFocused: boolean
   /** Whether the prompt editor holds any text. */
   editorHasText: boolean
+  /** Whether a `/` command is still running. */
+  commandRunning?: boolean
   /** Whether the fullscreen viewport is browsing history without an overlay. */
   scrolledAway?: boolean
 }
@@ -30,6 +32,9 @@ export function globalShortcut(data: string, state: ShortcutState): GlobalShortc
     // A draft belongs to the user: Escape discards it before it can reach the
     // turn, so a running turn only sees Escape when the editor is empty.
     if (state.editorFocused && state.editorHasText) return 'clear-input'
+    // A command the user is still waiting on has nothing else to interrupt it:
+    // the turn it may never start cannot be cancelled on its behalf.
+    if (state.commandRunning === true) return 'cancel-command'
     return state.running ? 'cancel-turn' : undefined
   }
   if (state.editorFocused && matchesKey(data, 'ctrl+n')) return 'new-session'
