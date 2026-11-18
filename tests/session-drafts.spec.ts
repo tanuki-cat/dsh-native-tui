@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { PendingAttachment } from '../src/runtime/attachments.js'
-import { SessionDrafts } from '../src/ui/session-drafts.js'
+import { MAX_DRAFTS, SessionDrafts } from '../src/ui/session-drafts.js'
 import { PromptEditor } from '../src/ui/prompt-editor.js'
 import { createPalette, editorTheme } from '../src/ui/theme.js'
 
@@ -79,6 +79,15 @@ describe('session drafts', () => {
     events.splice(0)
     drafts.save(view, { text: '', attachments: [] }, '/work/a')
     expect(drafts.findBlank('/work/a', 'ptc')).toBeUndefined()
+  })
+
+  it('bounds the sessions it remembers, dropping the least recently visited', () => {
+    const drafts = new SessionDrafts()
+    for (let index = 0; index <= MAX_DRAFTS; index += 1) {
+      drafts.save(session('s' + String(index)), { text: 'd' + String(index), attachments: [] }, '/work/a')
+    }
+    expect(drafts.restore(SessionId('s0'))).toEqual({ text: '', attachments: [] })
+    expect(drafts.restore(SessionId('s' + String(MAX_DRAFTS))).text).toBe('d' + String(MAX_DRAFTS))
   })
 
   it('clears a submitted draft and restores empty prompts with no shared attachment array', () => {
