@@ -3,10 +3,14 @@
  *
  * The core manager sees a connection only through its transport. A restarted
  * Streamable HTTP server keeps the old connection object alive, so its tools
- * stay registered and every call fails. A connection-class tool failure is the
- * only observable signal: restart the server instance unless the core manager
- * is already reconnecting it. One attempt per server per window keeps a broken
- * server from being restarted on every call.
+ * stay registered and every call fails. A run of connection-class tool failures
+ * is the only observable signal: restart the server instance unless the core
+ * manager is already reconnecting it. A tool's own network error arrives as the
+ * same free text, so one failure is not enough — only a run with no answered
+ * call in between (or the structured closed-connection code) restarts the
+ * server, a run that stops advancing for one retry window is over, and one
+ * attempt per server per window keeps a broken server from being restarted on
+ * every call.
  *
  * @module dsh-native-tui/runtime/mcp-recovery
  */
@@ -16,7 +20,20 @@ import { debug } from '../debug.js'
 /** Public prefix the MCP client gives every tool of one server. */
 const TOOL_PREFIX = 'mcp__'
 /** Minimum delay between automatic restarts for one server. */
-const RETRY_WINDOW_MS = 30_000
+export const RETRY_WINDOW_MS = 30_000
+/**
+ * Connection-class failures one server must show in a row before it is restarted.
+ *
+ * A tool owns its own network errors: an MCP server that fetches URLs reports
+ * `fetch failed` for one unreachable target exactly as a dying transport does,
+ * and both arrive as the same free-text failure. Requiring consecutive failures
+ * with no answered call in between keeps one such report from killing a healthy
+ * server's other tools, while a dead transport still fails every call it gets.
+ * A streak also ages out after one retry window, so two unrelated failures
+ * minutes apart do not add up to a restart. A structured `ConnectionClosed`
+ * code needs no corroboration: no tool body produces it.
+ */
+const REQUIRED_FAILURES = 2
 /** Transport-owned failure phrasings; free text is deliberately absent. */
 const CONNECTION_FAILURES: readonly RegExp[] = [
   /^Connection closed\b/iu,
@@ -65,11 +82,14 @@ function failureMessage(result: unknown): string {
   return error !== undefined && typeof error.message === 'string' ? error.message : ''
 }
 
-/** Decide whether one failed call proves the transport is gone. */
+/** Structured error code the MCP client assigns to a closed transport. */
+function closedConnectionCode(result: unknown): boolean {
+  return (result as { error?: { info?: { code?: unknown } } } | undefined)?.error?.info?.code === 'ConnectionClosed'
+}
+
+/** Decide whether one failed call looks like a transport failure. */
 function isConnectionFailure(result: unknown, message: string): boolean {
-  const code = (result as { error?: { info?: { code?: unknown } } } | undefined)?.error?.info?.code
-  if (code === 'ConnectionClosed') return true
-  return CONNECTION_FAILURES.some(pattern => pattern.test(message))
+  return closedConnectionCode(result) || CONNECTION_FAILURES.some(pattern => pattern.test(message))
 }
 
 /** States the core manager is already resolving without outside help. */
@@ -90,23 +110,46 @@ export function installMcpRecovery(ctx: Context): () => void {
   const manager = (): McpManagerLike | undefined =>
     (ctx as unknown as { get(name: string): unknown }).get('mcpManager') as McpManagerLike | undefined
   const lastAttempt = new Map<string, number>()
+  /** Connection-class failures per server, with the time each streak last advanced. */
+  const failureRun = new Map<string, { readonly count: number; readonly at: number }>()
   const observe = (exec: unknown, result: unknown): void => {
     const toolName = (exec as { name?: unknown } | undefined)?.name
-    if (typeof toolName !== 'string') return
-    if ((result as { isError?: unknown } | undefined)?.isError !== true) return
-    const message = failureMessage(result)
-    if (!isConnectionFailure(result, message)) return
+    if (typeof toolName !== 'string' || !toolName.startsWith(TOOL_PREFIX)) return
+    const failed = (result as { isError?: unknown } | undefined)?.isError === true
+    // A working call only matters while a streak is open; it needs no lookup.
+    if (!failed && failureRun.size === 0) return
     const service = manager()
     if (service === undefined) return
     const views = service.list?.()
     const name = serverOfTool(toolName, views?.map(view => view.name) ?? [])
     if (name === undefined) return
-    const state = views?.find(view => view.name === name)?.status.state
-    if (coreIsRecovering(state)) return
+    const message = failed ? failureMessage(result) : ''
+    // A call the server answered — even with a business error — proves the
+    // transport is alive, so any non-connection result ends the streak.
+    if (!failed || !isConnectionFailure(result, message)) {
+      failureRun.delete(name)
+      return
+    }
     const now = Date.now()
+    const previousRun = failureRun.get(name)
+    // One retry window without another failure ends the streak: two incidents
+    // minutes apart are not evidence of one dying transport.
+    const streak = previousRun !== undefined && now - previousRun.at < RETRY_WINDOW_MS
+      ? previousRun.count
+      : 0
+    const run = closedConnectionCode(result) ? REQUIRED_FAILURES : streak + 1
+    failureRun.set(name, { count: run, at: now })
+    if (run < REQUIRED_FAILURES) return
+    const state = views?.find(view => view.name === name)?.status.state
+    // While the core reconnects on its own, its failures are not ours to count.
+    if (coreIsRecovering(state)) {
+      failureRun.delete(name)
+      return
+    }
     const previous = lastAttempt.get(name)
     if (previous !== undefined && now - previous < RETRY_WINDOW_MS) return
     lastAttempt.set(name, now)
+    failureRun.delete(name)
     void (async () => {
       try {
         debug('mcp recovery: restarting ' + name + ' after a connection-class failure')
