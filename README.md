@@ -15,7 +15,7 @@ Session、模型、工具、审批、压缩、MCP、插件都由 Host 提供，�
 
 - Node `>=24.9.0`
 - pnpm（仓库使用 `pnpm-lock.yaml`，不要用 npm / yarn）
-- 全局安装的 `dsh` 0.2.2-rc.3
+- 全局安装的 `dsh` 0.2.2-rc.4
 
 ### 安装
 
@@ -106,7 +106,7 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 - `◇ context` 默认显示来源和淡色 `Show details · ctrl+o`，展开后入口变为 `Hide details · ctrl+o`。`Ctrl+O` 可展开/收起保留的 context 正文；fullscreen 下也可点击标题或详情行单独切换。此设置只影响终端视图，Host 事件、实际模型上下文和导出保留原有内容。
 - 流式内容直接跟随 provider：每帧显示已收到的全部 text/reasoning，`block-end` 与 `assistant/message` 立即采用完整内容，没有额外逐字动画、播放队列或 settle grace。reasoning、正文、工具卡片按 provider/event 顺序展示，可以落在同一帧。
 - 执行状态独立于内容渲染：turn 开始后显示 `• Working (5s · esc to interrupt)`，使用中性圆点、清晰标题和次级时间提示；满一分钟显示 `1m 5s`，满一小时显示 `1h 2m 3s`，不补零，超过 24 小时继续累计小时。收到文本、reasoning、工具调用或 stream/end 都不视为完成。自动重试显示 `• Retrying N/M (1m 5s · CODE · automatic · esc to interrupt)`，沿用本轮累计时长；新 attempt 或恢复收流后回到 Working。断流检测、超时与重试策略归 Host/provider。
-- 真正收到 turn/end 后显示 `Worked for 2m 22s · 10:49`，取消、失败、blocked 与 token limit 使用对应的结束词，错误正文继续保留。回执停止计时并保持到下一轮开始或切换/关闭会话；它是当前终端的状态，不写入 Session 历史或导出。等待、重试和完成均占固定一行，按窗口宽度截断。
+- 真正收到 turn/end 后显示 `Worked for 2m 22s · 10:49`，取消、失败、blocked 与 token limit 使用对应的结束词，错误正文继续保留。提供方拒答（`CONTENT_REFUSED`，例如 DeepSeek 内容安全审核）使用 `The provider refused this request: …` 提示，不展示被拒正文；该尝试只保留在 Session 的 `assistant/attempt` 中，不进入模型历史。回执停止计时并保持到下一轮开始或切换/关闭会话；它是当前终端的状态，不写入 Session 历史或导出。等待、重试和完成均占固定一行，按窗口宽度截断。
 - 上下文压缩使用 `• Compact context`、缩进正文和次级状态回执，区分完成、失败与中断，保留摘要和错误详情。普通选择器、审批、设置与命令补全共用 `›` 和整行蓝色选中背景；未选中的模型徽标保留语义色，选中时使用统一对比色并保留徽标文字。
 - Markdown 与差异预览按当前宽度和终端颜色重新绘制；`/diff` 共用内联差异的行号和增删背景。多行输入弹窗使用 `›`、空白边界和原生编辑操作，弹窗外框继续保留。
 - 显示密度可配置：`thinkingDisplay` 与 `runCodeDisplay` 均为 `hidden | compact | detailed`，见[配置](#配置)。reasoning 若以 provider 的 `<signature>` 块开头，显示层会剥掉签名与随后的换行，纯签名块不渲染 thinking 卡片；`compact` 的预览在流式时取最后一个已完成段落的首行，结束后取首行，并去掉 `**` 标记。
@@ -587,7 +587,7 @@ node scripts/bench-stream-paint.mjs --legacy-box
 ~~~sh
 pnpm build
 pnpm pack --pack-destination .tmp
-DSH_HOME=/tmp/dsh-native-tui-approval-home dsh plugin --profile tui add .tmp/dsh-native-tui-0.2.2-rc.3.tgz
+DSH_HOME=/tmp/dsh-native-tui-approval-home dsh plugin --profile tui add .tmp/dsh-native-tui-0.2.2-rc.4.tgz
 DSH_HOME=/tmp/dsh-native-tui-approval-home node scripts/fake-tty-approval.mjs
 ~~~
 
@@ -615,7 +615,7 @@ node scripts/fake-tty-permission-restart.mjs       # minimal 同会话 Agent 重
 node scripts/fake-tty-command-cancel.mjs           # Esc 取消执行中的 /provider 目录发现；本地挂起端点保证命令仍在飞行
 ~~~
 
-升级核心时，`scripts/upgrade-core-e2e.mjs` 要求 `DSH_CLI_ENTRY` 指向已安装的 `0.2.2-rc.3` CLI 的 `lib/bin.js`；探针使用独立的 `.tmp/upgrade-core-*` profile 和本地 mock provider，保留输出证据。通用 fake-TTY 入口同样支持该变量，不设置时仍使用既有全局安装路径。`scripts/rc1-capabilities-e2e.mjs` 使用同一变量，验证 Schedule 宿主级管理、补丁默认关闭、原生/PTC 显式启用、未读编辑拒绝，以及多文件增删移动的真实磁盘效果。
+升级核心时，`scripts/upgrade-core-e2e.mjs` 要求 `DSH_CLI_ENTRY` 指向已安装的 `0.2.2-rc.4` CLI 的 `lib/bin.js`；探针使用独立的 `.tmp/upgrade-core-*` profile 和本地 mock provider，保留输出证据。通用 fake-TTY 入口同样支持该变量，不设置时仍使用既有全局安装路径。`scripts/rc1-capabilities-e2e.mjs` 使用同一变量，验证 Schedule 宿主级管理、补丁默认关闭、原生/PTC 显式启用、未读编辑拒绝，以及多文件增删移动的真实磁盘效果。
 
 普通终端环境可运行真实 PTY 冒烟：
 
@@ -667,7 +667,7 @@ npm 路径预留在 `publish-npm` job，默认跳过：需要仓库变量 `NPM_P
 
 ## 兼容性
 
-- DSH 依赖统一为 `0.2.2-rc.3`，Cordis 为 `4.1.0`；使用隔离安装的目标 CLI 通过四套预设的新建、恢复、模型路由及 reload 探针，不依赖全局 CLI 版本。旧核心不在本版本支持范围，peer 范围从 rc.3 起。
+- DSH 依赖统一为 `0.2.2-rc.4`，Cordis 为 `4.1.0`；使用隔离安装的目标 CLI 通过四套预设的新建、恢复、模型路由及 reload 探针，不依赖全局 CLI 版本。旧核心不在本版本支持范围，peer 范围从 rc.4 起。
 - 三套 preset 显式设置 `tool-subagent-control.interrupt: false`，模型不再获得 `interrupt_agent`；需要在 profile patch 中覆盖该行以恢复。
 - 从 rc.1 升级时，若 profile 的 `cordis.patch.yml` 含 `- id: mcp-manager` / `name: dsh-native-tui/mcp-manager` 覆盖，需改为 `name: '@deepseek-ai/dsh-mcp-manager'` 并保留原 `servers` 配置；否则 rc.2 会跳过该行（`name mismatch`），其中的 MCP 服务不会加载。`serverName` 是多余字段，可以保留。
 - Preset patch 从 `@deepseek-ai/dsh-web-app` 的 standard/ptc/minimal/cordis 复制而来：standard/ptc/minimal 需要 `subagent-model-selection-settings` Host 行，cordis 需要 cordis host-runner 与 `tool-cordis/host`。

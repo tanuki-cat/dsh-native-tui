@@ -811,7 +811,8 @@ describe('reduceTranscript', () => {
     ]
     const blocks = reduceTranscript(entries, { ...options, maxEntries: 2 })
     expect(blocks[0]).toMatchObject({ kind: 'notice', tone: 'info' })
-    expect(blocks.some(block => block.kind === 'notice' && block.tone === 'error')).toBe(true)
+    expect(blocks.some(block => block.kind === 'notice' && block.tone === 'error'
+      && block.text === 'Turn failed: E_FAIL: boom')).toBe(true)
   })
 
   it('keeps the settled content of a failed attempt instead of dropping it', () => {
@@ -831,6 +832,40 @@ describe('reduceTranscript', () => {
     const blocks = reduceTranscript(entries, options)
     expect(blocks[0]).toMatchObject({ kind: 'assistant', text: '', reasoning: 'weighed the options', live: false })
     expect(blocks[1]).toMatchObject({ kind: 'notice', tone: 'error' })
+  })
+
+  it('hides the refused draft and names the provider refusal', () => {
+    // A content-safety refusal is not conversation material: the provider blocked
+    // the reply, and the core keeps it only as an attempt outside model history.
+    // The turn-level notice is what the operator sees.
+    const stream = [
+      { type: 'chunk', time: 0, chunk: { type: 'block-start', index: 0, blockType: 'text' } },
+      { type: 'text-chunks', time0: 0, index: 0, dt: [], texts: ['Draft returned before the provider refusal.'] },
+      { type: 'chunk', time: 0, chunk: { type: 'block-end', index: 0, block: { type: 'text', text: 'Draft returned before the provider refusal.' } } },
+      { type: 'chunk', time: 0, chunk: { type: 'finish', reason: { kind: 'error', failure: { code: 'CONTENT_REFUSED', message: 'DeepSeek refused to answer under its content safety review' } } } },
+    ]
+    const entries: TranscriptEntry[] = [
+      liveChunk(1, 1, 1, { type: 'text-delta', text: 'Draft returned before the provider refusal.' }),
+      durable('assistant/attempt', { turn: 1, step: 1, stream }, 2),
+      durable('turn/end', { turn: 1, reason: { kind: 'error', error: { code: 'CONTENT_REFUSED', message: 'DeepSeek refused to answer under its content safety review' } } }, 3),
+    ]
+    expect(reduceTranscript(entries, options)).toEqual([{
+      kind: 'notice',
+      tone: 'error',
+      text: 'The provider refused this request: DeepSeek refused to answer under its content safety review',
+      seq: 3,
+    }])
+  })
+
+  it('names a refusal even when no attempt content was recorded', () => {
+    const entries: TranscriptEntry[] = [
+      durable('turn/end', { turn: 1, reason: { kind: 'error', error: { code: 'CONTENT_REFUSED', message: 'blocked images' } } }, 2),
+    ]
+    expect(reduceTranscript(entries, options)).toMatchObject([{
+      kind: 'notice',
+      tone: 'error',
+      text: 'The provider refused this request: blocked images',
+    }])
   })
 
   it('starts a fresh live block when a retry of the same step streams after an attempt', () => {

@@ -270,6 +270,41 @@ function attemptContent(stream: readonly AssistantStreamRecord[] | undefined): r
   }
 }
 
+/** Failure code the provider reports when it refuses a model response. */
+const CONTENT_REFUSED = 'CONTENT_REFUSED'
+
+/**
+ * Failure code a settled attempt's finish reports, when that attempt failed.
+ * @param stream - compact records from a durable `assistant/attempt`.
+ * @returns the code, or undefined when the attempt did not end in an error.
+ */
+function attemptFailureCode(stream: readonly AssistantStreamRecord[] | undefined): string | undefined {
+  for (const record of stream ?? []) {
+    if (record.type !== 'chunk' || record.chunk.type !== 'finish') continue
+    const reason = record.chunk.reason
+    if (reason.kind === 'error') return reason.failure.code
+  }
+  return undefined
+}
+
+/**
+ * Notice line for a failed turn.
+ *
+ * A provider refusal is a policy decision, not a terminal failure, and its
+ * message already states the reason; leading with the raw error code would read
+ * as a crash instead of an answer the provider declined to give.
+ * @param error - code and message recorded on the turn's end reason.
+ * @returns one transcript notice line.
+ */
+function turnFailureText(error: { readonly code: string; readonly message: string }): string {
+  if (error.code === CONTENT_REFUSED) {
+    return error.message === ''
+      ? 'The provider refused this request.'
+      : 'The provider refused this request: ' + error.message
+  }
+  return 'Turn failed: ' + error.code + ': ' + error.message
+}
+
 function toolResultText(message: { readonly content?: readonly ContentBlock[] }): string {
   return contentText(message.content)
 }
@@ -663,6 +698,10 @@ export function createTranscriptReducer(options: TranscriptOptions) {
             blocks[index] = { kind: 'assistant', text: '', live: false }
             liveByStep.delete(key)
           }
+          // A refusal is a policy decision, not conversation material: the
+          // provider blocked the reply and the Session keeps it only as an
+          // attempt outside model history. The turn-level notice states it.
+          if (attemptFailureCode(event.data.stream) === CONTENT_REFUSED) break
           // The attempt replaces the row the notice was raised under, so keep
           // that row's key for placement even though the stream has its own.
           const assistant = new AssistantStream(key + ':attempt:' + String(seq), options, key)
@@ -765,7 +804,7 @@ export function createTranscriptReducer(options: TranscriptOptions) {
             blocks.push({
               kind: 'notice',
               tone: 'error',
-              text: `Turn failed: ${reason.error.code}: ${reason.error.message}`,
+              text: turnFailureText(reason.error),
               seq,
             })
           } else if (reason.kind === 'aborted') {
