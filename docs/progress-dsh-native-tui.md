@@ -429,3 +429,10 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - 依赖、peer 范围与 devDependencies 统一到 `0.2.2-rc.4`；`pnpm-lock.yaml` 与 `pnpm-workspace.yaml` 的 `minimumReleaseAgeExclude` 同步刷新；README 版本说明更新。rc.3→rc.4 的实质变更只有 DeepSeek 拒答（`CONTENT_REFUSED`）与 LiveShare 桌面端修复；逐个比对依赖包的 `lib`，只有 `dsh-llm`（新增错误码）与 `dsh-llm-deepseek`（拒答处理）不同。
 - 拒答展示：`assistant/attempt` 的 finish 为 `CONTENT_REFUSED` 时不再渲染被拒正文（该内容只保留在 Session 的 attempt 中、不进入模型历史），`turn/end` 错误改为 `The provider refused this request: <provider message>`，不再显示裸错误码；新增两条 transcript 回归。
 - 验证：typecheck、127 文件 / 1834 项测试、build 全部通过；用隔离安装的 rc.4 CLI 运行 `scripts/fake-tty-approval.mjs`，allow / reject / cancel-row / cancel-esc 四组 PASS；拒答渲染按核心 `snapshots/session/deepseek-content-refusal/session.v4.jsonl` 的事件形状做单测，未连接真实 DeepSeek 拒答。
+
+## 2026-11-20：发布 v0.2.2-rc.4 与升级 DSH 0.2.2-rc.5
+
+- 先以 `aaf84fa` 为基线发布 `v0.2.2-rc.4`：annotated tag 触发 `release.yml`，CI 校验 tag 与 `package.json` 版本一致、重跑 `pnpm check`、打出 `dsh-native-tui-0.2.2-rc.4.tgz`（712 KiB）并创建 Pre-release。
+- 依赖、peer 范围与 devDependencies 统一到 `0.2.2-rc.5`；`pnpm-lock.yaml` 与 `pnpm-workspace.yaml` 的 `minimumReleaseAgeExclude` 同步刷新（77 条）；README 同步版本说明，并补充 rc.5 的搜索提供方选择与网关注意事项。rc.4→rc.5 的实质变更只有网页搜索：基础组合不再固定 `web.searchProvider`，`dsh-web` 按会话最近一次模型请求的路由选择（DeepSeek 路由 → `deepseek-official` Messages 搜索，其他路由 → `deepseek-search-api`），`WebSearchRequest` 新增可选 `llmProvider`，Messages 搜索结果优先取条目自带的 `snippet`。
+- 插件无需改代码：`cordis.patch.yml` 与四个 preset 都没有 `web` 行，也不直接调用 `ctx.web`；会话日志新增的 `web/deepseek-search-llm-request` 事件在 `transcript.ts` 的 `switch` 中没有匹配分支，按既有行为静默跳过。
+- 验证：`pnpm install` 后 `pnpm check` 通过（127 文件 / 1834 项测试、类型检查、构建）；`pnpm-lock.yaml` 中已无 `0.2.2-rc.4` 引用。
