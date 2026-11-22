@@ -1,14 +1,6 @@
 import { assistantStreamFirstTokenTime, lastAssistantStreamChunk, type AssistantStreamRecord } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
-
-/**
- * Compaction pressure defaults, mirroring `@deepseek-ai/dsh-compaction-basic`
- * (thresholdRatio, headroomTokens). The status bar keeps a Web-identical
- * percentage of the model window and states this trigger point beside it, so a
- * profile that overrides those keys shifts only the stated trigger point.
- */
-export const COMPACTION_THRESHOLD_RATIO = 0.8
-export const COMPACTION_HEADROOM_TOKENS = 65_536
+import { COMPACTION_HEADROOM_TOKENS, COMPACTION_THRESHOLD_RATIO, thresholdTokens } from './compaction-policy.js'
 
 /** Public context-pressure view from the Host projection snapshot. */
 export interface ContextPressureState {
@@ -220,14 +212,10 @@ export interface ContextPressure {
  */
 export function compactionThresholdTokens(contextWindow: number, reservedCompletionTokens = 0): number {
   if (!Number.isFinite(contextWindow) || contextWindow <= 0) return 0
-  const messageBudget = contextWindow - Math.max(0, Math.floor(reservedCompletionTokens))
-  const pressureBudget = messageBudget - COMPACTION_HEADROOM_TOKENS
+  const threshold = thresholdTokens(contextWindow, Math.max(0, Math.floor(reservedCompletionTokens)), COMPACTION_THRESHOLD_RATIO, COMPACTION_HEADROOM_TOKENS)
   // A reserve that leaves no pressure budget is a misconfiguration the compactor
   // rejects outright; report the nominal ratio rather than a 1-token threshold.
-  const threshold = pressureBudget > 0
-    ? Math.min(contextWindow * COMPACTION_THRESHOLD_RATIO, pressureBudget)
-    : contextWindow * COMPACTION_THRESHOLD_RATIO
-  return Math.max(1, Math.floor(threshold))
+  return threshold > 0 ? threshold : Math.max(1, Math.floor(contextWindow * COMPACTION_THRESHOLD_RATIO))
 }
 
 /**
@@ -261,6 +249,10 @@ export interface SessionStats {
   readonly decodeTokens: number
 }
 
+export type CompactionReading =
+  | { readonly state: 'known'; readonly route: string; readonly tokens: number; readonly window: number; readonly percent: number; readonly configuredPercent?: number }
+  | { readonly state: 'disabled' | 'unknown'; readonly route?: string }
+
 /** Metrics rendered in the terminal status line. */
 export interface SessionMetrics {
   readonly turns: number
@@ -280,6 +272,7 @@ export interface SessionMetrics {
   readonly contextWindowTokens?: number
   /** Share of the window at which automatic compaction fires. */
   readonly contextCompactPercent?: number
+  readonly compaction?: CompactionReading
 }
 
 /**
@@ -562,6 +555,7 @@ function finalizeMetrics(
   stats: SessionStats | undefined,
   contextWindow: number | undefined,
   meter: ContextMeterReading | undefined,
+  compaction: CompactionReading | undefined,
 ): SessionMetrics {
   const buckets = state.buckets
   const promptTokens = buckets.input + buckets.cacheRead + buckets.cacheWrite
@@ -580,8 +574,9 @@ function finalizeMetrics(
   // which lags the surface the compactor prices.
   const estimateTokens = meter === undefined ? state.latestPromptTokens : meter.tokens
   const pressure = contextWindow === undefined || estimateTokens === undefined
-    ? undefined
-    : contextPressure(contextWindow, meter?.reservedTokens ?? 0, estimateTokens)
+    ? undefined : contextPressure(contextWindow, meter?.reservedTokens ?? 0, estimateTokens)
+  const compactPercent = compaction === undefined ? pressure?.compactPercent
+    : compaction.state === 'known' ? compaction.percent : undefined
   return {
     turns: stats?.turns ?? state.turns,
     steps: stats?.steps ?? state.steps,
@@ -592,8 +587,9 @@ function finalizeMetrics(
       contextPercent: pressure.percent,
       contextEstimateTokens: pressure.estimateTokens,
       contextWindowTokens: contextWindow,
-      contextCompactPercent: pressure.compactPercent,
     }),
+    ...(compactPercent === undefined ? {} : { contextCompactPercent: compactPercent }),
+    ...(compaction === undefined ? {} : { compaction }),
   }
 }
 
@@ -614,10 +610,17 @@ export function collectSessionMetrics(
   stats?: SessionStats,
   contextWindow?: number,
   meter?: ContextMeterReading,
+  compaction?: CompactionReading,
 ): SessionMetrics {
   const state = createMetricsFoldState()
   foldEvents(state, events, stats !== undefined)
-  return finalizeMetrics(state, stats, contextWindow, meter)
+  return finalizeMetrics(state, stats, contextWindow, meter, compaction)
+}
+
+function sameCompaction(left: CompactionReading | undefined, right: CompactionReading | undefined): boolean {
+  return left?.state === right?.state && left?.route === right?.route
+    && (left?.state !== 'known' || right?.state === 'known' && left.tokens === right.tokens
+      && left.window === right.window && left.percent === right.percent && left.configuredPercent === right.configuredPercent)
 }
 
 /**
@@ -639,6 +642,7 @@ export function createSessionMetricsMemo(): (
   stats?: SessionStats,
   contextWindow?: number,
   meter?: ContextMeterReading,
+  compaction?: CompactionReading,
 ) => SessionMetrics {
   let state = createMetricsFoldState()
   /** Bumped whenever the fold consumes events, so an unchanged reading keeps its identity. */
@@ -653,9 +657,10 @@ export function createSessionMetricsMemo(): (
     readonly contextWindow: number | undefined
     readonly tokens: number | undefined
     readonly reserved: number | undefined
+    readonly compaction: CompactionReading | undefined
     readonly metrics: SessionMetrics
   } | undefined
-  return (events, stats, contextWindow, meter) => {
+  return (events, stats, contextWindow, meter, compaction) => {
     const hasStats = stats !== undefined
     // A replaced or truncated log, or a projection appearing/disappearing,
     // changes what the fold would count, so it has to start over. The Host only
@@ -681,10 +686,10 @@ export function createSessionMetricsMemo(): (
       && last.decodeTokens === stats?.decodeTokens
       && last.contextWindow === contextWindow
       && last.tokens === tokens
-      && last.reserved === reserved) {
+      && last.reserved === reserved && sameCompaction(last.compaction, compaction)) {
       return last.metrics
     }
-    const metrics = finalizeMetrics(state, stats, contextWindow, meter)
+    const metrics = finalizeMetrics(state, stats, contextWindow, meter, compaction)
     last = {
       foldVersion,
       hasStats,
@@ -695,6 +700,7 @@ export function createSessionMetricsMemo(): (
       contextWindow,
       tokens,
       reserved,
+      compaction,
       metrics,
     }
     return metrics
@@ -728,7 +734,7 @@ function formatContext(metrics: SessionMetrics): string {
   const window = metrics.contextWindowTokens
   const compact = metrics.contextCompactPercent
   if (estimate === undefined || window === undefined) return 'ctx ' + String(metrics.contextPercent) + '%'
-  const trigger = compact === undefined ? '' : ' · compact at ' + String(compact) + '%'
+  const trigger = compact === undefined ? '' : ' · compact at ' + String(Math.round(compact * 100) / 100) + '%'
   return 'ctx ' + String(metrics.contextPercent) + '%  (~'
     + formatTokenCount(estimate) + ' / ' + formatTokenCount(window) + trigger + ')'
 }

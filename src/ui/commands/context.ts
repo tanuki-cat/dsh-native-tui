@@ -19,6 +19,7 @@ import type { Palette } from '../theme.js'
 import type { ContextReportData } from '../context-report.js'
 import type { LLM } from './services.js'
 import type { ModelSelectionState } from '../../runtime/model-selection.js'
+import type { ModelRoute } from '../../runtime/compaction-policy.js'
 
 /** One notice line in the transcript. */
 export type NoticeTone = 'info' | 'warning' | 'error'
@@ -70,7 +71,7 @@ export interface CommandContext {
    * Record the routed model's context capacity and the output it reserves, so
    * the status row can price context against the compaction threshold.
    */
-  readonly setContextWindow: (tokens: number | undefined, reservedTokens?: number) => void
+  readonly setContextWindow: (route: ModelRoute, tokens: number | undefined, reservedTokens?: number) => void
   /**
    * The session's context figures, read from the same meter inputs the status
    * row prices: its folded metrics and the meter's heuristic composition

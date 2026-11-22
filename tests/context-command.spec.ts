@@ -131,6 +131,11 @@ describe('context report', () => {
     expect(text).toContain('░'.repeat(40))
   })
 
+  it('rounds a fractional fallback threshold to two decimal places', () => {
+    const text = contextReport(metricsOf({ contextCompactPercent: 50.848123 }), undefined)
+    expect(text.split('\n')[1]).toBe('Automatic compaction: at 50.85% of the window')
+  })
+
   it('omits the trigger line when the compactor has no threshold', () => {
     const text = contextReport(metricsOf({ contextCompactPercent: undefined }), undefined)
     expect(text).not.toContain('Automatic compaction')

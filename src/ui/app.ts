@@ -8,15 +8,17 @@ import {
   VStack,
 } from '@earendil-works/pi-tui'
 import type { Context } from '@deepseek-ai/cordis'
-import { bindModelSelection, sameModelSelection } from '../runtime/model-selection.js'
+import { bindModelSelection } from '../runtime/model-selection.js'
 import type {} from '@deepseek-ai/dsh-commands'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { DisplayMode, ResolvedConfig } from '../config.js'
-import { createHostSession, readContextBreakdown, readContextMeter, restartHostSession, resumeHostSession, sessionAgentPreset, type AgentPresetService, type HostSession } from '../runtime/agent.js'
+import { createHostSession, readContextBreakdown, restartHostSession, resumeHostSession, sessionAgentPreset, type AgentPresetService, type HostSession } from '../runtime/agent.js'
 import { findLauncher, parseProfileArg, resumeHint } from '../runtime/launcher.js'
 import { assertResumed, reloadArgs, RESUME_ENV } from '../runtime/reload.js'
-import { createSessionMetricsMemo, type SessionMetrics, type SessionStats } from '../runtime/metrics.js'
+import { createSessionMetricsMemo, type SessionMetrics } from '../runtime/metrics.js'
+import { ContextModelBudgets, readContextInputs } from '../runtime/context-reading.js'
+import { sameRoute } from '../runtime/compaction-policy.js'
 import { createGitBranchReader } from '../runtime/git-branch.js'
 import { showApproval, showQuestionBatch } from './dialogs.js'
 import { approvalArguments, approvalReceipt } from './approval-preview.js'
@@ -36,7 +38,7 @@ import type { CommandContext } from './commands/context.js'
 import { runCommandLine } from './commands/router.js'
 import { cycleReasoningEffort } from './commands/model.js'
 import type { InteractionModeService as ModeService } from '../interaction-modes.js'
-import type { AgentDefaultModelService, LLM, PermissionPresets, SessionProjectionsService, SkillsCatalog } from './commands/services.js'
+import type { AgentDefaultModelService, LLM, PermissionPresets, SkillsCatalog } from './commands/services.js'
 import { openTuiSettings, showHostSettings } from './commands/settings.js'
 import { errorMessage } from './commands/shared.js'
 import { subscribeSessionEvents } from './session-events.js'
@@ -260,9 +262,7 @@ export async function startTerminalApp(
   /** The `/` dispatch in flight, so Escape can cancel the command being waited on. */
   const commandDispatch = new CommandDispatchTracker(interactionAbort.signal)
   const attemptPositions = new Map<string, { turn: number; step: number }>()
-  let contextWindow: number | undefined
-  /** Output tokens one request reserves, as the compactor deducts them. */
-  let contextReserved: number | undefined
+  let contextBudgets = new ContextModelBudgets()
   let modelSelection = bindModelSelection(active.agent)
   reasoningEffort = modelSelection.current?.reasoningEffort
 
@@ -408,25 +408,7 @@ export async function startTerminalApp(
   /** One fold per application, so a repaint over an unchanged log is free. */
   const metricsFold = createSessionMetricsMemo()
 
-  /**
-   * Everything the context figures are read from: the routed capacity the meter
-   * reported, the meter's own reading, the session-stats projection, and the log.
-   */
-  const contextInputs = () => {
-    const projections = host.get('sessionProjections') as SessionProjectionsService | undefined
-    const values = projections?.snapshot(active.agent.session, ['contextPressure', 'contextBreakdown', 'sessionStats']).values
-    const meter = readContextMeter(projections, active.agent.session, contextReserved, values)
-    return {
-      projections,
-      meter,
-      // The routed request's own capacity wins, as on the Web meter; the model
-      // catalog value only stands in before the first request is routed.
-      window: meter.window ?? contextWindow,
-      values,
-      stats: values?.sessionStats as SessionStats | undefined,
-      events: active.agent.session.snapshotEvents(),
-    }
-  }
+  const contextInputs = () => readContextInputs(host, active.agent, modelSelection.current, contextBudgets)
 
   /**
    * The context figures both readers share: the status row prices them on every
@@ -436,7 +418,7 @@ export async function startTerminalApp(
    */
   const readContextFigures = (): { readonly metrics: SessionMetrics; readonly breakdown: ReturnType<typeof readContextBreakdown> } => {
     const inputs = contextInputs()
-    const metrics = metricsFold(inputs.events, inputs.stats, inputs.window, inputs.meter.reading)
+    const metrics = metricsFold(inputs.events, inputs.stats, inputs.window, inputs.meter.reading, inputs.compaction)
     return {
       metrics,
       // Rebased onto the occupancy the row reports, so the split can never add
@@ -489,6 +471,8 @@ export async function startTerminalApp(
       attachmentCount: pendingAttachments.length,
       contextWindow: inputs.window,
       contextMeter: inputs.meter.reading,
+      compaction: inputs.compaction,
+      compactionBaselinePercent: inputs.compactionBaselinePercent,
       stats: inputs.stats,
       events: inputs.events,
     }, metricsFold)
@@ -497,28 +481,23 @@ export async function startTerminalApp(
     tui.requestRender()
   }
 
-  const refreshContextWindow = async (): Promise<void> => {
-    const session = active, owner = modelSelection
+  const refreshContextWindow = async (force = false): Promise<void> => {
+    const budgets = contextBudgets
     const llm = host.get('llm') as LLM | undefined
-    const current = modelSelection.current
-    if (llm === undefined || current === undefined) return
-    try {
-      const info = await llm.resolveModelInfo(current.provider, current.model)
-      if (active !== session || modelSelection !== owner || disposed || !sameModelSelection(owner.current, current)) return
-      contextWindow = info.context?.contextWindow
-      contextReserved = info.defaultMaxTokens
-      renderStatus()
-    }
-    catch {
-      // The model may be temporarily unroutable; metrics keep the last known capacity.
-    }
+    if (llm === undefined) return
+    const selected = modelSelection.current
+    const routed = active.agent.session.requestHeader()?.config
+    await Promise.all([budgets.refresh(llm, selected, force),
+      sameRoute(selected, routed) ? undefined : budgets.refresh(llm, routed, force)])
+    if (budgets === contextBudgets) renderStatus()
   }
 
   const subscribeActive = (): void => {
-    unsubscribeSession = subscribeSessionEvents({
+    const stopEvents = subscribeSessionEvents({
       host,
       sessionId: () => active.id,
       appendEntry: entry => {
+        if (entry.type === 'event' && entry.event.type === 'request/context') void refreshContextWindow()
         const chunk = entry.type === 'live' ? entry.event.data.chunk : undefined
         if (chunk !== undefined) turnStatus.resume()
         if (chunk?.type === 'text-delta' || chunk?.type === 'reasoning-delta') {
@@ -549,6 +528,10 @@ export async function startTerminalApp(
       retryScheduled: retry => beginWait(retry),
       endWait: reason => { turnStatus.finish(reason); stopWaitTicker() },
     })
+    // The Host's app-boot package declares this event and is outside this plugin's type dependencies.
+    const stopReload = (host as unknown as { on(name: 'app-boot/config-reload', callback: () => void): () => void })
+      .on('app-boot/config-reload', () => { void refreshContextWindow(true) })
+    unsubscribeSession = () => { stopEvents(); stopReload() }
     scheduleTranscript(true)
     renderStatus()
   }
@@ -623,8 +606,7 @@ export async function startTerminalApp(
       streamPacer.reset()
       tui.setFocus(editor)
       modelSelection = bindModelSelection(active.agent)
-      contextWindow = undefined
-      contextReserved = undefined
+      contextBudgets = new ContextModelBudgets()
       registerInteractions()
       subscribeActive()
       void refreshContextWindow()
@@ -716,10 +698,7 @@ export async function startTerminalApp(
       openTuiSettings: () => openTuiSettings(commandContext()),
       showHostSettings: () => showHostSettings(commandContext()),
       modelSelection,
-      setContextWindow: (tokens, reservedTokens) => {
-        contextWindow = tokens
-        contextReserved = reservedTokens
-      },
+      setContextWindow: (route, tokens, reservedTokens) => { contextBudgets.remember(route, tokens, reservedTokens) },
       readContext: readContextFigures,
       stageSkillInvocation,
       persistSelection: async selection => {

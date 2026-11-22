@@ -26,6 +26,7 @@ import { changesCommand, deliverablesCommand, filesCommand } from './artifacts.j
 import { HELP_LINES } from './catalog.js'
 import type { CommandContext } from './context.js'
 import { contextCommand } from './context-stats.js'
+import { contextThresholdCommand } from './context-threshold.js'
 import { mcpCommand } from './mcp.js'
 import { modelCommand, reasoningCommand } from './model.js'
 import { pluginsCommand } from './plugins.js'
@@ -168,11 +169,9 @@ async function dispatchCommandLine(line: string, deps: CommandRouterDeps): Promi
       statusCommand(ctx())
       return
     case 'context':
-      if (args !== '') {
-        ctx().notice('warning', 'Usage: /context')
-        return
-      }
-      contextCommand(ctx())
+      if (args === '') contextCommand(ctx())
+      else if (args === 'threshold' || args.startsWith('threshold ')) await contextThresholdCommand(ctx(), args.slice('threshold'.length).trim())
+      else ctx().notice('warning', 'Usage: /context [threshold [percent]]')
       return
     case 'skill':
       await skillCommand(ctx(), args)

@@ -117,7 +117,7 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 - 状态栏按终端显示列宽自适应：宽屏补充 preset、附件数与已产生的 turns/steps/tok/s/tok/cache，零值计数和未知统计不占主状态行；窄屏缩短目录、去掉 `git ` 标签和字段标签、隐藏辅助字段，优先保留模型、Ready/Working、上下文和附件提示。模式与原生权限优先于快捷键。两行均不自动折行，极窄窗口截断；放大终端会恢复被隐藏的信息，中文、emoji 和 ANSI 着色均按实际列宽计算。
 - 模型名与 reasoning effort 统一使用柔和暖色，目录绿色、Ready 紫色；provider 使用次级文本；上下文与统计字段整段着色：上下文按阈值由强调蓝转黄/红，turns/steps 强调蓝、tok/s 绿色、tok 暖色、cache 紫色。推理选择控件保留 7 档颜色（off 灰 / minimal 青绿 / low 暗绿 / medium 浅蓝 / high 粉红 / xhigh 洋红 / max 红）；preset 保留紫色，附件和交互强调使用蓝色，Git 分支名同样使用强调蓝。Working、告警、危险权限和上下文阈值保留警示色；`plain` 主题不着色。
 - 启动时限时查询终端前景与背景；`auto` 随实际背景选择深浅配色。支持真彩色及 256 色降级，收到迟到的颜色回复或终端主题变化通知时刷新画面，并保留工具/context 展开状态；终端不响应时继续使用回退配色。
-- 上下文读 token meter 的 `contextPressure` 投影（最近一次 provider 采样 + 此后 surface 增减，包含 compaction 影响），首次 provider 采样前显示 `Context —`。接近自动压缩阈值时整段转黄色、达到阈值转红色；阈值按 `compaction-basic` 的 `thresholdRatio`、`headroomTokens` 与请求预留输出复算。`/context` 查看完整 token 数、容量、压缩阈值和构成明细。
+- 上下文读 token meter 的 `contextPressure` 投影（最近一次 provider 采样 + 此后 surface 增减，包含 compaction 影响），首次 provider 采样前显示 `Context —`。状态栏按当前 Host 策略的有效压缩检查线着色，并显示选中模型已生效的手动基线，例如 `Compaction baseline 77%`。`/context` 展示用量、构成和实际检查线，已知检查线可以在首次用量采样前查看。
 - token 用量与 cache 命中率按 Web 口径：总量取四桶之和、部分命中不会显示成 100%，数字格式与 Web 统计 pill 一致。`tok/s` 是整段 Session 的累计 decode 速率（`decodeTokens / (decodeMs / 1000)`），不是瞬时速率，低于 10 时保留一位小数。
 - 可选 `fullscreen`：TuiAltScreen + ScrollView，header/status/editor 固定，鼠标滚轮滚动、文本选择复制。向上滚动离开末尾后，输入区域上方的固定间隔行居中显示 `↓ Back to bottom · esc`，使用浅蓝文字和紧凑中性背景。点击按钮、按 `Esc` 或 `Ctrl+End` 回到最新消息并恢复自动跟随；回到末尾后恢复空白间隔。浏览历史时 Esc 保留草稿，overlay 保留自身的 Esc 操作。
 - 长会话渲染优化：每个行组件按宽度缓存结果（`MemoBlock`），`maxTranscriptEntries` 默认 600 限制每帧保留的行组件数；帧间隔按上次绘制时刻对齐并按实测帧成本自适应，内容签名未变的帧跳过重绘。
@@ -190,6 +190,7 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 | `/resume <id>` | 恢复指定 Session |
 | `/status` | Session、cwd、模型、状态、事件数 |
 | `/context` | 上下文占用、压缩触发点，以及系统提示词 / 工具定义 / 对话消息的占比（三项合计等于占用） |
+| `/context threshold [percent]` | 为当前 preset 中的选中模型预览并保存自动压缩检查线。超预算时可选择最高可行的整数百分比，保存后按提示重载当前会话 |
 | `/skill [<name>\|list [page]\|read <name>]` | 选择技能并暂存调用（Enter 发送）、分页查看全表、或阅读正文 |
 | `/skill:<name> [instructions]` | 调用指定技能并附带指令，不受同名命令遮蔽 |
 | `/clear` | 仅清空终端视图 |
@@ -603,6 +604,7 @@ node scripts/fake-tty-stream-smooth.mjs      # 流式大 chunk
 node scripts/fake-tty-main-screen-scroll.mjs # main-screen 长 transcript
 node scripts/fake-tty-model-picker.mjs       # /model 选择器与冷/热路径耗时（需网络：查 CodeBuddy 目录）
 node scripts/fake-tty-context.mjs            # /context 占用、占比图与三个分项（自建 mock provider）
+node scripts/fake-tty-compaction-threshold.mjs # 按模型设置检查线、重载和真实 Host 触发（自建 mock provider）
 node scripts/fake-tty-skills.mjs             # /skill 列表、分页、标签、选择过滤与真实调用链路（自建临时 workspace 与技能）
 node scripts/fake-tty-reasoning-cycle.mjs    # Shift+Tab 编码、连按、草稿、弹窗及 level → wire 映射（自建临时 profile 与 mock provider）
 node scripts/fake-tty-interaction-modes.mjs native # 五模式、真实文件效果、原生 permission、plan 审核和 Auto 审核（自建临时 profile）
@@ -649,6 +651,7 @@ npm 路径预留在 `publish-npm` job，默认跳过：需要仓库变量 `NPM_P
 | `/codex login` 后模型不可见 | 跑 `/codex status` 看路由与凭据；必要时 `/codex setup` 补路由 |
 | CodeBuddy 报 `code 11128` | 客户端指纹校验未通过，见[系统提示词与指纹校验](#系统提示词与指纹校验) |
 | CodeBuddy 路由注册失败 | `llm-pi-ai` 里存在同名 route，先 `/provider remove codebuddy` |
+| 本地模型过早自动压缩，或提示 `summary is not smaller than the shadowed content` | 等会话空闲后执行 `/compact`，或用 `/context threshold` 按模型调整检查线。见[自动压缩排障](docs/troubleshooting-context-compaction.md) |
 | 终端出现 `(node warning)` | 正常：warning 被暂存，退出后才输出，避免覆盖画面 |
 | 画面被日志覆盖 | 已由 `console` 接管机制处理；仍有输出时用 `DSH_NATIVE_TUI_DEBUG=1` 定位来源 |
 | `dnt` 命令不存在 | 用 `dsh --profile tui` 启动；或检查 `DSH_HOME` 是否为默认值、`DSH_NATIVE_TUI_NO_LAUNCHER` 是否被设置 |
@@ -661,7 +664,7 @@ npm 路径预留在 `publish-npm` job，默认跳过：需要仓库变量 `NPM_P
 - 会话级附件管理器未实现（当前覆盖 staged 附件）。
 - 远端连接未实现。
 - MCP 状态覆盖初始激活与运行中的工具注销，但 `dsh-mcp-client` 未暴露「重连进行中」的中间态。
-- 自动压缩已接入 preset 并有事件卡，真实长上下文 E2E 仍需补。
+- 自动压缩阈值、摘要路径和会话恢复已在隔离 Host 与模拟模型上验证。真实本地模型应用新策略后的摘要效果仍待复测。
 
 详见[架构文档](docs/design-task-feature-dsh-native-tui-host-native.md)第 6 节。
 

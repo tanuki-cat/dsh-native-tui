@@ -66,8 +66,19 @@ export function contextReport(
       ? ''
       : '  ·  ~' + formatTokenCount(estimate) + ' / ' + formatTokenCount(window)
     lines.push('Context used: ' + String(percent) + '%' + figures)
-    if (metrics.contextCompactPercent !== undefined)
-      lines.push('Automatic compaction: at ' + String(metrics.contextCompactPercent) + '% of the window')
+  }
+  const share = (value: number): string => String(Math.round(value * 100) / 100) + '%'
+  const compaction = metrics.compaction
+  if (compaction?.state === 'known') {
+    const configuredPercent = compaction.configuredPercent
+    const configured = configuredPercent !== undefined && Math.abs(configuredPercent - compaction.percent) >= 0.01
+      ? ' · configured ' + share(configuredPercent) : ''
+    lines.push('Automatic compaction: at ' + share(compaction.percent) + ' of the window ('
+      + compaction.tokens.toLocaleString('en-US') + ' tokens)' + configured + ' · ' + compaction.route)
+  } else if (compaction !== undefined) {
+    lines.push('Automatic compaction: ' + compaction.state + (compaction.route === undefined ? '' : ' · ' + compaction.route))
+  } else if (metrics.contextCompactPercent !== undefined) {
+    lines.push('Automatic compaction: at ' + share(metrics.contextCompactPercent) + ' of the window')
   }
   if (breakdown === undefined) {
     lines.push('', 'Composition: unknown (the token meter is not mounted).')
