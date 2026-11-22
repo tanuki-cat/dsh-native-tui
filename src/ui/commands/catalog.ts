@@ -11,7 +11,7 @@ import type { CommandSuggestion } from '../autocomplete.js'
 
 /** `/help` rows, one line per command family. */
 export const HELP_LINES: readonly string[] = [
-  '/help · /new · /init · /sessions · /resume [id] · /status · /context · /clear',
+  '/help · /new · /init · /sessions · /resume [id] · /status · /context [threshold [percent]] · /clear',
   '/skill [<name>|list [page]|read <name>] · stage a skill call, review the catalog, or read one',
   '/skill:<name> [instructions] · invoke a skill, including names shared with commands',
   'Ctrl+N: new/blank session · Alt+S: switch session (keep draft and attachments)',
@@ -44,7 +44,9 @@ export const LOCAL_COMMANDS: readonly CommandSuggestion[] = [
   { name: 'sessions', description: 'list persisted sessions' },
   { name: 'resume', description: 'resume a session', input: { hint: 'session-id' } },
   { name: 'status', description: 'show session, model, and preset' },
-  { name: 'context', description: 'show context usage and its composition' },
+  { name: 'context', description: 'show context usage and compaction', keepExactSubmit: true, subcommands: [
+    { name: 'threshold', description: 'configure the selected model’s automatic compaction threshold', hint: '[percent]' },
+  ] },
   { name: 'skill', description: 'pick a skill to invoke, review the catalog, or read one', input: { hint: '[<name>|list [page]|read <name>]' }, keepExactSubmit: true, subcommands: [
     { name: 'list', description: 'page the skill table', hint: '[page]' },
     { name: 'read', description: 'read one skill body', hint: '<name>' },

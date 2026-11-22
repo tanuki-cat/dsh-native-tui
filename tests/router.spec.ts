@@ -165,7 +165,13 @@ describe('command router', () => {
   it('rejects context arguments instead of ignoring them', async () => {
     const h = harness()
     await runCommandLine('/context 3', h.deps)
-    expect(h.notices).toEqual([{ tone: 'warning', text: 'Usage: /context' }])
+    expect(h.notices).toEqual([{ tone: 'warning', text: 'Usage: /context [threshold [percent]]' }])
+  })
+
+  it('dispatches /context threshold to the model policy editor', async () => {
+    const h = harness()
+    await runCommandLine('/context threshold 90', h.deps)
+    expect(h.notices).toEqual([{ tone: 'warning', text: 'Select a model before editing its compaction threshold.' }])
   })
 
   it('dispatches /skill to the local handler', async () => {

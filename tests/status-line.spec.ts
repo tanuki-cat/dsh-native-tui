@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { visibleWidth } from '@earendil-works/pi-tui'
 import { stripVTControlCharacters } from 'node:util'
+import { createSessionMetricsMemo } from '../src/runtime/metrics.js'
 import { createPalette } from '../src/ui/theme.js'
 import { StatusBar } from '../src/ui/status-bar.js'
 import { renderStatusRows, splitContextLine, splitSessionMetrics, terminalWindowTitle, workspacePath, type StatusInput } from '../src/ui/status-line.js'
@@ -150,6 +151,29 @@ describe('renderStatusRows', () => {
     expect(full(status)).toContain(dark.error('Context 40% used'))
   })
 
+  it('recolors unchanged usage when the mounted policy changes or disables auto compaction', () => {
+    const dark = createPalette('dark')
+    const result = rows()
+    const fold = createSessionMetricsMemo()
+    const input = inputOf({ contextMeter: { tokens: 400_000 } })
+    const policy = { state: 'known', route: 'provider/model', window: 1_000_000, tokens: 400_000, percent: 40, configuredPercent: 40 } as const
+    renderStatusRows(result.rows, dark, { ...input, compaction: policy }, fold)
+    expect(full(result.status)).toContain(dark.error('Context 40% used'))
+    renderStatusRows(result.rows, dark, { ...input, compaction: { ...policy, tokens: 550_000, percent: 55, configuredPercent: 55 } }, fold)
+    expect(full(result.status)).toContain(dark.warning('Context 40% used'))
+    renderStatusRows(result.rows, dark, { ...input, compaction: { state: 'disabled', route: policy.route } }, fold)
+    expect(full(result.status)).toContain(dark.accent('Context 40% used'))
+  })
+
+  it('shows the configured baseline alongside usage colored by the effective check line', () => {
+    const dark = createPalette('dark')
+    const { status } = painted({ compactionBaselinePercent: 77,
+      compaction: { state: 'known', route: 'provider/model', window: 1_000_000, tokens: 400_000, percent: 40, configuredPercent: 77 } }, 'dark')
+    expect(full(status)).toContain(dark.error('Context 40% used'))
+    expect(stripVTControlCharacters(full(status))).toContain('Context 40% used · Compaction baseline 77%')
+    expect(full(painted().status)).not.toContain('baseline')
+  })
+
   it('distinguishes unknown context from a measured zero', () => {
     expect(full(painted({ contextMeter: {} }).status)).toContain('Context —')
     expect(full(painted({ contextWindow: undefined, contextMeter: undefined }).status)).toContain('Context —')
@@ -197,6 +221,13 @@ describe('status layout', () => {
     expect(line).not.toContain('turns')
     expect(line).not.toContain('/tmp/work')
     expect(line).toContain('…')
+  })
+
+  it('keeps the compact baseline visible in a narrow window before the first usage sample', () => {
+    const { status } = painted({ model: 'long-model-' + 'x'.repeat(70), contextMeter: {}, compactionBaselinePercent: 77 })
+    const line = status.render(40)[0]!
+    expect(line).toContain('Ready · ctx — · base 77%')
+    expect(visibleWidth(line)).toBeLessThanOrEqual(40)
   })
 
   it('keeps steer and cancel shortcuts ahead of exit shortcuts in a narrow running footer', () => {

@@ -10,7 +10,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { homedir } from 'node:os'
 import type { AgentPresetService } from '../runtime/agent.js'
-import type { ContextMeterReading, SessionMetrics, SessionStats } from '../runtime/metrics.js'
+import type { CompactionReading, ContextMeterReading, SessionMetrics, SessionStats } from '../runtime/metrics.js'
 import { collectSessionMetrics, formatSessionMetrics } from '../runtime/metrics.js'
 import type { Palette } from './theme.js'
 import { sanitizeTerminalText } from '../runtime/terminal-text.js'
@@ -45,6 +45,8 @@ export interface StatusInput {
    * without it, where the durable log's last prompt stands in.
    */
   readonly contextMeter: ContextMeterReading | undefined
+  readonly compaction?: CompactionReading
+  readonly compactionBaselinePercent?: number
   readonly stats: SessionStats | undefined
   readonly events: readonly unknown[]
 }
@@ -80,6 +82,7 @@ export type MetricsFold = (
   stats: SessionStats | undefined,
   contextWindow: number | undefined,
   meter: ContextMeterReading | undefined,
+  compaction?: CompactionReading,
 ) => SessionMetrics
 
 /**
@@ -109,8 +112,8 @@ export function renderStatusRows(
   const thinking = input.reasoningEffort === undefined ? ''
     : ' ' + label(String(input.reasoningEffort))
   const metrics = fold === undefined
-    ? collectSessionMetrics(input.events as never, input.stats, input.contextWindow, input.contextMeter)
-    : fold(input.events as never, input.stats, input.contextWindow, input.contextMeter)
+    ? collectSessionMetrics(input.events as never, input.stats, input.contextWindow, input.contextMeter, input.compaction)
+    : fold(input.events as never, input.stats, input.contextWindow, input.contextMeter, input.compaction)
   const split = splitSessionMetrics(formatSessionMetrics(metrics))
   const model = palette.bold(palette.model(label(input.model) + thinking))
   const cwd = workspacePath(label(input.cwd))
@@ -134,11 +137,18 @@ export function renderStatusRows(
   })
   status.push({ text: state })
   const percent = metrics.contextPercent
-  const context = palette.context(percent, metrics.contextCompactPercent)
+  const usedShare = metrics.contextEstimateTokens !== undefined && metrics.compaction?.state === 'known'
+    ? metrics.contextEstimateTokens / metrics.compaction.window * 100 : percent
+  const context = percent !== undefined && metrics.compaction !== undefined && metrics.compaction.state !== 'known'
+    ? palette.accent : palette.context(usedShare, metrics.contextCompactPercent)
   status.push({
     text: context(percent === undefined ? 'Context —' : 'Context ' + String(percent) + '% used'),
     compact: context(percent === undefined ? 'ctx —' : 'ctx ' + String(percent) + '%'),
   })
+  if (input.compactionBaselinePercent !== undefined) {
+    const baseline = palette.accent(String(Math.round(input.compactionBaselinePercent * 100) / 100) + '%')
+    status.push({ text: palette.dim('Compaction baseline ') + baseline, compact: palette.dim('base ') + baseline })
+  }
   if (input.attachmentCount > 0) status.push({ text: palette.accent('attached ' + String(input.attachmentCount)) })
   if (input.preset !== undefined) status.push({ text: palette.dim('preset ') + palette.preset(label(input.preset)), priority: 3 })
   status.push(...split.usage.split('  ·  ').flatMap((text, index) => text.startsWith('0 ') || text.includes('—') ? [] : [{

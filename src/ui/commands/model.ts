@@ -40,7 +40,7 @@ export async function selectModel(ctx: CommandContext, llm: LLM, target: string)
   try {
     const info = await llm.resolveModelInfo(provider, model)
     if (!isCurrent() || !sameModelSelection(owner.current, initial)) return
-    ctx.setContextWindow(info.context?.contextWindow, info.defaultMaxTokens)
+    ctx.setContextWindow({ provider, model }, info.context?.contextWindow, info.defaultMaxTokens)
     const reasoning = info.reasoning
     let effort = ctx.modelSelection.current?.reasoningEffort
     if (effort !== undefined && reasoning?.efforts.some(candidate => candidate.id === effort) !== true)
