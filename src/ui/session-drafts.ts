@@ -12,7 +12,7 @@ export interface SessionDraft {
 
 interface DraftEntry {
   readonly draft: SessionDraft
-  readonly cwd: string
+  readonly cwd: string | undefined
   readonly preset: string | undefined
   readonly started: boolean
 }
@@ -24,7 +24,7 @@ export const MAX_DRAFTS = 32
 export class SessionDrafts {
   private readonly entries = new Map<SessionId, DraftEntry>()
 
-  save(session: Session, draft: SessionDraft, cwd: string, preset?: string): void {
+  save(session: Session, draft: SessionDraft, cwd: string | undefined, preset?: string): void {
     const previous = this.entries.get(session.id)
     const started = previous?.started === true || session.snapshotEvents().some(event =>
       event.type === 'turn/start' || event.type === 'user/message'
@@ -33,7 +33,7 @@ export class SessionDrafts {
     // this terminal has not visited for longest instead of leaking one per switch.
     this.entries.delete(session.id)
     this.entries.set(session.id, {
-      draft, cwd: resolve(session.header.cwd ?? cwd),
+      draft, cwd: cwd === undefined ? undefined : resolve(cwd),
       preset: sessionAgentPreset(session) ?? preset, started,
     })
     while (this.entries.size > MAX_DRAFTS) {

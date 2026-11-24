@@ -283,9 +283,22 @@ describe('terminalWindowTitle', () => {
     expect(terminalWindowTitle('dsh', '/tmp/a' + String.fromCharCode(0x9c) + 'b')).toBe('dsh · a b')
   })
 
-  it('bounds the workspace label', () => {
+  it('bounds the workspace label without splitting surrogate pairs', () => {
     const label = terminalWindowTitle('dsh', '/tmp/' + 'x'.repeat(80))
     expect(label).toBe('dsh · ' + 'x'.repeat(47) + '…')
+    const emojiLabel = terminalWindowTitle('dsh', '/tmp/' + 'a'.repeat(46) + '🚀tail')
+    expect(emojiLabel).toBe('dsh · ' + 'a'.repeat(46) + '…')
+  })
+
+  it('evaluates dynamic StatusBar separators and caches rendered rows', () => {
+    let sep = ' | '
+    const bar = new StatusBar(() => sep)
+    bar.setSegments([{ text: 'left' }, { text: 'right' }])
+    const first = bar.render(80)
+    expect(first).toEqual(['left | right'])
+    expect(bar.render(80)).toBe(first)
+    sep = ' · '
+    expect(bar.render(80)).toEqual(['left · right'])
   })
 })
 

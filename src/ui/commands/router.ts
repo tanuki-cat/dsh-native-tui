@@ -26,6 +26,7 @@ import { changesCommand, deliverablesCommand, filesCommand } from './artifacts.j
 import { HELP_LINES } from './catalog.js'
 import type { CommandContext } from './context.js'
 import { contextCommand } from './context-stats.js'
+import { contextSummaryCommand } from './context-summary.js'
 import { contextThresholdCommand } from './context-threshold.js'
 import { mcpCommand } from './mcp.js'
 import { modelCommand, reasoningCommand } from './model.js'
@@ -37,7 +38,7 @@ import { sessionsCommand } from './sessions.js'
 import { settingsCommand } from './settings.js'
 import { skillCommand } from './skills.js'
 import { modeCommand } from './mode.js'
-import { errorMessage } from './shared.js'
+import { errorMessage, sessionCwd } from './shared.js'
 import { diffCommand, toolCommand, toolsCommand } from './tools.js'
 import { exportCommand, openCommand, presetCommand, previewCommand } from './workspace-files.js'
 import { workspacesCommand } from './workspace.js'
@@ -171,7 +172,8 @@ async function dispatchCommandLine(line: string, deps: CommandRouterDeps): Promi
     case 'context':
       if (args === '') contextCommand(ctx())
       else if (args === 'threshold' || args.startsWith('threshold ')) await contextThresholdCommand(ctx(), args.slice('threshold'.length).trim())
-      else ctx().notice('warning', 'Usage: /context [threshold [percent]]')
+      else if (args === 'summary' || args.startsWith('summary ')) await contextSummaryCommand(ctx(), args.slice('summary'.length).trim())
+      else ctx().notice('warning', 'Usage: /context [threshold [percent] | summary [event-seq]]')
       return
     case 'skill':
       await skillCommand(ctx(), args)
@@ -182,7 +184,7 @@ async function dispatchCommandLine(line: string, deps: CommandRouterDeps): Promi
       return
     case 'new':
       await deps.switchTo(() => deps.openNewSession(
-        ctx().active.agent.session.header.cwd ?? ctx().config.cwd,
+        sessionCwd(ctx()),
         deps.preset.current() ?? ctx().config.agentPreset,
       ))
       return

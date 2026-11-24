@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { SkillSummaryLike } from '../src/runtime/skill-catalog.js'
+import type { HostSession } from '../src/runtime/agent.js'
 import { SKILLS_CACHE_MS, SkillCatalogCache } from '../src/ui/skill-cache.js'
 
 const agent = (cwd: string | null = '/work') => ({ session: { header: cwd === null ? {} : { cwd } } }) as never
+const workingDirectory = (agent: HostSession['agent']) => agent.session.header.cwd ?? '/default'
 
 const summary = (name: string, userInvocable = true): SkillSummaryLike => ({
   name,
@@ -12,7 +14,7 @@ const summary = (name: string, userInvocable = true): SkillSummaryLike => ({
 
 function harness(rows: readonly SkillSummaryLike[] = [summary('alpha')]) {
   const list = vi.fn(async () => rows)
-  const cache = new SkillCatalogCache(() => ({ list }), () => '/default', () => true)
+  const cache = new SkillCatalogCache(() => ({ list }), workingDirectory, () => true)
   return { list, cache }
 }
 
@@ -50,9 +52,9 @@ describe('skill catalog cache', () => {
   })
 
   it('reports an empty menu when the Host exposes no catalog or the read fails', async () => {
-    const missing = new SkillCatalogCache(() => undefined, () => '/default', () => true)
+    const missing = new SkillCatalogCache(() => undefined, workingDirectory, () => true)
     expect(await missing.load(agent(), () => 0)).toEqual([])
-    const failing = new SkillCatalogCache(() => ({ list: async () => { throw new Error('no catalog') } }), () => '/default', () => true)
+    const failing = new SkillCatalogCache(() => ({ list: async () => { throw new Error('no catalog') } }), workingDirectory, () => true)
     expect(await failing.load(agent(), () => 0)).toEqual([])
   })
 
@@ -68,12 +70,27 @@ describe('skill catalog cache', () => {
   it('does not keep rows that arrive after the session switched away', async () => {
     let current = true
     const list = vi.fn(async () => [summary('alpha')])
-    const cache = new SkillCatalogCache(() => ({ list }), () => '/default', () => current)
+    const cache = new SkillCatalogCache(() => ({ list }), workingDirectory, () => current)
     const target = agent()
     const first = cache.load(target, () => 0)
     current = false
     await first
     await cache.load(agent('/elsewhere'), () => 0)
     expect(list).toHaveBeenCalledTimes(2)
+  })
+
+  it('discards results if the same Agent entered another worktree during discovery', async () => {
+    let resolveRead!: (rows: SkillSummaryLike[]) => void
+    const pending = new Promise<SkillSummaryLike[]>(resolve => { resolveRead = resolve })
+    let cwd = '/original'
+    const list = vi.fn().mockReturnValueOnce(pending).mockResolvedValue([summary('new')])
+    const cache = new SkillCatalogCache(() => ({ list }), () => cwd, () => true)
+    const target = agent()
+    const reading = cache.load(target, () => 0)
+    cwd = '/worktree'
+    resolveRead([summary('old')])
+    expect(await reading).toEqual([])
+    expect((await cache.load(target, () => 1)).map(row => row.name)).toEqual(['new'])
+    expect(list).toHaveBeenLastCalledWith({ cwd, scope: target })
   })
 })

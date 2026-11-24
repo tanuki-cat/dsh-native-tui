@@ -124,7 +124,7 @@ export async function exportCommand(ctx: CommandContext, args: string): Promise<
       return
     }
     try {
-      const result = await exportSessionBundle(ctx.active.agent, target, sessionCwd(ctx), attachments, ctx.signal)
+      const result = await exportSessionBundle(ctx.active.agent, target, sessionCwd(ctx), attachments, ctx.signal, ctx.config.cwd)
       ctx.notice('info', 'Exported ZIP bundle: ' + result.path + ' (' + String(result.bytes) + ' bytes, '
         + String(result.attachments.length) + ' attachment(s), '
         + String(result.deliverables.length) + ' deliverable(s)'

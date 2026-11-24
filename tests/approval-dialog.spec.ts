@@ -117,6 +117,23 @@ describe('approval previews and details', () => {
     expect(h.hide).toHaveBeenCalledOnce()
   })
 
+  it('escapes C1 controls and closes on CSI-u Escape in full details', async () => {
+    const h = harness(), controller = new AbortController()
+    const c1 = String.fromCharCode(0x9b) + '31m' + String.fromCharCode(0x9d) + '52;c;BAD' + String.fromCharCode(0x9c)
+    const req = { ...request(controller, 'echo ' + c1), reason: 'Check' }
+    const running = showApproval(h.tui as never, palette, req)
+    details(h.overlays[0]!); await flush()
+    const viewer = h.overlays[1]!
+    const rendered = viewer.render(100).join('\n')
+    expect(rendered).not.toContain(String.fromCharCode(0x9b))
+    expect(rendered).not.toContain(String.fromCharCode(0x9d))
+    expect(rendered).toContain('\\x9b31m')
+    viewer.handleInput('\x1b[27u'); await flush()
+    expect(h.overlays).toHaveLength(3)
+    h.overlays[2]!.handleInput('\r')
+    expect(await running).toBe('rejected')
+  })
+
   it('renders terminal controls as literal data', async () => {
     const h = harness(), controller = new AbortController()
     const running = showApproval(h.tui as never, palette, request(controller, 'echo ' + String.fromCharCode(27) + '[2J'))

@@ -82,6 +82,7 @@ function panelTheme(palette: Palette): SettingsListTheme {
 /** Component that frames a SettingsList and keeps its chrome in sync. */
 class SettingsPanel implements Component {
   private readonly list: SettingsList
+  private submenuOpen = false
   constructor(
     private readonly spec: SettingsPanelSpec,
     private readonly palette: Palette,
@@ -95,7 +96,15 @@ class SettingsPanel implements Component {
         ...(item.description === undefined ? {} : { description: item.description }),
         currentValue: item.value,
         ...(item.values === undefined ? {} : { values: [...item.values] }),
-        ...(item.submenu === undefined ? {} : { submenu: item.submenu }),
+        ...(item.submenu === undefined ? {} : {
+          submenu: (currentValue: string, done: (selectedValue?: string) => void) => {
+            this.submenuOpen = true
+            return item.submenu!(currentValue, value => {
+              this.submenuOpen = false
+              done(value)
+            })
+          },
+        }),
       })),
       Math.min(11, Math.max(3, spec.items.length)),
       panelTheme(palette),
@@ -111,11 +120,13 @@ class SettingsPanel implements Component {
   }
 
   render(width: number): string[] {
-    const inner = Math.max(20, width - 4)
+    const inner = Math.max(1, width - 4)
+    const rendered = this.list.render(inner)
+    const body = this.submenuOpen ? rendered : selectionRows(rendered, inner, this.palette.autocompleteSelection, '› ')
     return dialogFrame([
       ...new Text(this.spec.title(), 0, 0).render(inner),
       '',
-      ...selectionRows(this.list.render(inner), inner, this.palette.autocompleteSelection, '› '),
+      ...body,
       '',
       ...new Text(this.palette.dim(this.spec.hint), 0, 0).render(inner),
     ], width, this.palette)
@@ -175,6 +186,7 @@ export function showSettingsPanel(
       handle.focus()
     }
     catch (error) {
+      handle?.hide()
       reject(error)
       return
     }

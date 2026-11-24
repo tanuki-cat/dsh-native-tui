@@ -1,4 +1,4 @@
-import { visibleWidth, wrapTextWithAnsi, type Component } from '@earendil-works/pi-tui'
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from '@earendil-works/pi-tui'
 
 /**
  * Text block whose wrapped lines all retain a visible left bar.
@@ -18,9 +18,12 @@ export class BarText implements Component {
   }
 
   render(width: number): string[] {
-    if (this.text.trim() === '') return []
+    if (width <= 0 || this.text.trim() === '') return []
     const prefixWidth = visibleWidth(this.prefix)
-    const wrapped = wrapTextWithAnsi(this.text, Math.max(1, width - prefixWidth))
-    return wrapped.map(line => this.prefixStyle(this.prefix) + this.bodyStyle(line))
+    if (width <= prefixWidth) {
+      return wrapTextWithAnsi(this.text, width).map(line => truncateToWidth(this.bodyStyle(line), width, '…'))
+    }
+    const wrapped = wrapTextWithAnsi(this.text, width - prefixWidth)
+    return wrapped.map(line => truncateToWidth(this.prefixStyle(this.prefix) + this.bodyStyle(line), width, '…'))
   }
 }

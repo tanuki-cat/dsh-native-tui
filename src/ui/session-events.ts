@@ -61,7 +61,7 @@ export function subscribeSessionEvents(host: SessionEventsHost): () => void {
   const projections = host.host.get('sessionProjections') as SessionProjectionsService | undefined
   if (projections !== undefined) {
     own(projections.onEventChanged((session, changes) => {
-      if (session.id === host.sessionId() && changes.some(change => ['contextPressure', 'contextBreakdown', 'sessionStats'].includes(change.key))) {
+      if (session.id === host.sessionId() && changes.some(change => ['contextPressure', 'contextBreakdown', 'sessionStats', 'workingDirectory'].includes(change.key))) {
         host.renderStatus()
       }
     }))

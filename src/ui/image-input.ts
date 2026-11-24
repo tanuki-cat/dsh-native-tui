@@ -69,8 +69,14 @@ export function wireImageInput(editor: PromptEditor, context: () => CommandConte
     const isCurrent = () => (ctx.isCurrent?.() ?? true) && !ctx.signal.aborted
     const count = ctx.attachments.pending.length
     let firstImported = false
+    let cwd: string
+    try { cwd = sessionCwd(ctx) }
+    catch (error) {
+      ctx.notice('error', 'Could not resolve the attachment directory: ' + errorMessage(error))
+      return text
+    }
     return importImagePaste(source, {
-      cwd: sessionCwd(ctx), attachments, pending: ctx.attachments.pending,
+      cwd, attachments, pending: ctx.attachments.pending,
       isCurrent,
       onError: (path, error) => ctx.notice('error', 'Could not attach ' + path + ': ' + errorMessage(error)),
       onImported: ref => { if (ref.start === 0) firstImported = true },

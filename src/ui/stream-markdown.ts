@@ -44,11 +44,17 @@ interface FrozenChunk {
   readonly component: Markdown
 }
 
+/** Opening state of a fenced code block so nested or mixed fences stay intact. */
+interface FenceState {
+  readonly char: '`' | '~'
+  readonly length: number
+}
+
 /** One markdown block boundary this component has found. */
 interface ScanState {
   /** Offset after the last complete source line that was inspected. */
   scanned: number
-  inFence: boolean
+  fence: FenceState | undefined
   /** Offset after a blank line that a following block may start at. */
   pendingBlank: number | undefined
   /** Offset the frozen prefix currently ends at. */
@@ -73,7 +79,7 @@ export class StreamMarkdown implements Component {
   private frozenText = ''
   /** Render the document as one component: it defines link references. */
   private whole = false
-  private scan: ScanState = { scanned: 0, inFence: false, pendingBlank: undefined, split: 0, definesReference: false }
+  private scan: ScanState = { scanned: 0, fence: undefined, pendingBlank: undefined, split: 0, definesReference: false }
   private width = -1
   private lines: string[] | undefined
 
@@ -134,13 +140,14 @@ export class StreamMarkdown implements Component {
     this.frozen.length = 0
     this.frozenText = ''
     this.whole = false
-    this.scan = { scanned: 0, inFence: false, pendingBlank: undefined, split: 0, definesReference: false }
+    this.scan = { scanned: 0, fence: undefined, pendingBlank: undefined, split: 0, definesReference: false }
   }
 
   /** Extend the block scan, then move text between the frozen prefix and the live tail. */
   private sync(): void {
     this.scanBlocks()
-    if (this.scan.definesReference) this.whole = true
+    const trailingReference = this.scan.fence === undefined && REFERENCE_DEFINITION.test(this.text.slice(this.scan.scanned))
+    if (this.scan.definesReference || trailingReference) this.whole = true
     if (this.whole) {
       this.dropFrozen()
       // The live component owns the whole document, definitions included.
@@ -194,18 +201,33 @@ export class StreamMarkdown implements Component {
       const end = this.text.indexOf('\n', index) + 1
       const line = this.text.slice(index, Math.max(index, end - 1))
       const trimmed = line.trimStart()
-      if (!this.scan.inFence && REFERENCE_DEFINITION.test(line)) this.scan.definesReference = true
-      if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) {
-        this.scan.inFence = !this.scan.inFence
+      let spaces = 0
+      while (spaces < line.length && line[spaces] === ' ') spaces += 1
+      if (this.scan.fence === undefined && REFERENCE_DEFINITION.test(line)) this.scan.definesReference = true
+      if (this.scan.fence !== undefined) {
+        if (spaces <= 3) {
+          const closeMatch = /^(`{3,}|~{3,})[ \t]*$/u.exec(line.slice(spaces))
+          if (closeMatch !== null && closeMatch[1]![0] === this.scan.fence.char && closeMatch[1]!.length >= this.scan.fence.length) {
+            this.scan.fence = undefined
+          }
+        }
         this.scan.pendingBlank = undefined
       }
-      else if (!this.scan.inFence && trimmed === '') {
-        this.scan.pendingBlank = end
-      }
-      else if (this.scan.pendingBlank !== undefined) {
-        const pending = this.scan.pendingBlank
-        this.scan.pendingBlank = undefined
-        if (!this.scan.inFence && line[0] !== ' ' && line[0] !== '\t') this.scan.split = pending
+      else {
+        const openMatch = spaces <= 3 ? /^(`{3,}|~{3,})(.*)$/u.exec(line.slice(spaces)) : null
+        const validBacktick = openMatch !== null && (openMatch[1]![0] !== '`' || !openMatch[2]!.includes('`'))
+        if (openMatch !== null && validBacktick) {
+          this.scan.fence = { char: openMatch[1]![0] as '`' | '~', length: openMatch[1]!.length }
+          this.scan.pendingBlank = undefined
+        }
+        else if (trimmed === '') {
+          this.scan.pendingBlank = end
+        }
+        else if (this.scan.pendingBlank !== undefined) {
+          const pending = this.scan.pendingBlank
+          this.scan.pendingBlank = undefined
+          if (line[0] !== ' ' && line[0] !== '\t') this.scan.split = pending
+        }
       }
       index = end
     }

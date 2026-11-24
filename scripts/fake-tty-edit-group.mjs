@@ -28,7 +28,7 @@ async function run(preset, fullscreen, columns, theme) {
       const calls = files.map((file, index) => ({ id: name + '-' + index, name,
         args: phase === 0 ? { file_path: file.path } : { file_path: file.path, old_string: file.before, new_string: file.after } }))
       const dispatched = preset === 'ptc' ? [{ id: name + '-root', name: 'run_code', args: {
-        description: name + ' four files', code: 'const results = [];\n' + calls.map(call => 'results.push(await tools.' + name + '(' + JSON.stringify(call.args) + '));').join('\n') + '\nreturn results',
+        description: name + ' four files', code: calls.map(call => 'inspect(await tools.' + name + '(' + JSON.stringify(call.args) + '))').join('\n'),
       } }] : calls
       for (const [index, call] of dispatched.entries()) {
         const item = { id: call.id, type: 'function_call', call_id: call.id, name: call.name, arguments: JSON.stringify(call.args) }

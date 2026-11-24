@@ -38,6 +38,8 @@ export interface CodeBuddyProfile {
   readonly refreshUrl: string
   /** Upstream domain, sent as `X-Domain`. */
   readonly domain: string
+  /** Trusted HTTPS hosts allowed for auto-opening OAuth URLs. */
+  readonly authHosts: readonly string[]
   /** Billing/meter endpoints for the remaining-credit summary, in try order. */
   readonly usageUrls: readonly string[]
   /** Daily check-in endpoints, in try order. */
@@ -190,6 +192,7 @@ export const cnProfile: CodeBuddyProfile = {
   usageUrls: [CN_BASE + '/v2/billing/meter/get-user-resource'],
   checkinUrls: [CN_BASE + '/billing/meter/daily-checkin'],
   domain: 'copilot.tencent.com',
+  authHosts: ['copilot.tencent.com', 'cloud.tencent.com'],
   headers: cnHeaders,
   // Measured 2026-10-20 and again 2026-10-28: the CN gateway rejects
   // fingerprinted DeepSeek Harness wording with code 11128 while the same
@@ -242,6 +245,7 @@ export const enProfile: CodeBuddyProfile = {
   usageUrls: [EN_BASE + '/billing/meter/get-user-resource', EN_BASE + '/v2/billing/meter/get-user-resource'],
   checkinUrls: [EN_BASE + '/billing/meter/daily-checkin', EN_BASE + '/v2/billing/meter/daily-checkin'],
   domain: 'www.workbuddy.ai',
+  authHosts: ['www.workbuddy.ai', 'workbuddy.ai'],
   headers: enHeaders,
   chatExtraHeaders: { Accept: 'application/json, text/event-stream' },
   normalizePayload: normalizeEnPayload,

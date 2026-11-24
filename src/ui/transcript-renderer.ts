@@ -117,6 +117,11 @@ export function sameTranscriptBlock(left: DisplayBlock, right: DisplayBlock): bo
         && part.text === right.content[index]?.text)) continue
       return false
     }
+    if (key === 'tools' && left.kind === 'edits' && right.kind === 'edits') {
+      if (left.tools.length !== right.tools.length) return false
+      if (left.tools.every((tool, index) => sameTranscriptBlock(tool, right.tools[index]!))) continue
+      return false
+    }
     if (Array.isArray(before) && Array.isArray(after)) {
       if (before.length !== after.length) return false
       for (let index = 0; index < before.length; index += 1) if (before[index] !== after[index]) return false
@@ -183,6 +188,7 @@ export class TranscriptRenderer {
   private options: TranscriptOptions
   private reducer: ReturnType<typeof createTranscriptReducer>
   private reducedEntries: TranscriptEntry[] = []
+  private liveStart: number | undefined
   private entryWindow: readonly TranscriptEntry[] | undefined
   /**
    * Spacing is stateless, so one instance serves every block. Reusing it
@@ -275,10 +281,12 @@ export class TranscriptRenderer {
   }
 
   /** Change the retained transcript row budget and rebuild. */
-  setMaxEntries(maxEntries: number): void {
+  setMaxEntries(maxEntries: number): boolean {
+    if (this.options.maxEntries === maxEntries) return false
     this.options = { ...this.options, maxEntries }
     this.resetReduction()
     this.rebuild()
+    return true
   }
 
   /**
@@ -330,19 +338,57 @@ export class TranscriptRenderer {
   private resetReduction(): void {
     this.reducer = createTranscriptReducer(this.options)
     this.reducedEntries = []
+    this.liveStart = undefined
     this.entryWindow = undefined
+  }
+
+  private canSettleLiveTail(): boolean {
+    const start = this.liveStart
+    if (start === undefined || this.entries.length < start) return false
+    for (let index = 0; index < start; index += 1) {
+      if (this.reducedEntries[index] !== this.entries[index]) return false
+    }
+    let stepKey: string | undefined
+    for (let index = start; index < this.reducedEntries.length; index += 1) {
+      const entry = this.reducedEntries[index]!
+      if (entry.type !== 'live') return false
+      const key = `${entry.event.data.turn}:${entry.event.data.step}`
+      if (stepKey === undefined) stepKey = key
+      else if (stepKey !== key) return false
+    }
+    if (stepKey === undefined) return false
+    for (let index = start; index < this.entries.length; index += 1) {
+      const entry = this.entries[index]!
+      if (entry.type !== 'event') continue
+      const event = entry.event
+      if ((event.type === 'assistant/message' || event.type === 'assistant/attempt')
+        && `${event.data.turn}:${event.data.step}` === stepKey) return true
+    }
+    return false
   }
 
   private rebuild(): void {
     const sameWindow = this.entryWindow === this.entries
       && this.reducedEntries[0] === this.entries[0]
       && this.reducedEntries.at(-1) === this.entries[this.reducedEntries.length - 1]
-    if (this.reducedEntries.length > this.entries.length
-      || !sameWindow && this.reducedEntries.some((entry, index) => entry !== this.entries[index])) this.resetReduction()
+    const prefixValid = this.reducedEntries.length <= this.entries.length
+      && (sameWindow || this.reducedEntries.every((entry, index) => entry === this.entries[index]))
+    if (!prefixValid) {
+      if (this.canSettleLiveTail()) {
+        this.reducedEntries.length = this.liveStart!
+        this.liveStart = undefined
+      } else {
+        this.resetReduction()
+      }
+    }
     this.entryWindow = this.entries
     const offset = this.reducedEntries.length
     this.reducer.append(this.entries, offset)
-    for (let index = offset; index < this.entries.length; index += 1) this.reducedEntries.push(this.entries[index]!)
+    for (let index = offset; index < this.entries.length; index += 1) {
+      const entry = this.entries[index]!
+      if (entry.type === 'live' && this.liveStart === undefined) this.liveStart = this.reducedEntries.length
+      this.reducedEntries.push(entry)
+    }
     const reduction = this.reducer.reduce()
     this.retained = reduction.retainedFrom
     const durable = reduction.blocks

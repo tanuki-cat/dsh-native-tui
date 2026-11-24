@@ -17,8 +17,15 @@ interface PartComponent {
   readonly type: AssistantPart['type']
   readonly text: string
   readonly raw: string
+  readonly display: string
   readonly component: Component
   readonly body: PartBody
+}
+
+function canIncrementallySanitize(previous: string, next: string): boolean {
+  if (!next.startsWith(previous) || previous.endsWith('\r')) return false
+  const tail = previous.slice(-16)
+  return !/\u001B[^\n]*$/u.test(tail) && !/[\u0080-\u009F][^\n]*$/u.test(tail)
 }
 
 /** One message keeps its completed parts and only updates the streaming leaf. */
@@ -38,19 +45,23 @@ export class AssistantMessage extends Container {
       ...(block.reasoning === undefined ? [] : [{ type: 'reasoning' as const, text: block.reasoning }]),
       { type: 'text' as const, text: block.text },
     ]
-    const visible: Array<Pick<PartComponent, 'type' | 'text' | 'raw'>> = []
+    const visible: Array<Pick<PartComponent, 'type' | 'text' | 'raw' | 'display'>> = []
     for (const part of content) {
       // A signature-only block has nothing to show; it must not add a card.
       const display = part.type === 'reasoning' ? reasoningText(part.text) : part.text
       if (display.trim() === '' || part.type === 'reasoning' && mode === 'hidden') continue
       const before = this.parts[visible.length]
-      const text = before?.type === part.type && before.raw === part.text ? before.text
-        : part.type === 'text'
-          ? sanitizeTerminalText(display)
-          : mode === 'compact'
-            ? 'thinking · ' + clipGraphemes(sanitizeTerminalText(reasoningPreview(display, block.live)), 240)
-            : sanitizeTerminalText(display)
-      visible.push({ type: part.type, text, raw: part.text })
+      let text: string
+      if (before?.type === part.type && before.raw === part.text) {
+        text = before.text
+      } else if (part.type === 'text' || mode !== 'compact') {
+        text = before?.type === part.type && canIncrementallySanitize(before.display, display)
+          ? before.text + sanitizeTerminalText(display.slice(before.display.length))
+          : sanitizeTerminalText(display)
+      } else {
+        text = 'thinking · ' + clipGraphemes(sanitizeTerminalText(reasoningPreview(display, block.live)), 240)
+      }
+      visible.push({ type: part.type, text, raw: part.text, display })
     }
     const next = visible.map((part, index): PartComponent => {
       const before = this.parts[index]

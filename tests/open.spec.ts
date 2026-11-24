@@ -9,7 +9,11 @@ import {
 describe('systemOpenCommand', () => {
   it('resolves the default-open command per platform', () => {
     expect(systemOpenCommand('darwin', '/tmp/a.md')).toEqual({ command: 'open', args: ['/tmp/a.md'] })
-    expect(systemOpenCommand('win32', 'C:\\tmp\\a.md')).toEqual({ command: 'cmd', args: ['/c', 'start', '', 'C:\\tmp\\a.md'] })
+    expect(systemOpenCommand('win32', 'C:\\tmp\\a.md')).toEqual({ command: 'rundll32.exe', args: ['url.dll,FileProtocolHandler', 'C:\\tmp\\a.md'] })
+    expect(systemOpenCommand('win32', 'https://example.com/auth?a=1&b=2')).toEqual({
+      command: 'rundll32.exe',
+      args: ['url.dll,FileProtocolHandler', 'https://example.com/auth?a=1&b=2'],
+    })
     expect(systemOpenCommand('linux', '/tmp/a.md')).toEqual({ command: 'xdg-open', args: ['/tmp/a.md'] })
     expect(systemOpenCommand('aix', '/tmp/a.md')).toBeUndefined()
   })

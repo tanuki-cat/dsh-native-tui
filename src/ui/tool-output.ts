@@ -33,6 +33,13 @@ function safeCut(text: string, at: number): number {
   return previous >= 0xd800 && previous <= 0xdbff ? cut - 1 : cut
 }
 
+/** Clamp a tail start offset so it never begins on an orphaned low surrogate. */
+function safeTailStart(text: string, at: number): number {
+  const start = Math.max(0, Math.min(at, text.length))
+  const code = start < text.length ? text.charCodeAt(start) : 0
+  return code >= 0xdc00 && code <= 0xdfff ? start + 1 : start
+}
+
 /**
  * Highlight the part of a body that can be shown.
  * @param text - literal preview text.
@@ -66,7 +73,9 @@ export class ToolOutput implements Component {
     const budget = 65536
     this.omitted = Math.max(0, normalized.length - budget)
     const bounded = normalized.length <= budget ? normalized
-      : keep === 'end' ? normalized.slice(-budget) : normalized.slice(0, budget)
+      : keep === 'end'
+        ? normalized.slice(safeTailStart(normalized, normalized.length - budget))
+        : normalized.slice(0, safeCut(normalized, budget))
     this.text = new Text(error
       ? palette.error(bounded)
       : language === undefined ? palette.dim(bounded) : highlightWindow(bounded, language, palette, keep, expanded), 0, 0)

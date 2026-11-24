@@ -10,7 +10,8 @@
  */
 
 import type { CodeBuddyService } from '../codebuddy.js'
-import { credentialKeyFor, grantOf, readGrant, type CredentialStoreLike } from '../codebuddy/auth.js'
+import { credentialKeyFor, grantOf, isTrustedAuthUrl, readGrant, type CredentialStoreLike } from '../codebuddy/auth.js'
+import { readBoundedResponseText } from './http-body.js'
 import { checkIn, fetchQuota, type CheckinResult, type QuotaResult } from '../codebuddy/credits.js'
 import { classifyFailure, redact } from '../codebuddy/errors.js'
 import {
@@ -216,7 +217,8 @@ async function login(deps: CodeBuddyCommandDeps, target: string): Promise<void> 
             // line is the fallback.
             const url = notice.url
             const first = url !== undefined && url !== lastUrl
-            const opened = first && url !== undefined && deps.openUrl !== undefined && openOnce(deps.openUrl, url)
+            const trusted = url !== undefined && isTrustedAuthUrl(profile, url)
+            const opened = first && trusted && deps.openUrl !== undefined && openOnce(deps.openUrl, url)
             if (url !== undefined) lastUrl = url
             const suffix = url === undefined ? '' : ' ' + url
             // The manual hint belongs to the announcement that could not open a
@@ -403,9 +405,10 @@ async function probeCatalogue(profile: CodeBuddyProfile, access: string, signal:
     const response = await fetch(profile.configUrl, {
       method: 'GET',
       headers: profile.headers(access),
+      redirect: 'error',
       signal: AbortSignal.any([signal, controller.signal]),
     })
-    const text = await response.text()
+    const text = await readBoundedResponseText(response, 4 * 1024 * 1024)
     if (!response.ok) {
       return classifyFailure(response.status, text) + ' (HTTP ' + String(response.status) + ') ' + redact(text.slice(0, 120))
     }

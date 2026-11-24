@@ -49,7 +49,7 @@ const server = createServer((req, res) => {
       if (step < limit) {
         const call = action(stage, step)
         const name = presentation === 'ptc' ? 'run_code' : call.name
-        const args = presentation === 'ptc' ? { description: 'Exercise ' + stage, code: 'return await tools.' + call.name + '(' + JSON.stringify(call.args) + ')' } : call.args
+        const args = presentation === 'ptc' ? { description: 'Exercise ' + stage, code: 'inspect(await tools.' + call.name + '(' + JSON.stringify(call.args) + '))' } : call.args
         send({ tool_calls: [{ index: 0, id: 'call-' + stage + '-' + step, type: 'function', function: { name, arguments: JSON.stringify(args) } }] })
         send({}, 'tool_calls')
         res.end('data: [DONE]\n\n')
@@ -66,10 +66,10 @@ const server = createServer((req, res) => {
 let index = 0, started = false, answered = false, baseline = 0, reviewsBeforeOff = 0
 const tasks = [
   { input: 'MODEPROBE:edit-default', done: 'DONE edit-default', check: text => {
-    checks.default = text.includes('off · /mode') && text.includes('permission workspace-write') && existsSync(file('edit-default')) && !text.includes('Approval required')
+    checks.default = text.includes('off · permission workspace-write') && existsSync(file('edit-default')) && !text.includes('Approval required')
   } },
   { input: 'MODEPROBE:off-default', done: 'DONE off-default', check: text => {
-    checks.offDefault = text.includes('off · /mode') && text.includes('permission workspace-write') && existsSync(file('off-default')) && !text.includes('Approval required')
+    checks.offDefault = text.includes('off · permission workspace-write') && existsSync(file('off-default')) && !text.includes('Approval required')
   } },
   { input: '/mode manual', done: 'Mode: manual mode' },
   { input: 'MODEPROBE:manual-edit', done: 'DONE manual-edit', approval: 'reject', check: () => {
@@ -181,7 +181,7 @@ try {
       child.stderr.on('data', chunk => { err += chunk })
       tick = setInterval(() => {
         const text = strip(resumed)
-        if (text.includes('off · /mode') && text.includes('permission read-only') && text.includes('enter send')) {
+        if (text.includes('off · permission read-only') && text.includes('enter send')) {
           checks.resume = true
           clearInterval(tick)
           child.stdin.write(String.fromCharCode(4))

@@ -51,6 +51,7 @@ interface McpManagerLike {
   list?(): readonly {
     readonly name: string
     readonly status: { readonly state: string }
+    readonly authorization?: { readonly phase: string }
   }[]
   restart(name: string): Promise<void>
 }
@@ -95,6 +96,12 @@ function isConnectionFailure(result: unknown, message: string): boolean {
 /** States the core manager is already resolving without outside help. */
 function coreIsRecovering(state: string | undefined): boolean {
   return state === 'connecting' || state === 'reconnecting' || state === 'disabled' || state === 'waiting-credentials'
+    || state === 'waiting-authorization'
+}
+
+/** Whether a Host OAuth attempt is still active. */
+export function mcpAuthorizationInProgress(phase: string | undefined): boolean {
+  return phase === 'starting' || phase === 'waiting-browser' || phase === 'exchanging' || phase === 'committing'
 }
 
 /**
@@ -140,9 +147,9 @@ export function installMcpRecovery(ctx: Context): () => void {
     const run = closedConnectionCode(result) ? REQUIRED_FAILURES : streak + 1
     failureRun.set(name, { count: run, at: now })
     if (run < REQUIRED_FAILURES) return
-    const state = views?.find(view => view.name === name)?.status.state
+    const view = views?.find(view => view.name === name)
     // While the core reconnects on its own, its failures are not ours to count.
-    if (coreIsRecovering(state)) {
+    if (coreIsRecovering(view?.status.state) || mcpAuthorizationInProgress(view?.authorization?.phase)) {
       failureRun.delete(name)
       return
     }

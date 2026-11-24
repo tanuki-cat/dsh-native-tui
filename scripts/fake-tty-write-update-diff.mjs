@@ -26,7 +26,7 @@ async function run(preset, fullscreen) {
     const send = (type, payload = {}) => res.write('event: ' + type + '\ndata: ' + JSON.stringify({ type, ...payload }) + '\n\n')
     send('response.created', { response: { id: 'write-diff', object: 'response', status: 'in_progress', output: [] } })
     if (call) {
-      const args = preset === 'ptc' ? { description: call.name, code: 'return await tools.' + call.name + '(' + JSON.stringify(call.args) + ')' } : call.args
+      const args = preset === 'ptc' ? { description: call.name, code: 'inspect(await tools.' + call.name + '(' + JSON.stringify(call.args) + '))' } : call.args
       const item = { id: 'item-' + index, type: 'function_call', call_id: 'call-' + index,
         name: preset === 'ptc' ? 'run_code' : call.name, arguments: JSON.stringify(args) }
       send('response.output_item.added', { output_index: 0, item: { ...item, arguments: '' } })

@@ -17,7 +17,7 @@ export interface SystemOpenCommand {
 export function systemOpenCommand(platform: NodeJS.Platform, path: string): SystemOpenCommand | undefined {
   switch (platform) {
     case 'darwin': return { command: 'open', args: [path] }
-    case 'win32': return { command: 'cmd', args: ['/c', 'start', '', path] }
+    case 'win32': return { command: 'rundll32.exe', args: ['url.dll,FileProtocolHandler', path] }
     case 'linux': return { command: 'xdg-open', args: [path] }
     default: return undefined
   }

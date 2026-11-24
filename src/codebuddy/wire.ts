@@ -23,11 +23,12 @@ import { expandSystemPrompt, neutralizeAgentIdentity } from './prompt.js'
 /** One durable image reference carried by a request. */
 type ImageRef = Extract<ContentBlock, { type: 'image' }>['attachment']
 
-/** Dimensions and byte target one route asks the attachment service to encode at. */
+/** Request image encoding contract from @deepseek-ai/dsh-attachment. */
 export interface ImageRequestTarget {
   readonly width: number
   readonly height: number
-  readonly maxBytes: number
+  readonly maxImageBytes: number
+  readonly imageTargetBytes: number
 }
 
 /** Reads one request-sized image version from the host attachment service. */
@@ -136,11 +137,12 @@ export function imageTargetOf(ref: {
   // bound and the image stays usable; a real read never reports a bad size,
   // because the reference is normalized before it reaches this route.
   const usable = (value: number): boolean => Number.isSafeInteger(value) && value > 0
+  const budget = { maxImageBytes: MAX_REQUEST_BYTES, imageTargetBytes: MAX_REQUEST_BYTES }
   if (!usable(ref.width) || !usable(ref.height)) {
     const side = Math.max(1, Math.floor(Math.sqrt(MAX_REQUEST_PIXELS)))
-    return { width: side, height: side, maxBytes: MAX_REQUEST_BYTES }
+    return { width: side, height: side, ...budget }
   }
-  return { ...projectedDimensions(ref.width, ref.height, MAX_REQUEST_PIXELS), maxBytes: MAX_REQUEST_BYTES }
+  return { ...projectedDimensions(ref.width, ref.height, MAX_REQUEST_PIXELS), ...budget }
 }
 
 /** Concatenate the visible text of one block list. */

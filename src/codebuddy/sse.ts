@@ -18,6 +18,9 @@ export interface SseFrame {
   readonly event?: string
 }
 
+/** Maximum unframed SSE buffer retained before aborting the stream. */
+export const MAX_SSE_BUFFER_CHARS = 4 * 1024 * 1024
+
 /**
  * Decode one SSE byte stream into frames.
  * @param body - the response body stream.
@@ -27,34 +30,48 @@ export async function* decodeSse(body: ReadableStream<Uint8Array>): AsyncGenerat
   const reader = body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
+  let scanFrom = 0
+  let done = false
   try {
     for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
+      const step = await reader.read()
+      if (step.done) {
+        done = true
+        break
+      }
       // A fresh decoder call per chunk keeps multi-byte sequences whole.
-      buffer += decoder.decode(value, { stream: true })
-      let index = splitIndex(buffer)
+      buffer += decoder.decode(step.value, { stream: true })
+      if (buffer.length > MAX_SSE_BUFFER_CHARS) {
+        throw new Error('SSE frame exceeded buffer limit')
+      }
+      let index = splitIndex(buffer, scanFrom)
       while (index !== -1) {
         const frame = buffer.slice(0, index)
         buffer = buffer.slice(index + separatorLength(buffer, index))
+        scanFrom = 0
         const parsed = parseFrame(frame)
         if (parsed !== undefined) yield parsed
-        index = splitIndex(buffer)
+        index = splitIndex(buffer, 0)
       }
+      scanFrom = Math.max(0, buffer.length - 3)
     }
     buffer += decoder.decode()
+    if (buffer.length > MAX_SSE_BUFFER_CHARS) {
+      throw new Error('SSE frame exceeded buffer limit')
+    }
     const tail = parseFrame(buffer)
     if (tail !== undefined) yield tail
   }
   finally {
+    if (!done) await reader.cancel().catch(() => undefined)
     reader.releaseLock()
   }
 }
 
 /** Index of the next blank-line frame separator, or -1. */
-function splitIndex(buffer: string): number {
-  const lf = buffer.indexOf('\n\n')
-  const crlf = buffer.indexOf('\r\n\r\n')
+function splitIndex(buffer: string, fromIndex: number): number {
+  const lf = buffer.indexOf('\n\n', fromIndex)
+  const crlf = buffer.indexOf('\r\n\r\n', fromIndex)
   if (lf === -1) return crlf
   if (crlf === -1) return lf
   return Math.min(lf, crlf)

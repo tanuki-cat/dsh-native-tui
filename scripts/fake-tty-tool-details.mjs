@@ -18,7 +18,7 @@ const program = stage => (stage === 'reject' ? [
   'await tools.skill({ name: \"fixture-beta\" })',
   'await tools.mcp__fixture__lookup({ filePath: "src/mcp-target.ts" })',
   'await tools.todo_write({ todos: [{ content: "Track src/task-target.ts", status: "in_progress" }, { content: "Verify result", status: "pending" }] })',
-].join('\n') + '\n' : '') + 'return await tools.bash(' + JSON.stringify({ description: 'DESCRIPTION_IS_NOT_THE_COMMAND', command: command(stage), workdir: workspace }) + ')'
+].join('\n') + '\n' : '') + 'inspect(await tools.bash(' + JSON.stringify({ description: 'DESCRIPTION_IS_NOT_THE_COMMAND', command: command(stage), workdir: workspace }) + '))'
 const server = createServer((req, res) => {
   if (req.url !== '/v1/chat/completions') { res.writeHead(404); res.end(); return }
   let raw = ''

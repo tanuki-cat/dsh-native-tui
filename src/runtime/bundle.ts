@@ -1,11 +1,13 @@
 import { createRequire } from 'node:module'
-import { readFile, realpath, stat, writeFile } from 'node:fs/promises'
-import { basename, isAbsolute, relative, resolve, sep } from 'node:path'
+import { realpath, writeFile } from 'node:fs/promises'
+import { basename, resolve } from 'node:path'
 import { Worker } from 'node:worker_threads'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import { strToU8, zipSync } from 'fflate'
 import { debug } from '../debug.js'
+import { presentedEvents, resolveContainedDeliverable } from './deliverables.js'
+import { readBoundedFile } from './files.js'
 
 /** Maximum attachment bytes included in one terminal ZIP bundle. */
 export const MAX_BUNDLE_ATTACHMENT_BYTES = 64 * 1024 * 1024
@@ -124,11 +126,9 @@ async function collectFile(stream: AsyncIterable<Uint8Array>, maxBytes: number):
   const chunks: Uint8Array[] = []
   let total = 0
   for await (const chunk of stream) {
-    const remaining = maxBytes - total
-    if (remaining <= 0) throw new Error('bundle attachment exceeds the size limit')
-    const part = chunk.byteLength > remaining ? chunk.subarray(0, remaining) : chunk
-    chunks.push(part)
-    total += part.byteLength
+    if (total + chunk.byteLength > maxBytes) throw new Error('bundle attachment exceeds the size limit')
+    chunks.push(chunk)
+    total += chunk.byteLength
   }
   const joined = new Uint8Array(total)
   let offset = 0
@@ -154,7 +154,8 @@ const { parentPort, workerData } = require('node:worker_threads')
 const { zipSync } = require(workerData.fflate)
 const files = {}
 for (const [name, bytes] of workerData.files) files[name] = bytes
-parentPort.postMessage(zipSync(files, { level: 6 }))
+const out = zipSync(files, { level: 6 })
+parentPort.postMessage(out, [out.buffer])
 `
 
 /**
@@ -165,9 +166,11 @@ parentPort.postMessage(zipSync(files, { level: 6 }))
  * archive. Compression therefore runs in one worker, and a runtime that cannot
  * start one falls back to the synchronous path on the intact caller buffers.
  * @param files - archive entries by path.
+ * @param signal - cancels compression and terminates the worker.
  * @returns the finished ZIP archive.
  */
-async function compressBundle(files: Record<string, Uint8Array>): Promise<Uint8Array> {
+async function compressBundle(files: Record<string, Uint8Array>, signal?: AbortSignal): Promise<Uint8Array> {
+  signal?.throwIfAborted()
   try {
     return await new Promise<Uint8Array>((resolveArchive, rejectArchive) => {
       const worker = new Worker(COMPRESSION_WORKER, {
@@ -175,13 +178,23 @@ async function compressBundle(files: Record<string, Uint8Array>): Promise<Uint8A
         workerData: { fflate: FFLATE_ENTRY, files: Object.entries(files) },
       })
       let settled = false
+      const onAbort = (): void => {
+        const reason = signal?.reason
+        settle(reason instanceof Error ? reason : new Error(String(reason ?? 'aborted')))
+      }
       /** Stop the worker once, and report its outcome only once. */
       const settle = (error: Error | undefined, archive?: Uint8Array): void => {
         if (settled) return
         settled = true
+        signal?.removeEventListener('abort', onAbort)
         void worker.terminate()
         if (error === undefined) resolveArchive(archive as Uint8Array)
         else rejectArchive(error)
+      }
+      signal?.addEventListener('abort', onAbort, { once: true })
+      if (signal?.aborted) {
+        onAbort()
+        return
       }
       worker.once('message', (archive: Uint8Array) => { settle(undefined, archive) })
       worker.once('error', error => { settle(error) })
@@ -191,6 +204,7 @@ async function compressBundle(files: Record<string, Uint8Array>): Promise<Uint8A
     })
   }
   catch (error) {
+    if (signal?.aborted) throw error
     // A runtime that cannot start the worker still has to produce a bundle; the
     // opt-in debug trace is where a failing worker becomes visible.
     debug('bundle compression fell back to the main thread: '
@@ -200,23 +214,13 @@ async function compressBundle(files: Record<string, Uint8Array>): Promise<Uint8A
 }
 
 /**
- * Whether an absolute path lies outside a directory.
- * @param root - absolute directory the bundle may carry files from.
- * @param path - absolute path to test.
- * @returns true when the path is the root's parent, a sibling, or on another drive.
- */
-function outside(root: string, path: string): boolean {
-  const local = relative(root, path)
-  return local === '..' || local.startsWith('..' + sep) || isAbsolute(local)
-}
-
-/**
  * Write a portable ZIP bundle of the Session log, referenced attachments, and presented deliverables.
  * @param agent - active Agent whose durable log is exported.
  * @param target - relative path resolved from cwd, or an absolute path.
- * @param cwd - Session workspace root used for relative targets and deliverables.
+ * @param cwd - current workspace used for resolving the output path.
  * @param attachments - Host attachment reads.
  * @param signal - cancels attachment/deliverable reads.
+ * @param originalCwd - workspace fallback when the Session header has no directory.
  * @returns written path and included/skipped counts.
  */
 export async function exportSessionBundle(
@@ -225,6 +229,7 @@ export async function exportSessionBundle(
   cwd: string,
   attachments: BundleAttachmentsService,
   signal?: AbortSignal,
+  originalCwd = cwd,
 ): Promise<BundleExportResult> {
   const path = resolve(cwd, target)
   const session = agent.session
@@ -289,64 +294,39 @@ export async function exportSessionBundle(
   let deliverableIndex = 0
   /** Bytes every included deliverable has added; the per-file cap does not bound this. */
   let deliverableBytes = 0
-  /** Session workspace as the Session spells it, and its link-free form for containment. */
-  const root = resolve(cwd)
-  const workspace = await realpath(root).catch(() => root)
-  for (const event of events) {
-    if ((event.type as string) !== 'deliverables/presented') continue
-    const presented = (event.data as { readonly files?: unknown }).files
-    if (!Array.isArray(presented)) continue
-    for (const item of presented) {
-      if (item === null || typeof item !== 'object') continue
-      const itemPath = (item as { readonly path?: unknown }).path
-      if (typeof itemPath !== 'string') continue
+  const workspaces = new Map<string, string>()
+  for (const event of presentedEvents(events, session.header.cwd ?? originalCwd)) {
+    const root = resolve(event.cwd)
+    let workspace = workspaces.get(root)
+    if (workspace === undefined) {
+      workspace = await realpath(root).catch(() => root)
+      workspaces.set(root, workspace)
+    }
+    for (const { path: itemPath } of event.files) {
       signal?.throwIfAborted()
       try {
-        const absolute = resolve(root, itemPath)
-        // A presented path comes from the model; the bundle may only carry files
-        // the Session workspace owns. The lexical check rejects the obvious
-        // escape, and the real path then follows links so a symlink inside the
-        // workspace cannot pull in a file outside it.
-        if (outside(root, absolute)) {
-          skipped.push('deliverable ' + itemPath + ': outside the session workspace')
-          continue
-        }
-        const real = await realpath(absolute)
-        if (outside(workspace, real)) {
-          skipped.push('deliverable ' + itemPath + ': outside the session workspace')
-          continue
-        }
-        const info = await stat(real)
-        if (!info.isFile()) {
-          skipped.push('deliverable ' + itemPath + ': not a regular file')
-          continue
-        }
-        if (info.size > MAX_BUNDLE_DELIVERABLE_BYTES) {
-          skipped.push('deliverable ' + itemPath + ': size limit reached')
-          continue
-        }
-        if (deliverableBytes + info.size > MAX_BUNDLE_DELIVERABLE_TOTAL_BYTES) {
+        const { absolute, real } = await resolveContainedDeliverable(root, itemPath, workspace)
+        const remaining = MAX_BUNDLE_DELIVERABLE_TOTAL_BYTES - deliverableBytes
+        const cap = Math.min(MAX_BUNDLE_DELIVERABLE_BYTES, remaining)
+        if (cap <= 0) {
           skipped.push('deliverable ' + itemPath + ': bundle deliverable limit reached')
           continue
         }
-        const data = await readFile(real)
-        // The pre-read size only narrows the common case; the bytes that actually
-        // arrived own both caps.
-        if (data.byteLength > MAX_BUNDLE_DELIVERABLE_BYTES) {
-          skipped.push('deliverable ' + itemPath + ': size limit reached')
-          continue
-        }
-        if (deliverableBytes + data.byteLength > MAX_BUNDLE_DELIVERABLE_TOTAL_BYTES) {
-          skipped.push('deliverable ' + itemPath + ': bundle deliverable limit reached')
-          continue
-        }
+        const data = await readBoundedFile(real, cap, 'deliverable')
         deliverableBytes += data.byteLength
         deliverableIndex += 1
         const entry = 'deliverables/' + String(deliverableIndex) + '-' + safeName(basename(absolute), 'deliverable')
         files[entry] = data
         deliverableRecords.push({ path: itemPath, entry, bytes: data.byteLength })
       } catch (error) {
-        skipped.push('deliverable ' + itemPath + ': ' + (error instanceof Error ? error.message : String(error)))
+        const message = error instanceof Error ? error.message : String(error)
+        if (message.includes('limit is ')) {
+          const reason = message.includes('limit is ' + String(MAX_BUNDLE_DELIVERABLE_BYTES))
+            ? 'size limit reached' : 'bundle deliverable limit reached'
+          skipped.push('deliverable ' + itemPath + ': ' + reason)
+        } else {
+          skipped.push('deliverable ' + itemPath + ': ' + message)
+        }
       }
     }
   }
@@ -371,7 +351,8 @@ export async function exportSessionBundle(
     + 'attachments/: binary attachments cited by the Session\n'
     + 'deliverables/: files declared with the present tool\n',
   )
-  const archive = await compressBundle(files)
+  const archive = await compressBundle(files, signal)
+  signal?.throwIfAborted()
   await writeFile(path, archive, { flag: 'wx' })
   return {
     path,

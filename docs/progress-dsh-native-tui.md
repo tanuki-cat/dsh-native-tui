@@ -436,3 +436,14 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - 依赖、peer 范围与 devDependencies 统一到 `0.2.2-rc.5`；`pnpm-lock.yaml` 与 `pnpm-workspace.yaml` 的 `minimumReleaseAgeExclude` 同步刷新（77 条）；README 同步版本说明，并补充 rc.5 的搜索提供方选择与网关注意事项。rc.4→rc.5 的实质变更只有网页搜索：基础组合不再固定 `web.searchProvider`，`dsh-web` 按会话最近一次模型请求的路由选择（DeepSeek 路由 → `deepseek-official` Messages 搜索，其他路由 → `deepseek-search-api`），`WebSearchRequest` 新增可选 `llmProvider`，Messages 搜索结果优先取条目自带的 `snippet`。
 - 插件无需改代码：`cordis.patch.yml` 与四个 preset 都没有 `web` 行，也不直接调用 `ctx.web`；会话日志新增的 `web/deepseek-search-llm-request` 事件在 `transcript.ts` 的 `switch` 中没有匹配分支，按既有行为静默跳过。
 - 验证：`pnpm install` 后 `pnpm check` 通过（127 文件 / 1834 项测试、类型检查、构建）；`pnpm-lock.yaml` 中已无 `0.2.2-rc.4` 引用。
+
+## 2026-11-23 · 升级 DSH 0.2.3-alpha.2
+
+- 对齐 alpha.2、Cordis 4.2 和 Node 版本，迁移退出及 CodeBuddy 图片接口。调整 PTC 探针回传方式，接入 worktree 当前目录、MCP OAuth 和压缩摘要分页。
+- 隔离 registry 检查通过，alpha.1 负例复现 Loader 导出缺失。实际打包后，四预设及两种 rc.5 会话恢复检查通过。
+- `pnpm check` 通过，包含 131 个测试文件和 1,886 项测试。运行 worktree、OAuth、CodeBuddy 图片和压缩探针，命令、结果与证据路径见实施方案。 [升级实施记录](design-task-upgrade-dsh-0-2-3-alpha-2.md#实施记录)
+
+## 2026-11-24 · 安全、性能与渲染全量审查修复
+
+- 完成 `src/` 安全漏洞（Windows `cmd /c start` 注入、`interaction-modes` 沙箱审批绕过、ToolCard/审批详情转义、CodeBuddy URL 白名单与 `redirect: 'error'`、SSE/HTTP 限长与流取消、`/deliverables` 边界校验、`settingsSetAt`/`/mcp add` 原型键防御、fd 限长读）、性能与资源泄漏（step 结算增量保持与 `EditGroupCard` 复用、`SessionEventCursor` 与 `plan` 游标消除全量日志克隆、主屏 scrollback 快速跳过、流式增量清洗与反向思考扫描、异步 `git-branch`、可取消零拷贝 ZIP Worker、Markdown 与 `StatusBar` 缓存）及 TUI 渲染交互（`SettingsPanel` 子菜单光标、Kitty CSI-u 与搜索框路由、移除全局 pager 监听、窄屏 `dialogFrame`、背景色带 `\x1b[0m` 续写、`StreamMarkdown` 围栏解析、`PasteInput.cancel` 与代理对安全切片）共 27 项修复。[审查与修复记录](design-task-fix-audit-security-perf-render.md)
+- 验证：`pnpm check` 通过（132 个测试文件 / 1,902 项测试、类型检查、构建），无源文件超过 1,000 行。

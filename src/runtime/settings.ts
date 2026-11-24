@@ -250,11 +250,13 @@ export function settingsSpecOfNode(schema: unknown, node: unknown, name = 'item'
   return specOf(name, resolveNode(node, refsOf(schema)), refsOf(schema))
 }
 
+const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+
 /** Read one value from a settings object by path. */
 export function settingsValueAt(root: unknown, path: readonly string[]): unknown {
   let current: unknown = root
   for (const segment of path) {
-    if (current === null || typeof current !== 'object') return undefined
+    if (FORBIDDEN_KEYS.has(segment) || current === null || typeof current !== 'object' || !Object.hasOwn(current, segment)) return undefined
     current = (current as Record<string, unknown>)[segment]
   }
   return current
@@ -269,12 +271,15 @@ export function settingsValueAt(root: unknown, path: readonly string[]): unknown
  */
 export function settingsSetAt(root: unknown, path: readonly string[], value: unknown): Record<string, unknown> {
   if (path.length === 0) throw new Error('settings path must not be empty')
+  for (const segment of path) {
+    if (FORBIDDEN_KEYS.has(segment)) throw new Error('settings path segment is not allowed: ' + segment)
+  }
   let current: Record<string, unknown>
   if (root === null || typeof root !== 'object' || Array.isArray(root)) current = {}
   else current = root as Record<string, unknown>
   const result = current
   for (const segment of path.slice(0, -1)) {
-    const next = current[segment]
+    const next = Object.hasOwn(current, segment) ? current[segment] : undefined
     if (next === null || typeof next !== 'object' || Array.isArray(next)) {
       const created: Record<string, unknown> = {}
       current[segment] = created

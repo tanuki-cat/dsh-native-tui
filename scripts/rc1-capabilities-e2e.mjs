@@ -10,8 +10,10 @@ import { fileURLToPath } from 'node:url'
 
 const repo = dirname(dirname(fileURLToPath(import.meta.url)))
 const entry = process.env.DSH_CLI_ENTRY
-assert(entry, 'Set DSH_CLI_ENTRY to an isolated rc.1 lib/bin.js')
-assert.equal(JSON.parse(await readFile(resolve(dirname(entry), '../package.json'), 'utf8')).version, '0.2.2-rc.1')
+assert(entry, 'Set DSH_CLI_ENTRY to the target CLI lib/bin.js')
+const { version } = JSON.parse(await readFile(resolve(dirname(entry), '../package.json'), 'utf8'))
+const expected = process.env.DSH_EXPECTED_CORE ?? JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version
+assert.equal(version, expected, 'CLI version ' + version + ' does not match expected ' + expected)
 const root = await mkdtemp(join(repo, '.tmp/rc1-capabilities-'))
 const cases = new Map(), children = new Set(), sockets = new Set()
 let defaultOff = false, serverFailure
@@ -56,8 +58,8 @@ const server = createServer((req, res) => {
         } else answer = 'CAPABILITY_PATCH_OK'
         if (calls.length > 0) {
           if (ptc) {
-            const code = calls.map(call => 'await tools.' + call.name + '(' + JSON.stringify(call.args) + ')').join(', ')
-            calls.splice(0, calls.length, { name: 'run_code', args: { description: 'Exercise guarded patch capability', code: 'return [' + code + ']' } })
+            const code = calls.map(call => 'inspect(await tools.' + call.name + '(' + JSON.stringify(call.args) + '))').join('\n')
+            calls.splice(0, calls.length, { name: 'run_code', args: { description: 'Exercise guarded patch capability', code } })
           } else assert(body.tools?.some(tool => tool.function?.name === 'apply_patch'), 'Opt-in patch missing from native tools')
         }
       }
@@ -110,7 +112,7 @@ async function run(preset, enabled) {
   const advance = () => {
     const text = clean(output).slice(offset)
     if (phase === 0 && text.includes('enter send')) { phase = 1; send(enabled ? '/schedule add 3600 RC1_TASK' : 'CAPABILITY_DEFAULT') }
-    else if (!enabled && phase === 1 && text.includes('CAPABILITY_DEFAULT_OK') && text.includes('idle')) { phase = 10; child.stdin.write('\x04') }
+    else if (!enabled && phase === 1 && text.includes('CAPABILITY_DEFAULT_OK') && text.includes('Ready')) { phase = 10; child.stdin.write('\x04') }
     else if (enabled && phase === 1 && text.includes('Task created:')) {
       taskId = text.match(/schedule-[0-9a-f-]+/)?.[0]; assert(taskId); phase = 2; send('/schedule list')
     } else if (phase === 2 && text.includes('Host tasks:') && text.includes('RC1_TASK')) { phase = 3; send('/schedule pause ' + taskId) }
@@ -119,7 +121,7 @@ async function run(preset, enabled) {
     else if (phase === 5 && text.includes('Host task delivery history:')) { phase = 6; send('/schedule delete ' + taskId) }
     else if (phase === 6 && text.includes('Delete Host task')) { phase = 7; offset = clean(output).length; child.stdin.write('\x1b[B\r') }
     else if (phase === 7 && text.includes('Task delete:') && text.includes('true')) { phase = 8; send(marker) }
-    else if (phase === 8 && text.includes('CAPABILITY_PATCH_OK') && text.includes('idle')) { phase = 10; child.stdin.write('\x04') }
+    else if (phase === 8 && text.includes('CAPABILITY_PATCH_OK') && text.includes('Ready')) { phase = 10; child.stdin.write('\x04') }
   }
   child.stdout.on('data', data => { output += data; try { advance() } catch (error) { failure = error; child.kill('SIGTERM') } })
   child.stderr.on('data', data => { errors += data })
@@ -140,7 +142,7 @@ async function run(preset, enabled) {
 try {
   await run('standard', false); assert(defaultOff)
   await run('standard', true); await run('ptc', true)
-  console.log('PASS rc.1 capabilities evidence=' + root)
+  console.log('PASS core=' + version + ' capabilities evidence=' + root)
 } finally {
   for (const child of children) { child.kill('SIGTERM'); await once(child, 'exit').catch(() => {}) }
   for (const socket of sockets) socket.destroy()

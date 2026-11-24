@@ -242,13 +242,18 @@ describe('pi-style tool cards', () => {
     expect(output(edit)).toContain('diff content omitted by preview limit')
   })
 
-  it('escapes terminal control sequences in paths and source and strips them from output', () => {
+  it('escapes terminal control sequences in paths, argument keys and source and strips them from output', () => {
     const attack = '\x1b]52;c;clipboard-data\x07'
     const card = new ToolCard(tool({ args: JSON.stringify({ file_path: 'file' + attack }), isError: true, result: attack + 'ERROR_TEXT' }), options)
     const raw = card.render(120).join('\n')
     expect(raw).not.toContain(attack)
     expect(raw).toContain('ERROR_TEXT')
     expect(literalToolText(attack)).toContain('\\x1b]52')
+
+    const generic = new ToolCard(tool({ name: 'web_fetch', args: JSON.stringify({ ['k' + attack]: 'v' }), result: undefined }), options)
+    const genericRaw = generic.render(120).join('\n')
+    expect(genericRaw).not.toContain(attack)
+    expect(genericRaw).toContain('\\x1b]52')
   })
 
   it('keeps malformed argument diagnostics and partial code execution results readable', () => {

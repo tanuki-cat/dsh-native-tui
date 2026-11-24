@@ -46,7 +46,7 @@ export function showApprovalChoice(
         const title = fields.flatMap((field, index) => {
           const lines = new Text(field.style(literalToolText(field.text)), 0, 0).render(inner)
           const limit = index === 0 ? 1 : 2
-          return lines.length <= limit ? lines : [...lines.slice(0, limit - 1), truncateToWidth(lines[limit - 1] ?? '', inner - 1) + '…']
+          return lines.length <= limit ? lines : [...lines.slice(0, limit - 1), truncateToWidth(lines[limit - 1] ?? '', inner, '…')]
         })
         const shown = title.length > budget && budget > 2
           ? [...title.slice(0, budget - 1), palette.dim('… View full request details')]

@@ -137,4 +137,19 @@ describe('StreamMarkdown', () => {
       + '\n\n[^1]: The supporting note.\n'
     expectSameAsMarkdown(new StreamMarkdown(body, theme), body, 40)
   })
+
+  it('respects longer backtick fences, indented code blocks, and trailing reference definitions without newline', () => {
+    const four = String.fromCharCode(96).repeat(4)
+    const nested = (prose.repeat(8) + '\n\n').repeat(12)
+      + four + 'markdown\n'
+      + fence + 'ts\nconst a = 1\n\nconst b = 2\n' + fence + '\n\n'
+      + 'still inside four-backtick fence\n'
+      + four + '\n\n'
+      + '    ' + fence + '\n    indented line\n\n    more indented\n\n'
+      + 'Closing paragraph.'
+    expectSameAsMarkdown(new StreamMarkdown(nested, theme), nested, 60)
+
+    const trailingRef = prose.repeat(30) + '\n\nSee [link][ref].\n\n' + prose.repeat(20) + '\n\n[ref]: https://example.com'
+    expectSameAsMarkdown(new StreamMarkdown(trailingRef, theme), trailingRef, 40)
+  })
 })

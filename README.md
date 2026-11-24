@@ -8,14 +8,15 @@ Session、模型、工具、审批、压缩、MCP、插件都由 Host 提供，�
 > 实施进度、验证证据与未验收项：[实施进度](docs/progress-dsh-native-tui.md)
 > rc.1 适配范围与验收：[版本评估和实施记录](docs/design-task-upgrade-dsh-0-2-2-rc-1.md)
 > rc.2 适配与能力同步：[升级方案](docs/design-task-upgrade-dsh-0-2-2-rc-2.md)
+> 0.2.3-alpha.2 升级与验收：[实施方案](docs/design-task-upgrade-dsh-0-2-3-alpha-2.md)
 
 ## 快速开始
 
 ### 环境要求
 
-- Node `>=24.9.0`
+- Node `^24.22.3 || >=26.13.1`
 - pnpm（仓库使用 `pnpm-lock.yaml`，不要用 npm / yarn）
-- 全局安装的 `dsh` 0.2.2-rc.5
+- `dsh` 0.2.3-alpha.2
 
 ### 安装
 
@@ -107,7 +108,7 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 - 流式内容直接跟随 provider：每帧显示已收到的全部 text/reasoning，`block-end` 与 `assistant/message` 立即采用完整内容，没有额外逐字动画、播放队列或 settle grace。reasoning、正文、工具卡片按 provider/event 顺序展示，可以落在同一帧。
 - 执行状态独立于内容渲染：turn 开始后显示 `• Working (5s · esc to interrupt)`，使用中性圆点、清晰标题和次级时间提示；满一分钟显示 `1m 5s`，满一小时显示 `1h 2m 3s`，不补零，超过 24 小时继续累计小时。收到文本、reasoning、工具调用或 stream/end 都不视为完成。自动重试显示 `• Retrying N/M (1m 5s · CODE · automatic · esc to interrupt)`，沿用本轮累计时长；新 attempt 或恢复收流后回到 Working。断流检测、超时与重试策略归 Host/provider。
 - 真正收到 turn/end 后显示 `Worked for 2m 22s · 10:49`，取消、失败、blocked 与 token limit 使用对应的结束词，错误正文继续保留。提供方拒答（`CONTENT_REFUSED`，例如 DeepSeek 内容安全审核）使用 `The provider refused this request: …` 提示，不展示被拒正文；该尝试只保留在 Session 的 `assistant/attempt` 中，不进入模型历史。回执停止计时并保持到下一轮开始或切换/关闭会话；它是当前终端的状态，不写入 Session 历史或导出。等待、重试和完成均占固定一行，按窗口宽度截断。
-- 上下文压缩使用 `• Compact context`、缩进正文和次级状态回执，区分完成、失败与中断，保留摘要和错误详情。普通选择器、审批、设置与命令补全共用 `›` 和整行蓝色选中背景；未选中的模型徽标保留语义色，选中时使用统一对比色并保留徽标文字。
+- 上下文压缩卡片显示摘要预览、完成状态及错误详情。`/context summary` 分页显示最近一份完整摘要，也可按卡片提示输入 `/context summary <seq>`，按 Esc 返回。普通选择器、审批、设置与命令补全共用 `›` 和整行蓝色选中背景。未选中的模型徽标保留语义色，选中时使用统一对比色并保留徽标文字。
 - Markdown 与差异预览按当前宽度和终端颜色重新绘制；`/diff` 共用内联差异的行号和增删背景。多行输入弹窗使用 `›`、空白边界和原生编辑操作，弹窗外框继续保留。
 - 显示密度可配置：`thinkingDisplay` 与 `runCodeDisplay` 均为 `hidden | compact | detailed`，见[配置](#配置)。reasoning 若以 provider 的 `<signature>` 块开头，显示层会剥掉签名与随后的换行，纯签名块不渲染 thinking 卡片；`compact` 的预览在流式时取最后一个已完成段落的首行，结束后取首行，并去掉 `**` 标记。
 - PTC 的 `run_code` 卡片在 `compact` 下列出实际子调用：`skill` 显示实际技能名，如 `Skill daily-log-writer`；文件工具显示路径；bash/pwsh 优先显示实际命令及显式 workdir，多行命令用 `↵` 标记；MCP 显示服务、方法与目标，如 `MCP idea.get_file_problems src/a.ts`；`todo_write` 显示任务数量、进行中/完成数量和当前任务，不虚构文件路径。同一摘要只出现一次，长值标记截断，路径优先保留文件名；超过 10 行折叠为 `+ N more calls`，失败时保留错误首行。
@@ -531,22 +532,31 @@ Schedule 新存储格式不支持旧程序直接打开。正式升级前备份 D
 /mcp reload [name]
 /mcp probe <name>
 /mcp remove <name>
+/mcp auth <name>
+/mcp signout <name>
 ~~~
 
 `/mcp add` 支持：
 
 - `stdio`：command、args（空格分隔或 JSON 数组）、env JSON；args/env 留空表示无参数、无额外环境变量。
-- `streamable-http`：URL、headers JSON。
+- `streamable-http` 支持 URL、headers JSON 和 OAuth。OAuth 使用稳定的 `oauth.credentialKey`，新服务默认使用 `mcp-client/<name>`，可填写 OAuth client ID 和 scope。
 
 配置写入 profile 的 `mcp-manager.servers`。核心 manager 直接创建和回收 `mcp-client` 实例，settings 变更会实时 reconcile，因此新增、修改、删除服务都无需重启 TUI。
 
-`/mcp list` 显示核心状态：`connected · N tools`、`connecting`、`reconnecting`、`waiting for credentials`、`disabled`、`closed`、`failed: ...`。核心 manager 使用非严格启动，初始连接失败只进入状态，不会静默成功。
+`/mcp list` 显示连接状态和授权阶段。出现 `waiting for authorization` 时，在 profile 的 `cordis.patch.yml` 启用回调服务，随后运行 `/mcp auth <name>` 并在 Host 所在机器的浏览器中打开终端给出的 URL。
+
+~~~yaml
+- id: mcp-oauth-webserver
+  disabled: false
+~~~
+
+回调监听 `127.0.0.1`，默认由系统分配端口。需要预登记固定回调地址时，在同一条 patch 的 `config.port` 指定端口。profile 已挂载 `webServer` 时可复用。手写 `Authorization` header 与 OAuth 互斥。等待期间按 Esc 可取消本次授权，终端按 Host 返回的阶段显示结果。`/mcp signout <name>` 经确认后删除该服务已保存的 grant。
 
 断线自愈：核心 `mcp-client` 只通过传输 close 信号发现断线，而 Streamable HTTP 服务端重启不会发出该信号——工具一直保持注册，每次调用都以连接错误失败。TUI 因此保留 `tools/result` 观察器：
 
 - 连接类失败要连续出现两次才触发 `restart`：工具自身的网络错误（例如 `fetch failed`）与死掉的传输层共用同一段文案，单次失败不足以证明连接消失。只要收到一次非连接类结果（成功或业务错误），计数就清零；超过一个节流窗口（30 秒）没有再次失败，计数同样清零。
 - SDK 的 `ConnectionClosed` 错误码无需佐证，一次即可重启。
-- 只有核心状态为 `connected`、`failed` 或状态未知时才由 TUI 重启；`connecting`/`reconnecting`/`disabled`/`waiting-credentials` 交给核心处理，并丢弃当前计数。
+- 自动恢复跳过核心正在重连、等待凭据或等待授权的服务。自动恢复和 `/mcp reload` 均跳过正在授权的服务。
 - 不做前置 `probe`：probe 会另开连接，成功不能证明活实例可用；`/mcp probe` 只用于手动连通性测试。
 - 同一服务 30 秒内最多触发一次，避免每次调用都重建。
 - 判定先看 SDK 的 `ConnectionClosed` 错误码，其次匹配 `Connection closed`、`server is disconnected`、`fetch failed`、`socket hang up`、`ECONNRESET` 等传输层固定文案；工具自身输出里的业务措辞不会被当成断线。
@@ -588,7 +598,7 @@ node scripts/bench-stream-paint.mjs --legacy-box
 ~~~sh
 pnpm build
 pnpm pack --pack-destination .tmp
-DSH_HOME=/tmp/dsh-native-tui-approval-home dsh plugin --profile tui add .tmp/dsh-native-tui-0.2.2-rc.5.tgz
+DSH_HOME=/tmp/dsh-native-tui-approval-home dsh plugin --profile tui add .tmp/dsh-native-tui-0.2.3-alpha.2.tgz
 DSH_HOME=/tmp/dsh-native-tui-approval-home node scripts/fake-tty-approval.mjs
 ~~~
 
@@ -617,7 +627,12 @@ node scripts/fake-tty-permission-restart.mjs       # minimal 同会话 Agent 重
 node scripts/fake-tty-command-cancel.mjs           # Esc 取消执行中的 /provider 目录发现；本地挂起端点保证命令仍在飞行
 ~~~
 
-升级核心时，`scripts/upgrade-core-e2e.mjs` 要求 `DSH_CLI_ENTRY` 指向已安装的 `0.2.2-rc.5` CLI 的 `lib/bin.js`；探针使用独立的 `.tmp/upgrade-core-*` profile 和本地 mock provider，保留输出证据。通用 fake-TTY 入口同样支持该变量，不设置时仍使用既有全局安装路径。`scripts/rc1-capabilities-e2e.mjs` 使用同一变量，验证 Schedule 宿主级管理、补丁默认关闭、原生/PTC 显式启用、未读编辑拒绝，以及多文件增删移动的真实磁盘效果。
+升级核心时，先运行 `node scripts/registry-install-smoke.mjs`，将输出的 CLI 绝对路径设为 `DSH_CLI_ENTRY`，再运行 `node scripts/upgrade-core-e2e.mjs`。设置 `DSH_TUI_TGZ` 可在四套独立 profile 安装并启动实际打包产物。额外设定 `DSH_BASELINE_CLI_ENTRY` 和 `DSH_BASELINE_TUI_TGZ`，可生成并恢复 rc.5 会话。版本断言默认读取仓库版本，可用 `DSH_EXPECTED_CORE` 指定。
+
+- `scripts/rc1-capabilities-e2e.mjs` 验证 standard 和 ptc 的 Schedule 管理、补丁、未读编辑拒绝及真实磁盘变更。
+- `scripts/fake-tty-mcp-oauth.mjs` 使用 `DSH_TUI_TGZ` 启动打包产物，在本地验证 OAuth 添加、回调、取消和退出授权。
+- `scripts/fake-tty-worktree.mjs` 验证当前目录、状态栏、技能和写入审批随 worktree 切换。
+- `scripts/codebuddy-image-budget-e2e.mjs` 使用 Host 附件服务和本地传输替身验证实际缩图。
 
 普通终端环境可运行真实 PTY 冒烟：
 
@@ -670,13 +685,15 @@ npm 路径预留在 `publish-npm` job，默认跳过：需要仓库变量 `NPM_P
 
 ## 兼容性
 
-- DSH 依赖统一为 `0.2.2-rc.5`，Cordis 为 `4.1.0`；使用隔离安装的目标 CLI 通过四套预设的新建、恢复、模型路由及 reload 探针，不依赖全局 CLI 版本。旧核心不在本版本支持范围，peer 范围从 rc.5 起。
+- DSH 依赖统一为 `0.2.3-alpha.2`，Cordis 为 `4.2.0-alpha.1`。升级前备份 rc.5 的 profile 与会话数据，回退时使用 rc.5 数据副本。旧核心无法读取含 `workspace-root/change` 的会话日志。
+- 自定义 profile 应移除 `tool-working-directory` 和已删除的 Python PTC 条目，并为使用 DeepSeek 官方模型或搜索的组合提供 `deepseekAuth`。Node PTC 默认使用 scoped REPL，通过 `inspect()` 回传模型需要的工具结果。
+- DeepSeek 自定义模型的 `imageMaxBytes` 改为 `imageTargetBytes`。pi 路由使用 `requestImageMaxBytes` 限制单图，同时受 `maxRequestImageBytes` 和 `requestImageBudgetCount` 分摊约束。
 - rc.5 起基础组合不再固定网页搜索提供方：`deepseek-official` / `deepseek-account` 路由上的 `web_search` 使用 Messages 搜索（不按次收费、按模型 token 计费，并向会话日志追加 `web/deepseek-search-llm-request`），其他路由与没有模型请求的调用仍用 DeepSeek Search API。若把 DeepSeek 路由的 `baseURL` 指向网关，需在 profile 的 `@deepseek-ai/dsh-web` 行固定 `searchProvider: deepseek-search-api`，否则搜索会把凭据发往官方端点。
 - 三套 preset 显式设置 `tool-subagent-control.interrupt: false`，模型不再获得 `interrupt_agent`；需要在 profile patch 中覆盖该行以恢复。
 - 从 rc.1 升级时，若 profile 的 `cordis.patch.yml` 含 `- id: mcp-manager` / `name: dsh-native-tui/mcp-manager` 覆盖，需改为 `name: '@deepseek-ai/dsh-mcp-manager'` 并保留原 `servers` 配置；否则 rc.2 会跳过该行（`name mismatch`），其中的 MCP 服务不会加载。`serverName` 是多余字段，可以保留。
 - Preset patch 从 `@deepseek-ai/dsh-web-app` 的 standard/ptc/minimal/cordis 复制而来：standard/ptc/minimal 需要 `subagent-model-selection-settings` Host 行，cordis 需要 cordis host-runner 与 `tool-cordis/host`。
 - `@file` 补全依赖 `@deepseek-ai/dsh-file-reference-local`。
-- pi-tui 1.4.0；Node `>=24.9.0`。
+- pi-tui 1.5.2，Node `^24.22.3 || >=26.13.1`。
 
 ## License
 

@@ -34,6 +34,7 @@ export class PasteInput {
     this.generation += 1
     this.queue = []
     this.buffer = undefined
+    this.task = undefined
   }
 
   private drain(): void {
@@ -63,13 +64,14 @@ export class PasteInput {
         if (prepared !== '') this.input(START + prepared + END)
         continue
       }
-      this.task = prepared.catch(() => text).then(result => {
+      const task = prepared.catch(() => text).then(result => {
         if (generation === this.generation && result !== '') this.input(START + result + END)
       }).finally(() => {
-        this.task = undefined
+        if (this.task === task) this.task = undefined
         this.drain()
         if (generation === this.generation) this.render()
       })
+      this.task = task
       return
     }
   }

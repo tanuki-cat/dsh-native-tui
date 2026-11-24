@@ -5,10 +5,11 @@
  */
 
 import type { CommandContext } from './context.js'
+import { currentWorkingDirectory } from '../../runtime/working-directory.js'
 
 /** Workspace owned by the captured Session, with the startup directory as fallback. */
-export function sessionCwd(ctx: Pick<CommandContext, 'active' | 'config'>): string {
-  return ctx.active.agent.session.header.cwd ?? ctx.config.cwd
+export function sessionCwd(ctx: Pick<CommandContext, 'host' | 'active' | 'config'>): string {
+  return currentWorkingDirectory(ctx.host, ctx.active.agent.session, ctx.config.cwd)
 }
 
 /** The platform newline, used by every multi-line notice. */

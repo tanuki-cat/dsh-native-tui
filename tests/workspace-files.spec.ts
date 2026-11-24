@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -105,6 +105,25 @@ describe('file commands follow the active workspace', () => {
     const { ctx, current } = await fixture()
     vi.mocked(showChoice).mockResolvedValueOnce('yes')
     await deliverablesCommand(ctx, 'reveal 0')
-    expect(revealWithSystemApp).toHaveBeenCalledWith(join(current, 'same.txt'))
+    expect(revealWithSystemApp).toHaveBeenCalledWith(await realpath(join(current, 'same.txt')))
+  })
+
+  it('refuses deliverables escaping the workspace via traversal or symlinks', async () => {
+    const { startup, current, ctx, notices } = await fixture()
+    await symlink(join(startup, 'same.txt'), join(current, 'escape-link.txt'))
+    const events = [
+      { type: 'deliverables/presented', seq: 1, time: 1, data: { turn: 1, files: [{ path: '../A/same.txt' }, { path: 'escape-link.txt' }] } },
+    ]
+    const guarded = {
+      ...ctx,
+      active: { id: 'workspace-B', agent: { session: { header: { id: 'workspace-B', createdAt: 1, cwd: current }, snapshotEvents: () => events } } },
+    } as unknown as CommandContext
+    await deliverablesCommand(guarded, 'open 0')
+    await deliverablesCommand(guarded, 'open 1')
+    await deliverablesCommand(guarded, 'reveal 0')
+    await deliverablesCommand(guarded, 'reveal 1')
+    expect(notices.join('\n')).not.toContain('STARTUP_PRIVATE')
+    expect(notices.join('\n')).toContain('outside the session workspace')
+    expect(revealWithSystemApp).not.toHaveBeenCalled()
   })
 })

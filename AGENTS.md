@@ -1,6 +1,6 @@
 # Repository Guidelines
 
-`dsh-native-tui` is a DeepSeek Harness plugin: a host-native terminal front door built on `@earendil-works/pi-tui`. Host services come from `dsh-base`; this package owns the terminal UI and its bundle patch. Requires Node `>=24.9.0` and pnpm (`pnpm-lock.yaml`); do not use npm or yarn.
+`dsh-native-tui` is a DeepSeek Harness plugin built on `@earendil-works/pi-tui`. Host services come from `dsh-base`. Requires Node `^24.22.3 || >=26.13.1`. Use pnpm for dependency installation and development commands.
 
 ## Project Structure & Module Organization
 
@@ -18,7 +18,7 @@
 - `pnpm check` — the gate: typecheck + tests + build.
 - `pnpm typecheck` — `tsc -p tsconfig.json --noEmit`; `pnpm test` — Vitest; `pnpm test:watch` while iterating.
 - `pnpm build` — `tsc -p tsconfig.build.json` into `dist/` (gitignored).
-- Run a real profile: `pnpm pack --pack-destination .tmp`, `dsh plugin --profile tui add .tmp/dsh-native-tui-0.2.2-alpha.2.tgz`, then `dsh --profile tui`.
+- Run a real profile: `pnpm pack --pack-destination .tmp`, `dsh plugin --profile tui add .tmp/dsh-native-tui-0.2.3-alpha.2.tgz`, then `dsh --profile tui`.
 - `node scripts/fake-tty-approval.mjs` exercises a real Host; see README for per-probe setup.
 
 ## Coding Style & Naming Conventions
@@ -29,7 +29,7 @@ TypeScript ESM (NodeNext): relative imports end in `.js`, type-only imports use 
 
 ## Testing Guidelines
 
-Vitest with `environment: 'node'`, specs at `tests/<module>.spec.ts`. Command handlers under `src/ui/commands/` and the dispatcher are testable directly against a stub `CommandContext` (see `tests/commands.spec.ts`, `tests/router.spec.ts`); the terminal wiring in `app.ts` is covered by the fake-TTY probes instead. Add focused unit tests for behavior changes and keep `pnpm check` green (currently 33 files / 278 tests). For Host or TUI integration, add or run a `scripts/fake-tty-*.mjs` probe and report its real output.
+Vitest with `environment: 'node'`, specs at `tests/<module>.spec.ts`. Test command handlers and the dispatcher against a stub `CommandContext` (see `tests/commands.spec.ts` and `tests/router.spec.ts`). Use the fake-TTY probes for the terminal wiring in `app.ts`. Add focused unit tests for behavior changes and keep `pnpm check` green (currently 132 files / 1,902 tests). For Host or TUI integration, add or run a `scripts/fake-tty-*.mjs` probe and report its real output.
 
 ## Commit & Pull Request Guidelines
 

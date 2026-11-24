@@ -20,10 +20,20 @@ export interface AttachmentTarget {
   readonly height: number
 }
 
+const placeholderSegmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+
+function splitFirstGrapheme(text: string): { readonly first: string; readonly rest: string } {
+  if (text === '') return { first: '', rest: '' }
+  const next = placeholderSegmenter.segment(text)[Symbol.iterator]().next()
+  if (next.done) return { first: text.slice(0, 1), rest: text.slice(1) }
+  return { first: next.value.segment, rest: text.slice(next.value.segment.length) }
+}
+
 /** A shaded native editor with a display-only prompt in its reserved padding. */
 export class PromptEditor extends Editor {
   private bottomBorder = ''
   private nativeInputHeight = 0
+  private inputEnd = 0
   private menuRows: number[] = []
   private renderedPadding = 0
   private attachmentRows = 0
@@ -141,13 +151,15 @@ export class PromptEditor extends Editor {
     if (!hasAttachments && this.getText() === '' && this.placeholder !== '' && lines[1] !== undefined) {
       const available = Math.max(1, width - padding * 2)
       const hint = stripTerminalSequences(truncateToWidth(this.placeholder, available, ''))
-      const body = this.focused ? CURSOR_MARKER + renderFakeCursor(hint.slice(0, 1) || ' ') + hint.slice(1) : hint
+      const { first, rest } = splitFirstGrapheme(hint)
+      const body = this.focused ? CURSOR_MARKER + renderFakeCursor(first || ' ') + rest : hint
       lines[1] = ' '.repeat(padding) + this.borderColor(body) + ' '.repeat(Math.max(0, width - padding - visibleWidth(body)))
     }
     if (padding > 0 && lines[1] !== undefined) {
       lines[1] = this.borderColor('›'.padEnd(padding)) + (labels === '' ? '' : labels + ' ') + lines[1].slice(padding)
     }
     const bottom = lines.lastIndexOf(this.bottomBorder)
+    this.inputEnd = bottom
     for (let index = 0; index <= bottom; index += 1) {
       const prefix = index === 1 ? '' : ' '.repeat(this.attachmentColumns)
       lines[index] = this.surface(prefix + lines[index]!)
@@ -185,7 +197,7 @@ export class PromptEditor extends Editor {
     const previewStart = this.panelStart + 1
     if (event.y >= previewStart && event.y < previewStart + this.attachmentRows) return undefined
     if (event.y >= previewStart) event = { ...event, y: event.y - this.attachmentRows }
-    if (event.y >= this.panelStart) event = { ...event,
+    if (event.y >= this.panelStart && event.y <= this.panelStart + this.inputEnd) event = { ...event,
       x: Math.max(0, event.x - this.attachmentColumns), width: event.width - this.attachmentColumns,
     }
     if (this.menuRows.length === 0) return super.handleMouse(event)

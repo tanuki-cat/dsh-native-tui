@@ -19,19 +19,34 @@ export interface StatusBarTarget {
 /** A fixed-height status row that reflows its fields on every terminal resize. */
 export class StatusBar implements Component, StatusBarTarget {
   private segments: readonly StatusSegment[] = []
+  private lastWidth = -1
+  private lastSep: string | undefined
+  private cachedLines: string[] | undefined
 
-  constructor(private readonly separator: string) {}
+  constructor(private readonly separator: string | (() => string)) {}
 
   setSegments(segments: readonly StatusSegment[]): void {
     this.segments = segments
+    this.cachedLines = undefined
   }
 
-  invalidate(): void {}
+  invalidate(): void {
+    this.cachedLines = undefined
+  }
 
   render(width: number): string[] {
-    if (width <= 0) return ['']
+    const sep = typeof this.separator === 'function' ? this.separator() : this.separator
+    if (this.cachedLines !== undefined && this.lastWidth === width && this.lastSep === sep) {
+      return this.cachedLines
+    }
+    if (width <= 0) {
+      this.lastWidth = width
+      this.lastSep = sep
+      this.cachedLines = ['']
+      return this.cachedLines
+    }
     const fields = this.segments.filter(segment => visibleWidth(segment.text) > 0).map(segment => ({ ...segment }))
-    const join = (): string => fields.map(field => field.text).join(this.separator)
+    const join = (): string => fields.map(field => field.text).join(sep)
     const order = [...fields].sort((left, right) => (right.priority ?? 0) - (left.priority ?? 0))
     for (const field of order) {
       if (visibleWidth(join()) <= width) break
@@ -49,6 +64,9 @@ export class StatusBar implements Component, StatusBarTarget {
       if (available < 1) break
       widest.text = truncate(widest.text, available)
     }
-    return [truncate(join(), width)]
+    this.lastWidth = width
+    this.lastSep = sep
+    this.cachedLines = [truncate(join(), width)]
+    return this.cachedLines
   }
 }

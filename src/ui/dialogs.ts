@@ -2,6 +2,7 @@ import {
   Input,
   Markdown,
   Text,
+  isKeyRelease,
   matchesKey,
   truncateToWidth,
   visibleWidth,
@@ -39,7 +40,15 @@ function localeText(value: { readonly en: string; readonly [locale: string]: str
 
 /** Render a full-width, opaque dialog surface so the transcript cannot bleed through. */
 export function dialogFrame(lines: readonly string[], width: number, palette: Palette): string[] {
-  const outer = Math.max(20, width)
+  if (width < 6) {
+    const safe = Math.max(0, width)
+    return lines.map((line) => {
+      const bounded = truncateToWidth(line, safe, '…')
+      const clipped = palette.plain ? bounded.replace(/\x1b\[[0-9;]*m/gu, '') : bounded
+      return palette.dialogBand(clipped + ' '.repeat(Math.max(0, safe - visibleWidth(clipped))))
+    })
+  }
+  const outer = width
   const inner = Math.max(1, outer - 4)
   const content = lines.map((line) => {
     const bounded = truncateToWidth(line, inner)
@@ -86,11 +95,11 @@ class ChoiceDialog implements Component {
   get selectList(): SelectList { return this.list }
 
   render(width: number): string[] {
-    const inner = Math.max(20, width - 4)
+    const inner = Math.max(1, width - 4)
     const title = new Text(sanitizeTerminalText(this.title), 0, 0).render(inner)
     const limit = this.maxTitleRows?.()
     const shown = limit !== undefined && title.length > limit
-      ? limit === 1 ? [truncateToWidth(title[0] ?? '', inner - 1) + '…']
+      ? limit === 1 ? [truncateToWidth(title[0] ?? '', inner, '…')]
         : [...title.slice(0, limit - 1), this.palette.dim('… View full request details')] : title
     return dialogFrame([
       ...shown,
@@ -150,7 +159,7 @@ class SearchChoiceDialog implements Component {
   }
 
   render(width: number): string[] {
-    const inner = Math.max(20, width - 4)
+    const inner = Math.max(1, width - 4)
     return dialogFrame([
       ...new Text(sanitizeTerminalText(this.title), 0, 0).render(inner),
       ...this.input.render(inner),
@@ -162,7 +171,14 @@ class SearchChoiceDialog implements Component {
   }
 
   handleInput(data: string): void {
-    if (data === '\r' || data === '\n' || data === '\x1b' || data.startsWith('\x1b[')) {
+    if (isKeyRelease(data)) return
+    if (data === '\r' || data === '\n'
+      || matchesKey(data, 'enter')
+      || matchesKey(data, 'escape')
+      || matchesKey(data, 'up')
+      || matchesKey(data, 'down')
+      || matchesKey(data, 'pageUp')
+      || matchesKey(data, 'pageDown')) {
       this.list.handleInput(data)
       return
     }
@@ -197,7 +213,7 @@ class TextInputDialog implements Component {
   }
 
   render(width: number): string[] {
-    const inner = Math.max(20, width - 4)
+    const inner = Math.max(1, width - 4)
     return dialogFrame([
       ...new Text(sanitizeTerminalText(this.title), 0, 0).render(inner),
       '',
@@ -362,7 +378,7 @@ class MultilineInputDialog implements Component {
   }
 
   render(width: number): string[] {
-    const inner = Math.max(20, width - 4)
+    const inner = Math.max(1, width - 4)
     return dialogFrame([
       ...new Text(sanitizeTerminalText(this.title), 0, 0).render(inner),
       '',
@@ -373,7 +389,8 @@ class MultilineInputDialog implements Component {
   }
 
   handleInput(data: string): void {
-    if (data === String.fromCharCode(27)) {
+    if (isKeyRelease(data)) return
+    if (matchesKey(data, 'escape')) {
       this.onCancel?.()
       return
     }
@@ -443,9 +460,19 @@ export function showMarkdownPreview(
   signal?: AbortSignal,
 ): Promise<void> {
   const text = sanitizeTerminalText(markdown)
+  const themeKey = (): string => palette.plain ? 'plain' : palette.accent('') + '|' + palette.dim('') + '|' + palette.bold('')
+  let lastTheme = themeKey()
+  const body = new Markdown(text, 0, 0, markdownTheme(palette))
   return showComponentPager(tui, palette, 'Markdown · ' + title, {
-    render: width => new Markdown(text, 0, 0, markdownTheme(palette)).render(width),
-    invalidate: () => {},
+    render: width => {
+      const nextTheme = themeKey()
+      if (nextTheme !== lastTheme) {
+        lastTheme = nextTheme
+        body.invalidate()
+      }
+      return body.render(width)
+    },
+    invalidate: () => { body.invalidate() },
   }, signal)
 }
 
@@ -473,13 +500,11 @@ export function showComponentPager(
     let offset = 0
     let pageRows = Math.max(1, pageSize)
     let handle: ReturnType<TUI['showOverlay']> | undefined
-    let off: (() => void) | undefined
     let settled = false
     const finish = (): void => {
       if (settled) return
       settled = true
       signal?.removeEventListener('abort', onAbort)
-      off?.()
       handle?.hide()
       resolve()
     }
@@ -498,40 +523,26 @@ export function showComponentPager(
           return dialogFrame([...heading, ...(slice.length === 0 ? ['(empty)'] : slice),
             truncateToWidth(palette.dim(hint), inner, '…')], width, palette)
         },
+        handleInput: data => {
+          if (isKeyRelease(data)) return
+          if (matchesKey(data, 'escape')) {
+            finish()
+            return
+          }
+          if (matchesKey(data, 'up')) offset -= 1
+          else if (matchesKey(data, 'down')) offset += 1
+          else if (matchesKey(data, 'pageUp')) offset -= pageRows
+          else if (matchesKey(data, 'pageDown')) offset += pageRows
+          else return
+          tui.requestRender()
+        },
         invalidate: () => { content.invalidate?.() },
       }
-      off = tui.addInputListener((data) => {
-        if (data === String.fromCharCode(27)) {
-          finish()
-          return { consume: true }
-        }
-        if (data === '\x1b[A') {
-          offset -= 1
-          tui.requestRender()
-          return { consume: true }
-        }
-        if (data === '\x1b[B') {
-          offset += 1
-          tui.requestRender()
-          return { consume: true }
-        }
-        if (data === '\x1b[5~') {
-          offset -= pageRows
-          tui.requestRender()
-          return { consume: true }
-        }
-        if (data === '\x1b[6~') {
-          offset += pageRows
-          tui.requestRender()
-          return { consume: true }
-        }
-        return undefined
-      })
       handle = tui.showOverlay(pager, { width: 100, maxHeight: '85%', anchor: 'center' })
       handle.focus()
       tui.requestRender()
     } catch (error) {
-      off?.()
+      handle?.hide()
       reject(error)
       return
     }
@@ -556,11 +567,12 @@ export async function showApproval(
   palette: Palette,
   request: Pick<ApprovalRequest, 'toolName' | 'callId' | 'reason' | 'displayReason' | 'signal'> & Partial<Pick<ApprovalRequest, 'agent'>>,
   signal?: AbortSignal,
+  workspace?: { readonly cwd: string | undefined },
 ): Promise<ApprovalOutcome> {
   const activeSignal = AbortSignal.any([signal, request.signal].filter((value): value is AbortSignal => value !== undefined))
   const reason = localeText(request.displayReason) ?? request.reason
   const args = approvalArguments(request.agent?.session.snapshotEvents() ?? [], request.toolName, request.callId)
-  const cwd = request.agent?.session.header.cwd
+  const cwd = workspace === undefined ? request.agent?.session.header.cwd : workspace.cwd
   const summary = {
     heading: 'Approval required · ' + request.toolName,
     action: args === undefined ? 'Arguments unavailable for this request' : ptcCallLine(request.toolName, args),
@@ -702,7 +714,7 @@ class MultiChoiceDialog implements Component {
   }
 
   render(width: number): string[] {
-    const inner = Math.max(20, width - 4)
+    const inner = Math.max(1, width - 4)
     return dialogFrame([
       ...new Text(sanitizeTerminalText(this.title), 0, 0).render(inner),
       '',

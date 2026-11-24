@@ -11,10 +11,13 @@
 
 import { LlmError, ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { FinishReason, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
+import { readBoundedResponseText } from '../runtime/http-body.js'
 import { classifyFailure, gatewayCodeOf, hintForGatewayError, redact } from './errors.js'
 import { DEFAULT_STREAM_IDLE_TIMEOUT_MS, type CodeBuddyProfile } from './profiles.js'
 import type { SseFrame } from './sse.js'
 import { decodeSse } from './sse.js'
+
+const MAX_ERROR_BODY_BYTES = 1024 * 1024
 
 /** Path appended to a profile's chat base URL. */
 const CHAT_PATH = '/chat/completions'
@@ -121,6 +124,7 @@ async function postChat(
       ...(profile.chatExtraHeaders ?? {}),
     },
     body,
+    redirect: 'error',
     ...(signal === undefined ? {} : { signal }),
   })
   const first = await send(primary)
@@ -259,7 +263,7 @@ export async function* streamChat(options: ChatStreamOptions): AsyncGenerator<St
   }
 
   if (!response.ok) {
-    const text = await response.text()
+    const text = await readBoundedResponseText(response, MAX_ERROR_BODY_BYTES)
     throw upstreamError(profile.id, response.status, text)
   }
   if (response.body === null) throw new LlmError(profile.id + ' returned no response body', 'MALFORMED_RESPONSE')

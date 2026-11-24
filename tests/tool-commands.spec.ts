@@ -17,7 +17,7 @@ function context(events: readonly unknown[]) {
   onTestFinished(() => { controller.abort() })
   return { palette: createPalette('plain'), tui, notice, signal: controller.signal,
     active: { agent: { session: { snapshotEvents: () => events } } },
-    output: (width = 80) => overlay.render(width).join('\n'), close: () => input?.('\x1b'),
+    output: (width = 80) => overlay.render(width).join('\n'), close: () => { if (input !== undefined) input('\x1b'); else overlay.handleInput?.('\x1b') },
   } as unknown as CommandContext & { notice: typeof notice; output: (width?: number) => string; close: () => void }
 }
 

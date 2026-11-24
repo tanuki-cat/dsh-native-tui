@@ -8,7 +8,7 @@
 import { formatLocalTimestamp } from '../format-time.js'
 import type { CommandContext } from './context.js'
 import type { AgentPresetsService } from './services.js'
-import { NL } from './shared.js'
+import { NL, sessionCwd } from './shared.js'
 import { readSkillRows } from './skills.js'
 
 /**
@@ -34,9 +34,12 @@ export function statusCommand(ctx: CommandContext): void {
   const headerInfo = ctx.active.agent.session.header
   const options = ctx.active.agent.options
   const current = ctx.modelSelection.current
+  let cwd: string
+  try { cwd = sessionCwd(ctx) }
+  catch { cwd = 'Workspace unavailable' }
   ctx.notice('info', [
     'Session: ' + ctx.active.id,
-    'Directory: ' + (headerInfo.cwd ?? ctx.config.cwd),
+    'Directory: ' + cwd,
     'Model: ' + (current?.provider ?? options.provider ?? 'deepseek-official') + '/' + (current?.model ?? options.model ?? 'deepseek-flash'),
     'Reasoning: ' + (current?.reasoningEffort ?? 'provider default'),
     'State: ' + ctx.active.agent.status,
