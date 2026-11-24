@@ -16,10 +16,12 @@ const home = mkdtempSync(join(tmpdir(), 'native-compaction-threshold-'))
 const profile = join(home, 'profiles/tui')
 const workspace = join(home, 'workspace')
 const patch = join(profile, 'cordis.patch.yml')
+const fullscreen = process.env.FAKE_TTY_FULLSCREEN === '1'
 const requests = []
 let sampledTokens = 113100
 let failSummary = false
 let truncateSummary = false
+let oversizedSummary = false
 let overflowNext = false
 const server = createServer((req, res) => {
   let raw = ''
@@ -45,7 +47,8 @@ const server = createServer((req, res) => {
     }
     const text = kind === 'first' ? 'alpha '.repeat(800) + 'FIRST-COMPLETE'
       : kind === 'second' ? 'beta '.repeat(14700) + 'SECOND-COMPLETE'
-      : kind === 'summary' ? 'Synthetic checkpoint.' : kind === 'title' ? 'Compaction probe' : 'REPLY-COMPLETE'
+      : kind === 'summary' ? (oversizedSummary ? 'A deliberately non-shrinking summary. '.repeat(1000) : 'Synthetic checkpoint.')
+        : kind === 'title' ? 'Compaction probe' : 'REPLY-COMPLETE'
     const output = kind === 'second' ? 18400 : kind === 'first' ? 1200 : 12
     const total = kind === 'second' ? sampledTokens : 32000
     const item = { id: 'answer', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text, annotations: [] }] }
@@ -120,7 +123,7 @@ try {
     '        models:', '          - id: qwen', '            contextWindow: 147456', '            maxTokens: 32768',
     '          - id: inkling', '            contextWindow: 200000', '            maxTokens: 32768',
     '          - id: narrow', '            contextWindow: 96000', '            maxTokens: 4096',
-    '- id: native-tui', '  config:', '    agentPreset: ptc', '    theme: plain',
+    '- id: native-tui', '  config:', '    agentPreset: ptc', '    fullscreen: ' + fullscreen, '    theme: plain',
     '- id: agent-default-model', '  config:', '    provider: mock', '    model: qwen', '',
   ].join('\n')
   writeFileSync(patch, initialPatch)
@@ -159,7 +162,25 @@ try {
     return stripTerminalSequences(out.slice(offset))
   }
   const summaries = () => requests.filter(request => request.kind === 'summary')
-  try {
+  const openSummary = async () => {
+    const detail = await input('/context summary\r', /Synthetic checkpoint\./u)
+    assert.match(detail, /Compaction summary · \d+/u)
+    await input('\x1b', /Ask DeepSeek Harness to do anything/u)
+  }
+  const verifyFullscreen = async () => {
+    await wait(/enter send/u)
+    await input('FULLSCREEN_PAGER_PROBE\r', /REPLY-COMPLETE/u)
+    await waitUntil(() => {
+      const last = readFileSync(chromeLog, 'utf8').trim().split('\n').at(-1)
+      return last !== undefined && JSON.parse(last).status.includes('Ready')
+    }, 'fullscreen turn to finish')
+    await input('/compact\r', /Compacted \d+/u)
+    await openSummary()
+    child.stdin.write('\x04')
+    assert.deepEqual(await closed, [0, null])
+    console.log('PASS fullscreen compaction summary pager')
+  }
+  const verifyMainScreen = async () => {
     await wait(/enter send/u)
     await statusShowsBaseline('mock/qwen', false)
     const originalSession = /native-tui-[0-9a-f-]{36}/u.exec(stripTerminalSequences(out))?.[0]
@@ -167,7 +188,7 @@ try {
     const defaultReport = await input('/context\r', /49,152 tokens/u)
     assert.doesNotMatch(defaultReport, /configured 80%/u)
     await input('/context threshold 90\r', /Use 77%/u)
-    await input('\x1b', /enter send/u)
+    await input('\x1b', /Ask DeepSeek Harness to do anything/u)
     assert.equal(readFileSync(patch, 'utf8'), initialPatch)
     await input('/context threshold 90\r', /Use 77%/u)
     await input('\r', /Save threshold/u)
@@ -201,15 +222,19 @@ try {
     assert.equal(requests.some(request => request.model === 'narrow' && request.kind === 'reply'), false)
     assert.equal(summaries().length, 1)
     failSummary = false
-    await input('/model mock\/qwen\r', /Model selected: mock\/qwen/u)
+    await input('/model mock\/inkling\r', /Model selected: mock\/inkling/u)
     overflowNext = true
+    const beforeOverflow = requests.length
     await input('OVERFLOW_PROBE\r', /REPLY-COMPLETE[\s\S]*Ready/u)
     assert.equal(summaries().length, 2)
+    assert.deepEqual(requests.slice(beforeOverflow).map(request => request.kind + ':' + request.model),
+      ['reply:inkling', 'summary:qwen', 'reply:inkling'])
 
     sampledTokens = 113541
     const opened = await input('/new\r', /Switched to native-tui-[0-9a-f-]{36}/u)
     const aboveSession = /Switched to (native-tui-[0-9a-f-]{36})/u.exec(opened)?.[1]
     assert.ok(aboveSession)
+    await input('/model mock\/qwen\r', /Model selected: mock\/qwen/u)
     await input('BOUNDARY_FIRST\r', /FIRST-COMPLETE[\s\S]*Ready/u)
     await input('BOUNDARY_SECOND\r', /SECOND-COMPLETE[\s\S]*Ready/u)
     await input('ABOVE_PROBE\r', /REPLY-COMPLETE[\s\S]*Ready/u)
@@ -226,6 +251,13 @@ try {
     truncateSummary = false
     await input('/compact\r', /Compacted \d+/u)
     assert.deepEqual(summaries().map(request => request.max), [65536, 65536, 65536, 7000, 7000])
+    await openSummary()
+
+    await input('/new\r', /Switched to native-tui/u)
+    await input('/model mock\/qwen\r', /Model selected: mock\/qwen/u)
+    await input('SHORT_SPAN_PROBE\r', /REPLY-COMPLETE[\s\S]*Ready/u)
+    oversizedSummary = true
+    await input('/compact\r', /Compaction could not produce a useful summary/u)
 
     child.stdin.write('\x04')
     assert.deepEqual(await closed, [0, null])
@@ -235,8 +267,13 @@ try {
     const events = journals()
     assert.equal(events.filter(event => event.type === 'compaction/summary').length, 3)
     assert.ok(events.some(event => event.type === 'compaction/end' && JSON.stringify(event.data.error ?? '').includes('summarization truncated at the token cap')))
+    assert.ok(events.some(event => event.type === 'compaction/end' && JSON.stringify(event.data.error ?? '').includes('summary is not smaller than the shadowed content')))
     await verifyPresetMigration()
-    console.log('PASS 90% → 77%, cancel/confirm, resumed session, per-model status baseline, below/at pressure, switch refusal, overflow, /compact cap and truncation, preset migration')
+    console.log('PASS threshold, resumed session, model switch and overflow recovery, /compact caps, summary pager, shrink guard, preset migration · fullscreen=' + fullscreen)
+  }
+  try {
+    if (fullscreen) await verifyFullscreen()
+    else await verifyMainScreen()
   } catch (error) {
     console.error(stripTerminalSequences(out).slice(-6500), err.slice(-3500), requests)
     throw error

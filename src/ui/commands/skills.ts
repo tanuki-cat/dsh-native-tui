@@ -21,7 +21,7 @@ import {
 import { showMarkdownPreview, showSearchChoice, showTextPager } from '../dialogs.js'
 import type { CommandContext } from './context.js'
 import type { SkillsCatalog } from './services.js'
-import { NL, errorMessage, terminalColumns } from './shared.js'
+import { NL, errorMessage, sessionCwd, terminalColumns } from './shared.js'
 
 /** Rows per `/skill list` page; matches the density of the other paged notices. */
 export const SKILLS_PER_PAGE = 15
@@ -57,7 +57,7 @@ export async function readSkillRows(ctx: CommandContext): Promise<{ readonly row
   if (registry === undefined) return { error: 'The skill service is unavailable in this profile.' }
   try {
     const summaries = await registry.list({
-      cwd: ctx.active.agent.session.header.cwd ?? ctx.config.cwd,
+      cwd: sessionCwd(ctx),
       scope: ctx.active.agent,
       signal: ctx.signal,
     })
@@ -112,7 +112,7 @@ async function readSkill(ctx: CommandContext, row: SkillRow): Promise<void> {
   if (registry?.get !== undefined) {
     try {
       const loaded = await registry.get(row.name, {
-        cwd: ctx.active.agent.session.header.cwd ?? ctx.config.cwd,
+        cwd: sessionCwd(ctx),
         scope: ctx.active.agent,
         signal: ctx.signal,
       })

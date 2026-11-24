@@ -65,6 +65,11 @@ const READ_TOOLS = new Set([
   'wait_agent', 'team_task_list', 'team_task_get',
 ])
 const FILE_EDITS = new Set(['write', 'edit'])
+const SANDBOX_RANK: Record<string, number> = {
+  'read-only': 0,
+  'workspace-write': 1,
+  'danger-full-access': 2,
+}
 function argsOf(exec: ModeExecution): Record<string, unknown> {
   return exec.arguments !== null && typeof exec.arguments === 'object'
     ? exec.arguments as Record<string, unknown> : {}
@@ -102,6 +107,7 @@ export class InteractionModeService {
    * compatibility branch, not a second invalidation path.
    */
   private planCommands = new WeakMap<Agent, boolean>()
+  private planCursors = new WeakMap<Session, { processed: number; active: boolean }>()
 
   constructor(ctx: Context) {
     this.permissions = ctx.get('permissionPresets') as Permissions
@@ -116,8 +122,8 @@ export class InteractionModeService {
       const mode = this.current(exec.agent)
       if (mode !== 'manual' && mode !== 'accept-edits') return downstream
       if (isRead(exec) || FILE_EDITS.has(exec.name)) return downstream
-      // First-party sandbox retries own their exact one-shot approval.
-      if ((exec.name === 'bash' || exec.name === 'pwsh') && argsOf(exec).sandbox_permissions !== undefined) return downstream
+      // First-party sandbox retries own their exact one-shot escalation approval.
+      if ((exec.name === 'bash' || exec.name === 'pwsh') && this.isSandboxEscalation(exec.agent, argsOf(exec).sandbox_permissions)) return downstream
       return { kind: 'ask', reason: MODE_LABELS[mode] + ': approve tool "' + exec.name + '" for this call.' }
     })
     events.on('agent/pre-step', async (request, next) => {
@@ -125,6 +131,12 @@ export class InteractionModeService {
       if (decision.kind !== 'reject' && !request.signal.aborted) this.reconcilePlan(request.agent)
       return decision
     })
+  }
+
+  private isSandboxEscalation(agent: Agent, requested: unknown): boolean {
+    if (typeof requested !== 'string' || !Object.hasOwn(SANDBOX_RANK, requested)) return false
+    const active = this.permissions.resolve(this.permissions.current(agent.session)).sandbox
+    return Object.hasOwn(SANDBOX_RANK, active) && SANDBOX_RANK[requested]! > SANDBOX_RANK[active]!
   }
 
   private plan(agent: Agent): PlanController | undefined {
@@ -136,6 +148,19 @@ export class InteractionModeService {
     if (!this.hasPlanCommand(agent)) return undefined
     const commands = this.commands!
     const get = (): { active: boolean } => {
+      const session = agent.session as Session & { seq?: number; eventAt?(seq: number): { type?: unknown; data?: unknown } | undefined }
+      if (typeof session.seq === 'number' && typeof session.eventAt === 'function') {
+        let cursor = this.planCursors.get(agent.session)
+        if (cursor === undefined || session.seq < cursor.processed) {
+          cursor = { processed: 0, active: false }
+          this.planCursors.set(agent.session, cursor)
+        }
+        for (; cursor.processed < session.seq; cursor.processed += 1) {
+          const event = session.eventAt(cursor.processed)
+          if (event?.type === 'plan/mode') cursor.active = (event.data as { active?: unknown } | undefined)?.active === true
+        }
+        return { active: cursor.active }
+      }
       const event = agent.session.snapshotEvents().findLast(event => (event.type as string) === 'plan/mode')
       return { active: (event?.data as { active?: unknown } | undefined)?.active === true }
     }

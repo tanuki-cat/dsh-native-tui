@@ -8,7 +8,7 @@ import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { createHostSession, type HostSession } from '../../runtime/agent.js'
 import type { CommandContext } from './context.js'
 import type { WorkspaceService } from './services.js'
-import { NL, errorMessage } from './shared.js'
+import { NL, errorMessage, sessionCwd } from './shared.js'
 
 /** Start a session in another directory, keeping the current preset. */
 export type SwitchToSession = (next: () => Promise<HostSession>) => Promise<void>
@@ -36,7 +36,7 @@ export async function workspacesCommand(
     return
   }
   if (args === '') {
-    const currentPath = ctx.active.agent.session.header.cwd ?? ctx.config.cwd
+    const currentPath = sessionCwd(ctx)
     const rows = workspaceService.list()
     if (rows.length === 0) {
       ctx.notice('info', 'No workspaces. Use /workspaces new <path>.')

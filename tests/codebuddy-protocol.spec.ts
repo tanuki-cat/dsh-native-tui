@@ -18,6 +18,7 @@ import {
   seedCatalogue,
 } from '../src/codebuddy/models.js'
 import { checkIn, fetchQuota, parseQuota, summarizeAccounts } from '../src/codebuddy/credits.js'
+import { isTrustedAuthUrl } from '../src/codebuddy/auth.js'
 
 const NEVER = new AbortController().signal
 const DAY = 24 * 60 * 60 * 1000
@@ -301,5 +302,27 @@ describe('codebuddy credits', () => {
   it('reports a successful claim', async () => {
     vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ code: 0, data: { credit: 5, streak_days: 2 } }), { status: 200 }))
     expect(await checkIn(cnProfile, 'token', NEVER)).toEqual({ status: 'checked-in', credit: 5, streakDays: 2 })
+  })
+})
+
+describe('codebuddy security guards', () => {
+  it('allows only trusted HTTPS auth URLs per deployment', () => {
+    expect(isTrustedAuthUrl(cnProfile, 'https://copilot.tencent.com/login?state=1')).toBe(true)
+    expect(isTrustedAuthUrl(cnProfile, 'https://cloud.tencent.com/login')).toBe(true)
+    expect(isTrustedAuthUrl(enProfile, 'https://www.workbuddy.ai/login')).toBe(true)
+    expect(isTrustedAuthUrl(cnProfile, 'http://copilot.tencent.com/login')).toBe(false)
+    expect(isTrustedAuthUrl(cnProfile, 'https://evil.example/login')).toBe(false)
+    expect(isTrustedAuthUrl(cnProfile, 'https://copilot.tencent.com.evil.example/login')).toBe(false)
+  })
+
+  it('disables redirects on authenticated fetch calls', async () => {
+    const redirects: Array<string | undefined> = []
+    vi.stubGlobal('fetch', async (_url: string, init?: RequestInit) => {
+      redirects.push(init?.redirect)
+      return new Response(JSON.stringify({ code: 0, data: { models: [] } }), { status: 200 })
+    })
+    await discoverModels(cnProfile, 'token', NEVER)
+    await fetchQuota(cnProfile, 'token', NEVER)
+    expect(redirects).toEqual(['error', 'error'])
   })
 })

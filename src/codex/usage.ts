@@ -9,6 +9,8 @@
  * @module dsh-native-tui/codex/usage
  */
 
+import { readBoundedResponseText } from '../runtime/http-body.js'
+
 /** Seconds in the ChatGPT five-hour window. */
 export const FIVE_HOUR_SECONDS = 18_000
 
@@ -249,12 +251,11 @@ export async function fetchCodexUsage(options: UsageFetchOptions): Promise<Usage
   }
   let text: string
   try {
-    text = await response.text()
+    text = await readBoundedResponseText(response, MAX_BODY_LENGTH)
   }
   catch {
-    return failure()
+    return signal.aborted ? failure() : { kind: 'unavailable', reason: 'invalid-response' }
   }
-  if (text.length > MAX_BODY_LENGTH) return { kind: 'unavailable', reason: 'invalid-response' }
   let value: unknown
   try {
     value = JSON.parse(text)

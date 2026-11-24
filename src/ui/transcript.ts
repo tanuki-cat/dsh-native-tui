@@ -120,6 +120,7 @@ export type TranscriptBlock = ({
   readonly shadowedItems?: number
   readonly shadowedTokens?: number
   readonly summary?: string
+  readonly summarySeq?: number
   readonly error?: string
 }) & {
   /** Durable event sequence that produced this block. */
@@ -529,7 +530,7 @@ export function createTranscriptReducer(options: TranscriptOptions) {
         }
         else if (extensionType === 'compaction/summary') {
           const id = String(data.compactionId)
-          const summary = clip(contentText(data.summary as readonly ContentBlock[] | undefined), 800)
+          const summary = clip(contentText(data.summary as readonly ContentBlock[] | undefined), 240)
           const shadowedSeqs = Array.isArray(data.shadowedSeqs) ? data.shadowedSeqs : []
           const range = data.shadowedRange as { readonly start?: unknown; readonly end?: unknown } | undefined
           const rangeCount = typeof range?.start === 'number' && typeof range.end === 'number'
@@ -541,7 +542,7 @@ export function createTranscriptReducer(options: TranscriptOptions) {
             state: 'running',
             shadowedItems: shadowedSeqs.length > 0 ? shadowedSeqs.length : rangeCount,
             ...(typeof data.shadowedTokenCount === 'number' ? { shadowedTokens: data.shadowedTokenCount } : {}),
-            ...(summary === '' ? {} : { summary }),
+            ...(summary === '' ? {} : { summary, summarySeq: seq }),
             seq,
           }
           const index = compactionByCall.get(id)

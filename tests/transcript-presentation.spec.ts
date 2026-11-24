@@ -17,6 +17,12 @@ const render = (block: TranscriptBlock, theme: 'plain' | 'dark' | 'light' = 'pla
 }
 
 describe('compact transcript presentation', () => {
+  it('shows the summary command where it fits without increasing the preview height', () => {
+    const block = { kind: 'compaction', compactionId: 'c', state: 'done', summary: 'Summary' } as const
+    expect(render({ ...block, summarySeq: 12 }).join('\n')).toContain('/context summary 12')
+    expect(render({ ...block, summarySeq: 12 }, 'plain', 20)).toEqual(render(block, 'plain', 20))
+  })
+
   it.each(['dark', 'light', 'plain'] as const)('uses quiet compaction progress and truthful receipts in %s', theme => {
     const labels = { running: 'Compacting…', done: 'Context compacted', error: 'Failed to compact context', interrupted: 'Interrupted while compacting context' }
     let heading: string | undefined

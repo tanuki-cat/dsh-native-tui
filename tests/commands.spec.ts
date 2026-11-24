@@ -1,14 +1,23 @@
 import { describe, expect, it, vi } from 'vitest'
+import { HELP_LINES } from '../src/ui/commands/catalog.js'
 import type { CommandContext } from '../src/ui/commands/context.js'
 import { mcpCommand } from '../src/ui/commands/mcp.js'
+import type { McpOAuthAttemptView } from '../src/ui/commands/services.js'
 import { providerCommand } from '../src/ui/commands/provider.js'
 import { agentsCommand, jobsCommand } from '../src/ui/commands/runtime-status.js'
+import { statusCommand } from '../src/ui/commands/session.js'
 import { sessionsCommand } from '../src/ui/commands/sessions.js'
 import { formatLocalTimestamp } from '../src/ui/format-time.js'
 import { settingsCommand } from '../src/ui/commands/settings.js'
 import { workspacesCommand } from '../src/ui/commands/workspace.js'
 import { scheduleCommand } from '../src/ui/commands/schedule.js'
 import { pluginsCommand } from '../src/ui/commands/plugins.js'
+import { showChoice } from '../src/ui/dialogs.js'
+
+vi.mock('../src/ui/dialogs.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/ui/dialogs.js')>()
+  return { ...actual, showChoice: vi.fn(actual.showChoice) }
+})
 
 /** One recorded notice. */
 interface Notice {
@@ -118,7 +127,7 @@ describe('command handler argument paths', () => {
   it('prints the /mcp usage for an unknown subcommand', async () => {
     const ctx = contextOf({ settings })
     await mcpCommand(ctx, 'nonsense')
-    expect(allText(ctx)).toContain('Usage: /mcp [add | list | reload [name] | probe <name> | remove <name>]')
+    expect(allText(ctx)).toContain('Usage: /mcp [add | list | reload [name] | probe <name> | remove <name> | auth <name> | signout <name>]')
   })
 
   it('restarts every configured MCP server through /mcp reload', async () => {
@@ -276,6 +285,115 @@ describe('command handler argument paths', () => {
     const ctx = contextOf({ jobs: { list: () => [], kill: () => 'requested' } })
     jobsCommand(ctx, 'kill ')
     expect(allText(ctx)).toContain('Usage: /jobs kill <job-id>')
+  })
+})
+
+describe('MCP authorization', () => {
+  const settings = {
+    describe: () => [{
+      ns: 'mcp-manager', value: { servers: { demo: { oauth: { credentialKey: 'mcp-client/demo' } } } },
+    }],
+  }
+  const status = { state: 'waiting-authorization', reason: 'missing' }
+
+  it('displays connection state and authorization phase independently', async () => {
+    const ctx = contextOf({ settings, mcpManager: {
+      list: () => [{ name: 'demo', configured: true, status, authorization: { id: 'a', phase: 'waiting-browser' } }],
+    } })
+    await mcpCommand(ctx, 'list')
+    expect(allText(ctx)).toContain('waiting for authorization (missing) · OAuth waiting-browser')
+  })
+
+  it('requires a mounted callback service before starting', async () => {
+    const startAuthorization = vi.fn()
+    const ctx = contextOf({ settings, mcpManager: {
+      list: () => [{ name: 'demo', configured: true, status }], startAuthorization,
+    } })
+    await mcpCommand(ctx, 'auth demo')
+    expect(startAuthorization).not.toHaveBeenCalled()
+    expect(allText(ctx)).toContain('Enable mcp-oauth-webserver')
+  })
+
+  it.each(['cancelled', 'authorized'] as const)('reports the Host result %s after an Escape', async phase => {
+    const controller = new AbortController()
+    let attempt: McpOAuthAttemptView = { id: 'a', phase: 'waiting-browser', authorizationUrl: 'http://localhost/authorize' }
+    const cancelAuthorization = vi.fn(async () => { attempt = { id: 'a', phase } })
+    const signOut = vi.fn()
+    const ctx = { ...contextOf({ settings, webServer: {}, mcpManager: {
+      list: () => [{ name: 'demo', configured: true, status, authorization: attempt }],
+      startAuthorization: async () => attempt, cancelAuthorization, signOut,
+    } }), signal: controller.signal }
+    const running = mcpCommand(ctx, 'auth demo')
+    await Promise.resolve()
+    controller.abort()
+    await running
+    expect(cancelAuthorization).toHaveBeenCalledWith('demo', 'a')
+    expect(signOut).not.toHaveBeenCalled()
+    expect(allText(ctx)).toContain('MCP OAuth demo · ' + phase)
+  })
+
+  it('does not report a different attempt as successful', async () => {
+    vi.useFakeTimers()
+    try {
+      const original: McpOAuthAttemptView = { id: 'original', phase: 'waiting-browser' }
+      const ctx = contextOf({ settings, webServer: {}, mcpManager: {
+        startAuthorization: async () => original,
+        list: () => [{ name: 'demo', configured: true, status, authorization: { id: 'new', phase: 'authorized' } }],
+      } })
+      const running = mcpCommand(ctx, 'auth demo')
+      await vi.advanceTimersByTimeAsync(1000)
+      await running
+      expect(allText(ctx)).toContain('attempt is no longer available')
+      expect(allText(ctx)).not.toContain(' · authorized')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('skips /mcp reload while an OAuth authorization is in progress', async () => {
+    const restart = vi.fn(async () => undefined)
+    const ctx = contextOf({ settings, mcpManager: {
+      list: () => [{ name: 'demo', configured: true, status, authorization: { id: 'a', phase: 'waiting-browser' } }],
+      restart,
+    } })
+    await mcpCommand(ctx, 'reload demo')
+    expect(restart).not.toHaveBeenCalled()
+    expect(allText(ctx)).toContain('Restart skipped.')
+  })
+
+  it('requires confirmation before signing out of an MCP OAuth server', async () => {
+    const signOut = vi.fn(async () => undefined)
+    const ctx = contextOf({ settings, mcpManager: {
+      list: () => [{ name: 'demo', configured: true, status }],
+      signOut,
+    } })
+    vi.mocked(showChoice).mockResolvedValueOnce('cancel')
+    await mcpCommand(ctx, 'signout demo')
+    expect(signOut).not.toHaveBeenCalled()
+
+    vi.mocked(showChoice).mockResolvedValueOnce('signout')
+    await mcpCommand(ctx, 'signout demo')
+    expect(signOut).toHaveBeenCalledWith('demo')
+    expect(allText(ctx)).toContain('Signed out of MCP server demo.')
+  })
+})
+
+describe('/status and /help surface', () => {
+  it('shows the active working directory in /status and handles service failures', () => {
+    const base = contextOf({ workingDirectory: { get: () => '/worktree' } })
+    const active = { id: 'session-1', agent: { status: 'idle', options: {}, session: { header: { cwd: '/original', createdAt: 1 }, snapshotEvents: () => [] } } } as unknown as CommandContext['active']
+    statusCommand({ ...base, active })
+    expect(allText(base)).toContain('Directory: /worktree')
+
+    const broken = contextOf({ workingDirectory: { get: () => { throw new Error('unavailable') } } })
+    statusCommand({ ...broken, active })
+    expect(allText(broken)).toContain('Directory: Workspace unavailable')
+  })
+
+  it('documents /context summary and /mcp OAuth subcommands in HELP_LINES', () => {
+    const joined = HELP_LINES.join('\n')
+    expect(joined).toContain('/context [threshold [percent] | summary [event-seq]]')
+    expect(joined).toContain('/mcp [add|list|reload [name]|probe <name>|remove <name>|auth <name>|signout <name>]')
   })
 })
 

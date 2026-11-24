@@ -4,6 +4,7 @@ import { installMcpRecovery, RETRY_WINDOW_MS } from '../src/runtime/mcp-recovery
 interface View {
   readonly name: string
   readonly status: { readonly state: string }
+  readonly authorization?: { readonly phase: string }
 }
 
 function harness(manager: {
@@ -31,6 +32,17 @@ const codedFailure = (code: string): unknown => ({ isError: true, error: { messa
 const connected = (name: string): View => ({ name, status: { state: 'connected' } })
 
 describe('mcp recovery', () => {
+  it.each([
+    { state: 'waiting-authorization' },
+    { state: 'failed', authorization: { phase: 'committing' } },
+  ])('leaves authorization to the manager with %j', async ({ state, authorization }) => {
+    const restart = vi.fn(async () => {})
+    const h = harness({ list: () => [{ name: 'idea', status: { state }, authorization }], restart })
+    h.emit({ name: 'mcp__idea__list' }, codedFailure('ConnectionClosed'))
+    await Promise.resolve()
+    expect(restart).not.toHaveBeenCalled()
+    h.dispose()
+  })
   it('restarts a connected server after a run of connection-class failures', async () => {
     const restart = vi.fn(async () => undefined)
     const h = harness({ list: () => [connected('idea')], restart })

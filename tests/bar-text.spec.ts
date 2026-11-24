@@ -1,3 +1,4 @@
+import { visibleWidth } from '@earendil-works/pi-tui'
 import { describe, expect, it } from 'vitest'
 import { BarText } from '../src/ui/bar-text.js'
 
@@ -10,5 +11,12 @@ describe('BarText', () => {
 
   it('does not render empty content', () => {
     expect(new BarText('', '│ ').render(20)).toEqual([])
+  })
+
+  it('never overflows narrow widths with CJK characters', () => {
+    for (const width of [0, 1, 2, 3, 4]) {
+      const lines = new BarText('中文内容测试', '│ ').render(width)
+      expect(lines.every(line => visibleWidth(line) <= width)).toBe(true)
+    }
   })
 })

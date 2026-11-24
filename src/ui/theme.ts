@@ -56,6 +56,13 @@ function sgr(open: string, close: string): (text: string) => string {
   return (text) => `\u001B[${open}m${text}\u001B[${close}m`
 }
 
+/** Wrap a full-width background band so inner `\x1b[0m` resets re-apply the band. */
+function band(open: string, close: string): (text: string) => string {
+  const sequence = `\u001B[${open}m`
+  const reset = `\u001B[${close}m`
+  return (text) => sequence + (text.includes('\u001B[0m') ? text.replaceAll('\u001B[0m', '\u001B[0m' + sequence) : text) + reset
+}
+
 /**
  * Build semantic styles from the terminal's measured colors when available.
  * @param theme - configured palette mode.
@@ -103,12 +110,12 @@ export function createPalette(theme: Config['theme'], colors: TerminalColors = {
     return (text: string): string => open + text + '\u001B[39m'
   }
   const surface = (darkAlpha: number, lightAlpha: number, fallback: string) => {
-    if (colors.background === undefined) return sgr(fallback, '49')
+    if (colors.background === undefined) return band(fallback, '49')
     const pale = lightBackground(colors.background)
     const top = pale ? { r: 0, g: 0, b: 0 } : { r: 255, g: 255, b: 255 }
     const color = blend(top, colors.background, pale ? lightAlpha : darkAlpha)
     const open = backgroundAnsi(rgbColor(color.r, color.g, color.b), colorMode)
-    return (text: string): string => open + text + '\u001B[49m'
+    return (text: string): string => open + (text.includes('\u001B[0m') ? text.replaceAll('\u001B[0m', '\u001B[0m' + open) : text) + '\u001B[49m'
   }
   // Tool cards use a neutral surface instead of a saturated state color: the
   // card already carries success/error in its label, and a full-width green
@@ -189,13 +196,13 @@ export function createPalette(theme: Config['theme'], colors: TerminalColors = {
     workspace: foreground(light ? { r: 36, g: 122, b: 61 } : { r: 143, g: 211, b: 153 }),
     ready: foreground(light ? { r: 111, g: 66, b: 170 } : { r: 189, g: 147, b: 249 }),
     userBand: surface(0.16, 0.02, bands.user),
-    toolBand: sgr(bands.tool, '49'),
-    thinkingBand: sgr(bands.thinking, '49'),
-    diffAddBand: sgr(light ? '48;5;194' : '48;5;22', '49'),
-    diffRemoveBand: sgr(light ? '48;5;224' : '48;5;52', '49'),
+    toolBand: band(bands.tool, '49'),
+    thinkingBand: band(bands.thinking, '49'),
+    diffAddBand: band(light ? '48;5;194' : '48;5;22', '49'),
+    diffRemoveBand: band(light ? '48;5;224' : '48;5;52', '49'),
     dialogBand: surface(0.12, 0.04, light ? '48;5;255' : '48;5;236'),
     dialogBorder: dim,
-    autocompleteSelection: sgr('48;5;75;30', '39;49'),
+    autocompleteSelection: band('48;5;75;30', '39;49'),
     reasoning,
     preset: sgr(light ? '38;5;91' : '38;5;141', '39'),
     context,

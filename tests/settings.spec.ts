@@ -216,5 +216,10 @@ describe('settingsValueAt / settingsSetAt', () => {
     settingsSetAt(root, ['nested', 'created', 'value'], 5)
     expect(root).toEqual({ nested: { live: 4, created: { value: 5 } } })
     expect(() => settingsSetAt(root, [], 1)).toThrow('settings path must not be empty')
+    for (const bad of ['__proto__', 'constructor', 'prototype']) {
+      expect(() => settingsSetAt({}, [bad, 'polluted'], true)).toThrow('not allowed')
+      expect(settingsValueAt(root, [bad])).toBeUndefined()
+    }
+    expect(({} as { polluted?: unknown }).polluted).toBeUndefined()
   })
 })

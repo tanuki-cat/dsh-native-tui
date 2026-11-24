@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ContentBlock, GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { buildChatPayload } from '../src/codebuddy/wire.js'
-import { decodeSse, type SseFrame } from '../src/codebuddy/sse.js'
+import { decodeSse, MAX_SSE_BUFFER_CHARS, type SseFrame } from '../src/codebuddy/sse.js'
 import { streamChat, toStreamChunks } from '../src/codebuddy/stream.js'
 import { cnProfile, enProfile } from '../src/codebuddy/profiles.js'
 
@@ -126,7 +126,7 @@ describe('codebuddy wire serialization', () => {
       }],
     }), cnProfile, undefined, {
       reader: {
-        async readImageRequest(ref: unknown, target: { width: number; height: number; maxBytes: number }) {
+        async readImageRequest(ref: unknown, target) {
           seen.push(JSON.stringify(target))
           return { data: new Uint8Array([1, 2, 3]), mediaType: 'image/png' }
         },
@@ -142,7 +142,7 @@ describe('codebuddy wire serialization', () => {
     })
     // The reader is asked for a projected target, not the source dimensions:
     // 4096x2048 shrinks inside the 2048² pixel budget, aspect preserved.
-    expect(seen[0]).toBe(JSON.stringify({ width: 2896, height: 1448, maxBytes: 1024 * 1024 }))
+    expect(seen[0]).toBe(JSON.stringify({ width: 2896, height: 1448, maxImageBytes: 1024 * 1024, imageTargetBytes: 1024 * 1024 }))
   })
 
   it('sends a tool-result image and keeps text-only content a string', async () => {
@@ -592,5 +592,32 @@ describe('codebuddy chat transport', () => {
         access: 'token',
       })) { /* drain */ }
     })()).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+  })
+
+  it('cancels the response stream on early exit and bounds unframed SSE buffers', async () => {
+    let cancelled = false
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"a":1}\n\n'))
+        controller.enqueue(encoder.encode('data: {"a":2}\n\n'))
+      },
+      cancel() { cancelled = true },
+    })
+    for await (const frame of decodeSse(stream)) {
+      expect(frame.data).toBe('{"a":1}')
+      break
+    }
+    expect(cancelled).toBe(true)
+
+    const huge = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('x'.repeat(MAX_SSE_BUFFER_CHARS + 1)))
+        controller.close()
+      },
+    })
+    await expect((async () => {
+      for await (const _frame of decodeSse(huge)) { /* drain */ }
+    })()).rejects.toThrow('SSE frame exceeded buffer limit')
   })
 })

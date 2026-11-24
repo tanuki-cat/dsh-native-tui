@@ -11,7 +11,7 @@ import type { CommandSuggestion } from '../autocomplete.js'
 
 /** `/help` rows, one line per command family. */
 export const HELP_LINES: readonly string[] = [
-  '/help · /new · /init · /sessions · /resume [id] · /status · /context [threshold [percent]] · /clear',
+  '/help · /new · /init · /sessions · /resume [id] · /status · /context [threshold [percent] | summary [event-seq]] · /clear',
   '/skill [<name>|list [page]|read <name>] · stage a skill call, review the catalog, or read one',
   '/skill:<name> [instructions] · invoke a skill, including names shared with commands',
   'Ctrl+N: new/blank session · Alt+S: switch session (keep draft and attachments)',
@@ -20,7 +20,7 @@ export const HELP_LINES: readonly string[] = [
   'Fullscreen only: click the first line of a tool card or its Show details / Hide details row to toggle it',
   '/exit · /quit (or bare exit/quit) · /reload',
   '/cancel · /model [provider/model] · /reasoning [effort|default|map] · /provider [add|list|edit|models|remove <route>]',
-  '/mcp [add|list|reload [name]|probe <name>|remove <name>]',
+  '/mcp [add|list|reload [name]|probe <name>|remove <name>|auth <name>|signout <name>]',
   '/mode [manual|accept-edits|plan|auto|off] · /permissions [preset]',
   '/jobs [kill <id>] · /agents · /preset [id]',
   '/plugins [list|market [q]|inspect <spec>|install <spec>|remove <bundle>|versions <bundle>|update <bundle> [version] [git-spec]|enable <id>|disable <id>] · /exit',
@@ -46,6 +46,7 @@ export const LOCAL_COMMANDS: readonly CommandSuggestion[] = [
   { name: 'status', description: 'show session, model, and preset' },
   { name: 'context', description: 'show context usage and compaction', keepExactSubmit: true, subcommands: [
     { name: 'threshold', description: 'configure the selected model’s automatic compaction threshold', hint: '[percent]' },
+    { name: 'summary', description: 'read a compaction summary', hint: '[event-seq]' },
   ] },
   { name: 'skill', description: 'pick a skill to invoke, review the catalog, or read one', input: { hint: '[<name>|list [page]|read <name>]' }, keepExactSubmit: true, subcommands: [
     { name: 'list', description: 'page the skill table', hint: '[page]' },
@@ -106,12 +107,14 @@ export const LOCAL_COMMANDS: readonly CommandSuggestion[] = [
     { name: 'items', description: 'open a namespace to manage array items', hint: '<ns> <field>' },
     { name: 'set', description: 'merge JSON into a namespace', hint: '<ns> <json>' },
   ] },
-  { name: 'mcp', description: 'configure MCP servers', input: { hint: '[add|list|reload [name]|probe <name>|remove <name>]' }, subcommands: [
+  { name: 'mcp', description: 'configure MCP servers', input: { hint: '[add|list|reload|probe|remove|auth|signout]' }, subcommands: [
     { name: 'add', description: 'add a stdio or HTTP MCP server' },
     { name: 'list', description: 'list configured MCP servers' },
     { name: 'reload', description: 'restart one or all MCP servers', hint: '[name]' },
     { name: 'probe', description: 'test one MCP server connection', hint: '<name>' },
     { name: 'remove', description: 'remove an MCP server', hint: '<name>' },
+    { name: 'auth', description: 'authorize an OAuth server', hint: '<name>' },
+    { name: 'signout', description: 'remove a saved OAuth grant', hint: '<name>' },
   ] },
   { name: 'login', description: '引导选择登录平台（DeepSeek 官方待实现）' },
   { name: 'codebuddy', description: 'CodeBuddy / WorkBuddy sign-in, models and credits', input: { hint: '[status|login|logout|models [refresh]|quota|checkin|prompt [show|reset]|doctor]' }, subcommands: [

@@ -10,9 +10,12 @@
  * @module dsh-native-tui/codebuddy/models
  */
 
+import { readBoundedResponseText } from '../runtime/http-body.js'
 import { redact } from './errors.js'
 import type { CodeBuddyProfile } from './profiles.js'
 import { DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_OUTPUT_TOKENS } from './profiles.js'
+
+const MAX_CATALOGUE_BYTES = 4 * 1024 * 1024
 
 /** Input modalities this route can declare; the harness gate reads exactly this list. */
 export type InputModality = 'text' | 'image'
@@ -224,6 +227,7 @@ export async function discoverModels(
     response = await fetch(profile.configUrl, {
       method: 'GET',
       headers: profile.headers(access),
+      redirect: 'error',
       signal,
     })
   }
@@ -231,7 +235,13 @@ export async function discoverModels(
     if (signal.aborted) return { models: [], error: 'cancelled' }
     return { models: [], error: 'unreachable: ' + redact(error instanceof Error ? error.message : String(error)) }
   }
-  const text = await response.text()
+  let text: string
+  try {
+    text = await readBoundedResponseText(response, MAX_CATALOGUE_BYTES)
+  }
+  catch (error) {
+    return { models: [], error: redact(error instanceof Error ? error.message : String(error)) }
+  }
   if (!response.ok) return { models: [], error: 'HTTP ' + String(response.status) }
   const models = parseCatalogue(text)
   return models.length > 0 ? { models } : { models: [], error: 'catalogue was empty' }

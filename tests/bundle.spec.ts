@@ -194,6 +194,34 @@ describe('exportSessionBundle', () => {
     expect(result.skipped).toEqual([])
   })
 
+  it('uses the workspace at declaration time while exporting into the current worktree', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'native-tui-bundle-'))
+    cleanup.push(parent)
+    const original = join(parent, 'original')
+    const worktree = join(parent, 'worktree')
+    await mkdir(original)
+    await mkdir(worktree)
+    await writeFile(join(original, 'report.md'), 'original')
+    await writeFile(join(worktree, 'report.md'), 'worktree')
+    const declare = (turn: number) => ({ type: 'deliverables/presented', data: { turn, files: [{ path: 'report.md' }] } })
+    const agent = {
+      session: {
+        header: { id: 'worktree', cwd: original, createdAt: 1 },
+        snapshotEvents: () => [
+          { type: 'working-directory/change', data: { cwd: worktree } },
+          declare(1),
+          { type: 'workspace-root/change', data: { cwd: worktree } },
+          declare(2),
+        ],
+      },
+    } as unknown as Agent
+    const result = await exportSessionBundle(agent, 'bundle.zip', worktree, attachments)
+    expect(result.path).toBe(join(worktree, 'bundle.zip'))
+    const archive = unzipSync(await readFile(result.path))
+    expect(result.deliverables.map(({ entry }) => Buffer.from(archive[entry] ?? []).toString())).toEqual(['original', 'worktree'])
+    expect(result.skipped).toEqual([])
+  })
+
   const withSymlinks = process.platform === 'win32' ? it.skip : it
   withSymlinks('follows a presented link before trusting the workspace boundary', async () => {
     const parent = await mkdtemp(join(tmpdir(), 'native-tui-bundle-'))

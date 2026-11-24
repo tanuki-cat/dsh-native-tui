@@ -96,6 +96,10 @@ export class EditGroupCard implements Component {
   }
 
   render(width: number): string[] {
+    if (width <= 0) {
+      this.height = 0
+      return []
+    }
     const { palette } = this.options
     const files = this.prepare()
     const stats = files.reduce((sum, file) => addStats(sum, file.stats), zeroStats())
@@ -118,7 +122,7 @@ export class EditGroupCard implements Component {
         if (used >= budget) { omitted = true; break }
         const rows = preview.render(innerWidth)
         const available = Math.max(0, budget - used)
-        lines.push(...rows.slice(0, available).map(row => ' '.repeat(inset) + row))
+        lines.push(...rows.slice(0, available).map(row => truncateToWidth(' '.repeat(inset) + row, width, '…')))
         used += Math.min(available, rows.length)
         omitted ||= rows.length > available
       }

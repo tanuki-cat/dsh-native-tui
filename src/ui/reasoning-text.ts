@@ -57,21 +57,30 @@ export function firstLine(text: string): string {
  * @returns the last completed paragraph's first line, or empty text.
  */
 export function latestCompletedParagraphFirstLine(text: string): string {
-  let summary = ''
-  let paragraphStart = 0
-  // A fresh expression per call: a shared global one would carry lastIndex in.
-  const separator = /\r?\n(?:[\t ]*\r?\n)+/g
-  for (;;) {
-    const nextParagraph = separator.exec(text)
-    const paragraphEnd = nextParagraph === null ? text.length : nextParagraph.index + nextParagraph[0].indexOf('\n')
-    const newline = text.indexOf('\n', paragraphStart)
-    if (newline !== -1 && newline <= paragraphEnd) {
-      const candidate = text.slice(paragraphStart, newline).trim()
-      if (candidate !== '') summary = candidate
+  let end = text.length
+  let inNonBlank = false
+  let firstNonEmpty = ''
+  let hasNewline = false
+  while (end > 0) {
+    const prevNl = text.lastIndexOf('\n', end - 1)
+    const lineStart = prevNl + 1
+    const trimmed = text.slice(lineStart, end).trim()
+    if (trimmed === '') {
+      if (inNonBlank) {
+        if (hasNewline && firstNonEmpty !== '') return firstNonEmpty
+        inNonBlank = false
+        firstNonEmpty = ''
+        hasNewline = false
+      }
+    } else {
+      inNonBlank = true
+      firstNonEmpty = trimmed
+      if (end < text.length) hasNewline = true
     }
-    if (nextParagraph === null) return summary
-    paragraphStart = nextParagraph.index + nextParagraph[0].length
+    if (prevNl <= 0) break
+    end = prevNl
   }
+  return inNonBlank && hasNewline && firstNonEmpty !== '' ? firstNonEmpty : ''
 }
 
 /** First line carrying text, or empty when every line is blank. */

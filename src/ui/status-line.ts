@@ -199,7 +199,11 @@ export function terminalWindowTitle(title: string, cwd: string): string {
   const workspace = clean(cwd).replace(/[\\/]+$/u, '').split(/[\\/]/u).at(-1) ?? ''
   const label = workspace.length <= WINDOW_TITLE_WORKSPACE_CHARS
     ? workspace
-    : workspace.slice(0, WINDOW_TITLE_WORKSPACE_CHARS - 1) + '…'
+    : (() => {
+        const end = WINDOW_TITLE_WORKSPACE_CHARS - 1
+        const last = workspace.charCodeAt(end - 1)
+        return workspace.slice(0, last >= 0xd800 && last <= 0xdbff ? end - 1 : end) + '…'
+      })()
   if (label === '') return product
   return product === '' ? label : product + ' · ' + label
 }

@@ -1,5 +1,6 @@
-import { Text, truncateToWidth, type TUI } from '@earendil-works/pi-tui'
+import { Text, isKeyRelease, matchesKey, truncateToWidth, type TUI } from '@earendil-works/pi-tui'
 import type { Palette } from './theme.js'
+import { literalToolText } from './tool-output.js'
 
 type Frame = (lines: readonly string[], width: number, palette: Palette) => string[]
 
@@ -10,7 +11,7 @@ export function showApprovalDetails(tui: TUI, palette: Palette, text: string, fr
     let handle: ReturnType<TUI['showOverlay']> | undefined
     let settled = false, offset = 0, page = 1, total = 0, lastWidth = -1
     let lines: string[] = []
-    const body = new Text(text, 0, 0)
+    const body = new Text(literalToolText(text), 0, 0)
     const finish = (): void => {
       if (settled) return
       settled = true
@@ -34,11 +35,12 @@ export function showApprovalDetails(tui: TUI, palette: Palette, text: string, fr
         ], width, palette)
       },
       handleInput(data: string): void {
-        if (data === '\x1b') { finish(); return }
-        if (data === '\x1b[A') offset -= 1
-        else if (data === '\x1b[B') offset += 1
-        else if (data === '\x1b[5~') offset -= page
-        else if (data === '\x1b[6~') offset += page
+        if (isKeyRelease(data)) return
+        if (matchesKey(data, 'escape')) { finish(); return }
+        if (matchesKey(data, 'up')) offset -= 1
+        else if (matchesKey(data, 'down')) offset += 1
+        else if (matchesKey(data, 'pageUp')) offset -= page
+        else if (matchesKey(data, 'pageDown')) offset += page
         else return
         offset = Math.max(0, Math.min(offset, Math.max(0, total - page)))
         tui.requestRender()

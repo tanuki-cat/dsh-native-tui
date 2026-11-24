@@ -36,7 +36,19 @@ describe('preview repainting', () => {
     h.key('\x1b')
     await opened
     expect(h.hide).toHaveBeenCalledOnce()
-    expect(h.release).toHaveBeenCalledOnce()
+  })
+
+  it('closes pagers and multiline input on Kitty CSI-u Escape', async () => {
+    const h = host()
+    const md = showMarkdownPreview(h.tui, createPalette('plain'), 'MD', 'hello', h.controller.signal)
+    h.key('\x1b[27u')
+    await md
+    const pager = showTextPager(h.tui, createPalette('plain'), 'Text', 'hello', h.controller.signal)
+    h.key('\x1b[27u')
+    await pager
+    const multi = showMultilineInput(h.tui, createPalette('plain'), 'Edit', 'hello', 'hint', h.controller.signal)
+    h.key('\x1b[27u')
+    await expect(multi).resolves.toBeUndefined()
   })
 
   it('reflows Markdown at the overlay width when resized', async () => {
@@ -62,7 +74,7 @@ describe('preview repainting', () => {
     expect(h.render().join('\n')).toContain('lines 1–4 / 20')
     h.controller.abort()
     await opened
-    expect(h.release).toHaveBeenCalledOnce()
+    expect(h.hide).toHaveBeenCalledOnce()
   })
 
   it('keeps external text unstyled and strips terminal instructions', async () => {

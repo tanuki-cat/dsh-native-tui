@@ -1,4 +1,4 @@
-import type { Context } from '@deepseek-ai/cordis'
+import { Context } from '@deepseek-ai/cordis'
 import { Config, parseResumeArg, resolveConfig, resolveDisplayMode, resolveVolatileValue, type Config as TuiConfig } from './config.js'
 import { startTerminalApp, type TerminalApp } from './ui/app.js'
 import { clearReloadSession, peekReloadSession, rememberReloadSession, RESUME_ENV, resumeIdFromEnv } from './runtime/reload.js'
@@ -91,7 +91,7 @@ export async function apply(ctx: Context, config: TuiConfig): Promise<void> {
     if (exiting) return
     exiting = true
     const finish = (): void => { process.exit(code) }
-    void ctx.root.fiber.dispose().then(finish, finish)
+    void ctx[Context.root].fiber.dispose().then(finish, finish)
     setTimeout(finish, 5_000).unref()
   }
 

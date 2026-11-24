@@ -54,11 +54,19 @@ describe('session drafts', () => {
   it('returns the first matching blank without crossing workspaces or presets', () => {
     const drafts = new SessionDrafts()
     const a = session('a'), b = session('b', '/work/b'), c = session('c', '/work/a', 'minimal')
-    for (const value of [a, b, c]) drafts.save(value, { text: value.id, attachments: [] }, '/fallback')
+    for (const value of [a, b, c]) drafts.save(value, { text: value.id, attachments: [] }, value.header.cwd)
     expect(drafts.findBlank('/work/a/.', 'ptc')).toBe(a.id)
     expect(drafts.findBlank('/work/b', 'ptc')).toBe(b.id)
     expect(drafts.findBlank('/work/a', 'minimal')).toBe(c.id)
     expect(drafts.findBlank('/work/a', 'standard')).toBeUndefined()
+  })
+
+  it('indexes a blank session under its current worktree rather than its header directory', () => {
+    const drafts = new SessionDrafts()
+    const a = session('a')
+    drafts.save(a, { text: 'draft', attachments: [] }, '/worktree')
+    expect(drafts.findBlank('/worktree', 'ptc')).toBe(a.id)
+    expect(drafts.findBlank('/work/a', 'ptc')).toBeUndefined()
   })
 
   it('excludes archived blanks without discarding their drafts', () => {

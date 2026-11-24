@@ -9,8 +9,11 @@
  * @module dsh-native-tui/codebuddy/credits
  */
 
+import { readBoundedResponseText } from '../runtime/http-body.js'
 import { redact } from './errors.js'
 import type { CodeBuddyProfile } from './profiles.js'
+
+const MAX_CREDITS_BODY_BYTES = 1024 * 1024
 
 /**
  * A package whose billing cycle ends more than this long before the resource
@@ -117,7 +120,7 @@ function messageOf(body: unknown): string | undefined {
 }
 
 async function readBody(response: Response): Promise<unknown> {
-  const text = await response.text()
+  const text = await readBoundedResponseText(response, MAX_CREDITS_BODY_BYTES)
   if (text === '') return undefined
   try {
     return JSON.parse(text) as unknown
@@ -143,9 +146,13 @@ async function postMeter(
       method: 'POST',
       headers: profile.headers(access, { 'Content-Type': 'application/json' }),
       body: '{}',
+      redirect: 'error',
       signal,
     })
-    if (index < urls.length - 1 && (response.status === 404 || response.status === 405)) continue
+    if (index < urls.length - 1 && (response.status === 404 || response.status === 405)) {
+      await response.body?.cancel().catch(() => undefined)
+      continue
+    }
     return response
   }
   throw new Error(profile.id + ': no billing endpoint configured')

@@ -72,3 +72,30 @@ export async function readTextPreview(path: string, maxBytes = 16_384): Promise<
     await file.close()
   }
 }
+
+/**
+ * Read one regular file safely within `maxBytes` without blocking on special files
+ * or trusting pre-read `stat` sizes across TOCTOU races.
+ */
+export async function readBoundedFile(path: string, maxBytes: number, label = 'file', limitName = 'limit'): Promise<Buffer> {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new Error(label + ' maxBytes must be a positive safe integer')
+  const file = await open(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0))
+  try {
+    const info = await file.stat()
+    if (!info.isFile()) throw new Error('not a regular file')
+    if (info.size > maxBytes) {
+      throw new Error(label + ' is ' + String(info.size) + ' bytes; ' + limitName + ' is ' + String(maxBytes))
+    }
+    const raw = Buffer.allocUnsafe(maxBytes + 1)
+    let total = 0
+    while (total <= maxBytes) {
+      const { bytesRead } = await file.read(raw, total, maxBytes + 1 - total, total)
+      if (bytesRead === 0) break
+      total += bytesRead
+    }
+    if (total > maxBytes) throw new Error(label + ' exceeds ' + limitName + ' of ' + String(maxBytes) + ' bytes')
+    return raw.subarray(0, total)
+  } finally {
+    await file.close()
+  }
+}

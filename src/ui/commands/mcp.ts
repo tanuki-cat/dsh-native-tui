@@ -5,8 +5,9 @@
  */
 
 import { showChoice, showTextInput } from '../dialogs.js'
+import { mcpAuthorizationInProgress } from '../../runtime/mcp-recovery.js'
 import type { CommandContext } from './context.js'
-import type { McpManagedServerStatus, McpManagerService, McpProbeResultLike, SettingsService } from './services.js'
+import type { McpManagedServerStatus, McpManagerService, McpOAuthAttemptView, McpProbeResultLike, SettingsService } from './services.js'
 import { NL, errorMessage } from './shared.js'
 
 /** The `/mcp` command. */
@@ -38,19 +39,34 @@ export async function mcpCommand(ctx: CommandContext, args: string): Promise<voi
       return
     }
     const rows = views.map(view => {
-      const raw = servers[view.name]
+      const raw = Object.hasOwn(servers, view.name) ? servers[view.name] : undefined
       const transport = typeof raw?.transport === 'string' ? raw.transport : view.configured ? 'unknown' : '(not configured)'
       const target = describeTarget(raw)
       return view.name + '  ' + transport + (target === '' ? '' : '  ' + target)
         + '  ' + statusLabel(view.status, ctx.palette)
+        + (view.authorization === undefined ? '' : ' · OAuth ' + view.authorization.phase)
     })
     ctx.notice('info', 'MCP servers:' + NL + rows.join(NL)
-      + NL + 'Use /mcp add, /mcp remove <name>, /mcp reload [name], or /mcp probe <name>.')
+      + NL + 'Use /mcp auth <name> to authorize an OAuth server or /mcp signout <name> to remove its grant.')
     return
   }
 
   if (args === 'add') {
     await addServer(ctx, settings, servers, descriptor.revision, manager)
+    return
+  }
+
+  const oauthCommand = /^(auth|signout)(?:\s+(.*))?$/u.exec(args)
+  if (oauthCommand !== null) {
+    const action = oauthCommand[1]
+    const name = oauthCommand[2]?.trim() ?? ''
+    if (name === '') ctx.notice('warning', 'Usage: /mcp ' + action + ' <name>')
+    else if (manager === undefined) ctx.notice('warning', 'The core MCP manager is unavailable.')
+    else if (!manager.list().some(view => view.configured && view.name === name)) ctx.notice('warning', 'No configured MCP server "' + name + '".')
+    else if (Object.hasOwn(servers, name) && servers[name]?.oauth == null)
+      ctx.notice('warning', 'OAuth is not configured for MCP server "' + name + '".')
+    else if (action === 'auth') await authorizeServer(ctx, manager, name)
+    else await signOutServer(ctx, manager, name)
     return
   }
 
@@ -79,7 +95,7 @@ export async function mcpCommand(ctx: CommandContext, args: string): Promise<voi
   if (args === 'probe' || args.startsWith('probe ')) {
     const name = args.slice('probe'.length).trim()
     if (manager === undefined) {
-      ctx.notice('warning', 'The core MCP manager is unavailable; probe needs the rc.2 Host.')
+      ctx.notice('warning', 'The core MCP manager is unavailable.')
       return
     }
     if (name === '') {
@@ -120,6 +136,10 @@ export async function mcpCommand(ctx: CommandContext, args: string): Promise<voi
     }
     ctx.notice('info', 'Restarting MCP ' + (targets.length === 1 ? targets[0] : targets.length + ' servers') + '…')
     for (const target of targets) {
+      if (mcpAuthorizationInProgress(manager.list().find(view => view.name === target)?.authorization?.phase)) {
+        ctx.notice('warning', 'MCP server ' + target + ' is authorizing. Restart skipped.')
+        continue
+      }
       try {
         await manager.restart(target)
       }
@@ -134,7 +154,60 @@ export async function mcpCommand(ctx: CommandContext, args: string): Promise<voi
     return
   }
 
-  ctx.notice('warning', 'Usage: /mcp [add | list | reload [name] | probe <name> | remove <name>]')
+  ctx.notice('warning', 'Usage: /mcp [add | list | reload [name] | probe <name> | remove <name> | auth <name> | signout <name>]')
+}
+
+async function authorizeServer(ctx: CommandContext, manager: McpManagerService, name: string): Promise<void> {
+  if (ctx.host.get('webServer') === undefined) {
+    ctx.notice('warning', 'Enable mcp-oauth-webserver in this profile to receive the OAuth callback.')
+    return
+  }
+  ctx.signal.throwIfAborted()
+  const started = await manager.startAuthorization(name)
+  const current = () => {
+    const view = manager.list().find(server => server.name === name)?.authorization
+    return view?.id === started.id ? view : undefined
+  }
+  let attempt: McpOAuthAttemptView | undefined = started
+  let phase: McpOAuthAttemptView['phase'] | undefined
+  let url: string | undefined
+  try {
+    while (attempt !== undefined && mcpAuthorizationInProgress(attempt.phase)) {
+      ctx.signal.throwIfAborted()
+      if (attempt.phase !== phase || attempt.authorizationUrl !== url) {
+        phase = attempt.phase
+        url = attempt.authorizationUrl
+        ctx.notice('info', 'MCP OAuth ' + name + ' · ' + phase + (url === undefined ? '' : NL + 'Copy into your browser: ' + url))
+      }
+      await waitForRetry(1000, ctx.signal)
+      attempt = current()
+    }
+  } catch (error) {
+    if (!ctx.signal.aborted) throw error
+    try { await manager.cancelAuthorization(name, started.id) }
+    catch (cleanupError) {
+      ctx.notice('error', 'Could not cancel MCP OAuth ' + name + ': ' + errorMessage(cleanupError))
+      return
+    }
+    attempt = current()
+  }
+  if (attempt === undefined) {
+    ctx.notice('warning', 'MCP OAuth ' + name + ' attempt is no longer available.')
+    return
+  }
+  ctx.notice(attempt.phase === 'failed' ? 'error' : 'info',
+    'MCP OAuth ' + name + ' · ' + attempt.phase + (attempt.lastError === undefined ? '' : ': ' + attempt.lastError))
+}
+
+async function signOutServer(ctx: CommandContext, manager: McpManagerService, name: string): Promise<void> {
+  const choice = await showChoice(ctx.tui, ctx.palette, 'Sign out of MCP server ' + name + '?', [
+    { value: 'cancel', label: 'Cancel', description: 'Keep the current grant' },
+    { value: 'signout', label: 'Sign out', description: 'Remove the saved OAuth grant' },
+  ], 'Enter selects · Esc cancels', ctx.signal)
+  if (choice !== 'signout') return
+  ctx.signal.throwIfAborted()
+  await manager.signOut(name)
+  ctx.notice('info', 'Signed out of MCP server ' + name + '.')
 }
 
 /** Walk the interactive `/mcp add` flow and write the server row. */
@@ -148,8 +221,8 @@ async function addServer(
   const name = await showTextInput(ctx.tui, ctx.palette, 'MCP server name', 'github', '[A-Za-z0-9_-]{1,32}; unique · Esc cancels', ctx.signal)
   if (name === undefined)
     return
-  if (!/^[A-Za-z0-9_-]{1,32}$/u.test(name)) {
-    ctx.notice('warning', 'MCP server name must match [A-Za-z0-9_-]{1,32}.')
+  if (!/^[A-Za-z0-9_-]{1,32}$/u.test(name) || name === '__proto__' || name === 'constructor' || name === 'prototype') {
+    ctx.notice('warning', 'MCP server name must match [A-Za-z0-9_-]{1,32} and not be a reserved prototype key.')
     return
   }
   if (Object.hasOwn(servers, name)) {
@@ -194,7 +267,6 @@ async function addServer(
     const envRaw = await showTextInput(ctx.tui, ctx.palette, 'MCP environment JSON', '{}', 'Optional JSON object; empty merges nothing over the scrubbed environment · Esc cancels', ctx.signal, undefined, true)
     if (envRaw === undefined)
       return
-    ctx.notice('info', 'Applying MCP server ' + name + '…')
     let envValue: Record<string, unknown> | undefined
     if (envRaw.trim() !== '' && envRaw.trim() !== '{}') {
       try {
@@ -221,10 +293,14 @@ async function addServer(
     const url = await showTextInput(ctx.tui, ctx.palette, 'MCP endpoint URL', 'http://localhost:3000/mcp', 'Streamable HTTP endpoint · Esc cancels', ctx.signal)
     if (url === undefined)
       return
+    const auth = await showChoice(ctx.tui, ctx.palette, 'MCP authentication', [
+      { value: 'headers', label: 'None or custom headers' },
+      { value: 'oauth', label: 'OAuth' },
+    ], 'Enter selects · Esc cancels', ctx.signal)
+    if (auth === undefined) return
     const headersRaw = await showTextInput(ctx.tui, ctx.palette, 'MCP headers JSON', '{}', 'Optional JSON object of request headers · Esc cancels', ctx.signal, '{}')
     if (headersRaw === undefined)
       return
-    ctx.notice('info', 'Applying MCP server ' + name + '…')
     let headersValue: Record<string, unknown> | undefined
     if (headersRaw.trim() !== '' && headersRaw.trim() !== '{}') {
       try {
@@ -245,9 +321,26 @@ async function addServer(
       url,
       ...(headersValue === undefined ? {} : { headers: headersValue }),
     }
+    if (auth === 'oauth') {
+      if (Object.keys(headersValue ?? {}).some(key => key.toLowerCase() === 'authorization')) {
+        ctx.notice('warning', 'Remove the Authorization header when using MCP OAuth.')
+        return
+      }
+      const previous = (Object.hasOwn(servers, name) ? servers[name]?.oauth : undefined) as { credentialKey?: string; clientId?: string; scope?: string } | undefined
+      const clientId = await showTextInput(ctx.tui, ctx.palette, 'MCP OAuth client ID', '', 'Optional · Enter accepts · Esc cancels', ctx.signal, previous?.clientId, true)
+      if (clientId === undefined) return
+      const scope = await showTextInput(ctx.tui, ctx.palette, 'MCP OAuth scope', '', 'Optional · Enter accepts · Esc cancels', ctx.signal, previous?.scope, true)
+      if (scope === undefined) return
+      config.oauth = {
+        credentialKey: previous?.credentialKey ?? 'mcp-client/' + name,
+        ...(clientId.trim() === '' ? {} : { clientId: clientId.trim() }),
+        ...(scope.trim() === '' ? {} : { scope: scope.trim() }),
+      }
+    }
   }
   try {
-    await settings.update('mcp-manager', { servers: { [name]: config } }, revision)
+    ctx.notice('info', 'Applying MCP server ' + name + '…')
+    await settings.mutate('mcp-manager', [{ op: 'set', path: ['servers', name], value: config }], revision)
     ctx.notice('info', 'MCP server saved: ' + name + ' · ' + transport + '. Checking its connection…')
     if (manager === undefined) return
     let status: McpManagedServerStatus | undefined
@@ -323,6 +416,8 @@ function statusLabel(status: McpManagedServerStatus, palette: CommandContext['pa
     case 'connecting': return palette.warning('connecting')
     case 'reconnecting': return palette.warning('reconnecting' + (status.attempt === undefined ? '' : ' (attempt ' + String(status.attempt) + ')'))
     case 'waiting-credentials': return palette.warning('waiting for credentials')
+    case 'waiting-authorization': return palette.warning('waiting for authorization'
+      + (status.reason === undefined ? '' : ' (' + status.reason + ')'))
     case 'closed': return palette.error('closed')
     case 'failed': return palette.error('failed' + (status.reason === undefined ? '' : ' (' + status.reason + ')') + suffix)
   }

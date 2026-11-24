@@ -18,16 +18,16 @@ export const SKILLS_CACHE_MS = 1000
 
 /** User-invocable skills for the `/` menu, read at most once per burst. */
 export class SkillCatalogCache {
-  private reading: { readonly agent: HostSession['agent']; readonly at: number; readonly rows: readonly SkillSuggestion[] } | undefined
+  private reading: { readonly agent: HostSession['agent']; readonly cwd: string; readonly at: number; readonly rows: readonly SkillSuggestion[] } | undefined
 
   /**
    * @param registry - the active catalog, or undefined when the Host exposes none.
-   * @param defaultCwd - directory used when the Session recorded none.
+   * @param workingDirectory - the Agent's current workspace.
    * @param isCurrent - whether the Agent is still the one on screen.
    */
   constructor(
     private readonly registry: () => SkillsCatalog | undefined,
-    private readonly defaultCwd: () => string,
+    private readonly workingDirectory: (agent: HostSession['agent']) => string,
     private readonly isCurrent: (agent: HostSession['agent']) => boolean,
   ) {}
 
@@ -43,16 +43,16 @@ export class SkillCatalogCache {
    * @returns rows for the menu, or none when the catalog cannot be read.
    */
   async load(agent: HostSession['agent'], now = Date.now): Promise<readonly SkillSuggestion[]> {
-    const cached = this.reading
-    if (cached !== undefined && cached.agent === agent && now() - cached.at < SKILLS_CACHE_MS) return cached.rows
-    const registry = this.registry()
-    if (registry === undefined) return []
     try {
-      const list = await registry.list({ cwd: agent.session.header.cwd ?? this.defaultCwd(), scope: agent })
+      const cwd = this.workingDirectory(agent)
+      const cached = this.reading
+      if (cached !== undefined && cached.agent === agent && cached.cwd === cwd && now() - cached.at < SKILLS_CACHE_MS) return cached.rows
+      const registry = this.registry()
+      if (registry === undefined) return []
+      const list = await registry.list({ cwd, scope: agent })
       const rows = skillRows(list).filter(skill => skill.userInvocable)
-      // A session switch during the await must not leave its rows behind for
-      // the next menu, which belongs to whatever Session is on screen then.
-      if (this.isCurrent(agent)) this.reading = { agent, at: now(), rows }
+      if (!this.isCurrent(agent) || this.workingDirectory(agent) !== cwd) return []
+      this.reading = { agent, cwd, at: now(), rows }
       return rows
     }
     catch {

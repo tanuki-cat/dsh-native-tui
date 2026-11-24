@@ -562,6 +562,25 @@ describe('TranscriptRenderer component reuse', () => {
     renderer.set([], [])
     expect(renderer.contentChanged).toBe(true)
   })
+
+  it('reuses settled EditGroupCard components across live step settlement and skips unchanged setMaxEntries', () => {
+    const renderer = new TranscriptRenderer(options)
+    const editCall = durable('tool/call', { turn: 1, step: 1, callId: 'e1', name: 'edit', arguments: '{"file_path":"a.ts"}' }, 1)
+    const editResult = durable('tool/result', {
+      turn: 1, step: 1,
+      message: { source: { callId: 'e1' }, content: [{ type: 'text', text: 'ok' }], isError: false },
+      meta: { diffs: [{ path: 'a.ts', oldText: 'old', newText: 'new' }] },
+    }, 2)
+    const chunk = liveChunk(3, 1, 2, { type: 'text-delta', text: 'Working' })
+    renderer.set([editCall, editResult, chunk], [])
+    const editGroupRow = rows(renderer)[0]
+    const settledMsg = durable('assistant/message', { turn: 1, step: 2, message: { content: [{ type: 'text', text: 'Done' }] } }, 4)
+    renderer.set([editCall, editResult, settledMsg], [])
+    expect(rows(renderer)[0]).toBe(editGroupRow)
+    expect(renderer.container.render(80).join('\n')).toContain('Done')
+    expect(renderer.setMaxEntries(options.maxEntries)).toBe(false)
+    expect(rows(renderer)[0]).toBe(editGroupRow)
+  })
 })
 
 describe('TranscriptRenderer paint memo', () => {

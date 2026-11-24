@@ -21,7 +21,7 @@ let activePreset = 'standard'
 
 function respond(res, call, reasoning, text) {
   if (call && activePreset === 'ptc') call = { ...call, name: 'run_code', args: {
-    description: call.name, code: 'return await tools.' + call.name + '(' + JSON.stringify(call.args) + ')',
+    description: call.name, code: 'inspect(await tools.' + call.name + '(' + JSON.stringify(call.args) + '))',
   } }
   res.writeHead(200, { 'content-type': 'text/event-stream' })
   const send = (type, payload = {}) => res.write('event: ' + type + '\ndata: ' + JSON.stringify({ type, ...payload }) + '\n\n')

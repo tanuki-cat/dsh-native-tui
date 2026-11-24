@@ -1,6 +1,6 @@
-import { readFile, stat } from 'node:fs/promises'
 import { basename, extname, resolve } from 'node:path'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm/types'
+import { readBoundedFile } from './files.js'
 
 /** Maximum bytes one terminal attachment may read into memory. */
 export const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
@@ -74,12 +74,7 @@ export async function loadAttachment(
 ): Promise<PendingAttachment> {
   if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new Error('attachment maxBytes must be a positive safe integer')
   const path = resolve(cwd, target)
-  const info = await stat(path)
-  if (!info.isFile()) throw new Error('not a regular file')
-  if (info.size > maxBytes) {
-    throw new Error('file is ' + String(info.size) + ' bytes; terminal attachment limit is ' + String(maxBytes))
-  }
-  const data = await readFile(path)
+  const data = await readBoundedFile(path, maxBytes, 'file', 'terminal attachment limit')
   const name = basename(path)
   const mediaType = IMAGE_TYPES[extname(path).toLowerCase()]
   if (mediaType !== undefined) {

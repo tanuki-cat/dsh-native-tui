@@ -17,9 +17,10 @@ import { createHostSession, readContextBreakdown, restartHostSession, resumeHost
 import { findLauncher, parseProfileArg, resumeHint } from '../runtime/launcher.js'
 import { assertResumed, reloadArgs, RESUME_ENV } from '../runtime/reload.js'
 import { createSessionMetricsMemo, type SessionMetrics } from '../runtime/metrics.js'
-import { ContextModelBudgets, readContextInputs } from '../runtime/context-reading.js'
+import { ContextModelBudgets, readContextInputs, SessionEventCursor } from '../runtime/context-reading.js'
 import { sameRoute } from '../runtime/compaction-policy.js'
 import { createGitBranchReader } from '../runtime/git-branch.js'
+import { currentWorkingDirectory } from '../runtime/working-directory.js'
 import { showApproval, showQuestionBatch } from './dialogs.js'
 import { approvalArguments, approvalReceipt } from './approval-preview.js'
 import type { PendingAttachment } from '../runtime/attachments.js'
@@ -140,8 +141,8 @@ export async function startTerminalApp(
   const composerGap = tui instanceof TuiAltScreen
     ? new ScrollToLatest(palette, () => tui.isFollowingOutput, () => { tui.scrollToBottom() })
     : new Spacer(1)
-  const status = new StatusBar(palette.dim(' · '))
-  const footer = new StatusBar(palette.dim(' · '))
+  const status = new StatusBar(() => palette.dim(' · '))
+  const footer = new StatusBar(() => palette.dim(' · '))
   const waitStatus = new WaitStatusLine(palette)
   // Native padding reserves the gutter while the input surface fills the width.
   const editor = new PromptEditor(tui, editorTheme(palette), palette.autocompleteSelection, palette.dialogBand)
@@ -216,7 +217,8 @@ export async function startTerminalApp(
     }
   }
   /** User-invocable skills for the `/` menu and the unknown-command fallback. */
-  const skills = new SkillCatalogCache(skillRegistry, () => config.cwd, agent => active.agent === agent)
+  const skills = new SkillCatalogCache(skillRegistry,
+    agent => currentWorkingDirectory(host, agent.session, config.cwd), agent => active.agent === agent)
   const loadSkills = (): Promise<readonly SkillSuggestion[]> => skills.load(active.agent)
   const autocomplete = new TuiAutocompleteProvider({
     getAgent: () => active.agent,
@@ -276,10 +278,13 @@ export async function startTerminalApp(
     }
   }
 
-  const summaryCwd = (): string | undefined => active.agent.session.header.cwd ?? config.cwd
+  const summaryCwd = (): string | undefined => {
+    try { return currentWorkingDirectory(host, active.agent.session, config.cwd) }
+    catch { return undefined }
+  }
 
   /** Branch of the workspace the row names; cached so a repaint does not re-read Git. */
-  const workspaceBranch = createGitBranchReader()
+  const workspaceBranch = createGitBranchReader(undefined, undefined, () => { renderStatus() })
 
   /**
    * Name the workspace in the terminal tab.
@@ -288,7 +293,7 @@ export async function startTerminalApp(
    * and the status block repaints on every Session event.
    */
   const syncWindowTitle = (): void => {
-    const next = terminalWindowTitle(title, summaryCwd() ?? config.cwd)
+    const next = terminalWindowTitle(title, summaryCwd() ?? '')
     if (next === windowTitle) return
     windowTitle = next
     terminal.setTitle(next)
@@ -407,8 +412,9 @@ export async function startTerminalApp(
 
   /** One fold per application, so a repaint over an unchanged log is free. */
   const metricsFold = createSessionMetricsMemo()
+  const sessionCursor = new SessionEventCursor()
 
-  const contextInputs = () => readContextInputs(host, active.agent, modelSelection.current, contextBudgets)
+  const contextInputs = () => readContextInputs(host, active.agent, modelSelection.current, contextBudgets, sessionCursor)
 
   /**
    * The context figures both readers share: the status row prices them on every
@@ -454,13 +460,13 @@ export async function startTerminalApp(
     reasoningEffort = modelSelection.current?.reasoningEffort
     const options = active.agent.options
     const inputs = contextInputs()
-    const cwd = summaryCwd() ?? config.cwd
+    const cwd = summaryCwd()
     statusRows.reset()
     renderStatusRows(statusRows.rows, palette, {
       title,
       sessionId: active.id,
-      cwd,
-      gitBranch: workspaceBranch(cwd),
+      cwd: cwd ?? 'Workspace unavailable',
+      gitBranch: cwd === undefined ? undefined : workspaceBranch(cwd),
       running: active.agent.status === 'running',
       provider: modelSelection.current?.provider ?? options.provider ?? 'deepseek-official',
       model: modelSelection.current?.model ?? options.model ?? 'deepseek-flash',
@@ -554,7 +560,7 @@ export async function startTerminalApp(
         const args = approvalArguments(agent.session.snapshotEvents(), request.toolName, request.callId)
         const outcome = await showApproval(tui, palette, request, request.signal === undefined
           ? interactionAbort.signal
-          : AbortSignal.any([request.signal, interactionAbort.signal]))
+          : AbortSignal.any([request.signal, interactionAbort.signal]), { cwd: summaryCwd() })
         if (!disposed && active.agent === agent) {
           const receipt = approvalReceipt(request.toolName, args, outcome)
           pushNotice(receipt.tone, receipt.text)
@@ -586,7 +592,7 @@ export async function startTerminalApp(
     try {
       opened = await next()
       if (opened === active || disposed) return
-      drafts.save(active.agent.session, { text: editor.getExpandedText(), attachments: pendingAttachments }, config.cwd, selectedPreset)
+      drafts.save(active.agent.session, { text: editor.getExpandedText(), attachments: pendingAttachments }, summaryCwd(), selectedPreset)
       disposeInteractions()
       clearSubscriptions()
       await active.dispose()
@@ -626,7 +632,7 @@ export async function startTerminalApp(
   const openNewSession = async (cwd: string, preset?: string): Promise<HostSession> => {
     const presets = host.get('agentPresets') as AgentPresetService | undefined
     const targetPreset = presets === undefined ? preset : (await presets.resolve(preset)).id
-    drafts.save(active.agent.session, { text: editor.getExpandedText(), attachments: pendingAttachments }, config.cwd, selectedPreset)
+    drafts.save(active.agent.session, { text: editor.getExpandedText(), attachments: pendingAttachments }, summaryCwd(), selectedPreset)
     const registry = host.get('workspaceRegistry') as { readonly archivedSessionIds: readonly string[] } | undefined
     const id = drafts.findBlank(cwd, targetPreset, registry?.archivedSessionIds)
     if (id === active.id) return active
@@ -924,7 +930,7 @@ export async function startTerminalApp(
     warmTranscript()
     subscribeActive()
     tui.start()
-    terminalTheme.connect(tui, () => { renderer.refreshPalette(); streamPacer.reset(); paintStatus(); tui.requestRender(true) })
+    terminalTheme.connect(tui, () => { renderer.refreshPalette(); status.invalidate(); footer.invalidate(); streamPacer.reset(); paintStatus(); tui.requestRender(true) })
     tui.setFocus(editor)
     tui.requestRender()
     void refreshContextWindow()
@@ -943,8 +949,7 @@ export async function startTerminalApp(
       tui.requestRender()
     },
     setMaxEntries: maxEntries => {
-      if (disposed) return
-      renderer.setMaxEntries(maxEntries)
+      if (disposed || !renderer.setMaxEntries(maxEntries)) return
       streamPacer.reset()
       tui.requestRender()
     },

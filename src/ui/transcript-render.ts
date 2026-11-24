@@ -60,7 +60,21 @@ export function renderTranscriptBlock(block: TranscriptBlock, options: Transcrip
         // Keep the card shorter than a typical viewport: main-screen can only
         // patch visible rows, so a card that grows past the viewport after its
         // head scrolled away forces a full repaint of the transcript.
-        detail(palette.dim(clip(sanitizeTerminalText(block.summary), 240)))
+        const text = sanitizeTerminalText(block.summary)
+        if (block.summarySeq === undefined) detail(palette.dim(clip(text, 240)))
+        else {
+          const hint = ' · /context summary ' + String(block.summarySeq)
+          const preview = new Text(palette.dim(clip(text, 240)), 0, 0)
+          const withHint = new Text(palette.dim(clip(text, 240 - hint.length) + hint), 0, 0)
+          container.addChild(new MessageBody({
+            render: (width) => {
+              const lines = preview.render(width)
+              const hinted = withHint.render(width)
+              return hinted.length <= lines.length ? hinted : lines
+            },
+            invalidate: () => { preview.invalidate(); withHint.invalidate() },
+          }, palette, '  '))
+        }
       }
       if (block.state === 'interrupted') {
         detail(palette.dim('Stopped before it committed; the session reopened after it.'))

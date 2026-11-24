@@ -1,9 +1,32 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import { readContextMeter, type ContextPressureReader } from './agent.js'
 import { effectiveThreshold, sameRoute, type CompactionPolicy, type ModelRoute } from './compaction-policy.js'
 import { mountedCompactionPolicy } from './compaction-settings.js'
 import type { CompactionReading, SessionStats } from './metrics.js'
+
+/** Incrementally collects new session events without cloning and freezing the whole log on each repaint. */
+export class SessionEventCursor {
+  private session: Agent['session'] | undefined
+  private events: SessionEvent[] = []
+
+  read(session: Agent['session']): readonly SessionEvent[] {
+    const live = session as Agent['session'] & { seq?: number; eventAt?(seq: number): SessionEvent | undefined }
+    if (typeof live.seq === 'number' && typeof live.eventAt === 'function') {
+      if (this.session !== session || live.seq < this.events.length) {
+        this.session = session
+        this.events = []
+      }
+      for (let index = this.events.length; index < live.seq; index += 1) {
+        const event = live.eventAt(index)
+        if (event !== undefined) this.events.push(event)
+      }
+      return this.events
+    }
+    return session.snapshotEvents()
+  }
+}
 
 interface ModelBudget {
   readonly window: number | undefined
@@ -51,7 +74,13 @@ export class ContextModelBudgets {
   }
 }
 
-export function readContextInputs(host: Context, agent: Agent, selected: ModelRoute | undefined, budgets: ContextModelBudgets) {
+export function readContextInputs(
+  host: Context,
+  agent: Agent,
+  selected: ModelRoute | undefined,
+  budgets: ContextModelBudgets,
+  cursor?: SessionEventCursor,
+) {
   const session = agent.session
   const projections = host.get('sessionProjections') as ContextPressureReader | undefined
   const values = projections?.snapshot(session, ['contextPressure', 'contextBreakdown', 'sessionStats']).values
@@ -70,7 +99,8 @@ export function readContextInputs(host: Context, agent: Agent, selected: ModelRo
   const selectedPolicy = selected === undefined || sameRoute(selected, route) ? policy : mountedCompactionPolicy(host, agent, selected)
   const compactionBaselinePercent = selectedPolicy?.auto && selectedPolicy.hasModelThreshold ? selectedPolicy.ratio * 100 : undefined
   return { projections, meter, window, compaction, compactionBaselinePercent, values,
-    stats: values?.sessionStats as SessionStats | undefined, events: session.snapshotEvents() }
+    stats: values?.sessionStats as SessionStats | undefined,
+    events: cursor === undefined ? session.snapshotEvents() : cursor.read(session) }
 }
 
 function readActiveThreshold(

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { visibleWidth } from '@earendil-works/pi-tui'
-import { bindAbort, showApproval, showChoice, showQuestionBatch, showSearchChoice, showTextInput } from '../src/ui/dialogs.js'
+import { bindAbort, dialogFrame, showApproval, showChoice, showComponentPager, showQuestionBatch, showSearchChoice, showTextInput } from '../src/ui/dialogs.js'
 import { createPalette } from '../src/ui/theme.js'
 
 describe('dialog cancellation', () => {
@@ -92,6 +92,55 @@ describe('dialog frame', () => {
     expect(filtered).not.toContain('Alpha')
     component!.handleInput('\r')
     await expect(promise).resolves.toBe('provider/beta')
+  })
+
+  it('forwards cursor navigation and bracketed paste to the search box in showSearchChoice', async () => {
+    let component: { render(width: number): string[]; handleInput(data: string): void } | undefined
+    const promise = showSearchChoice({
+      showOverlay(value: { render(width: number): string[]; handleInput(data: string): void }) {
+        component = value
+        return { hide() {} }
+      },
+    } as never, createPalette('plain'), 'Select model', [
+      { value: 'provider/alpha', label: 'Alpha' },
+      { value: 'provider/beta', label: 'Beta' },
+      { value: 'provider/ab', label: 'AB' },
+    ], 'Type to filter', new AbortController().signal)
+    component!.handleInput('b')
+    component!.handleInput('\x1b[D')
+    component!.handleInput('a')
+    expect(component!.render(84).join('\n')).toContain('AB')
+    expect(component!.render(84).join('\n')).not.toContain('Beta')
+    component!.handleInput('\r')
+    await expect(promise).resolves.toBe('provider/ab')
+  })
+
+  it('never overflows narrow terminal widths in dialogFrame', () => {
+    const palette = createPalette('plain')
+    for (const width of [0, 3, 5, 12, 22]) {
+      const lines = dialogFrame(['Title that is quite long'], width, palette)
+      expect(lines.every(line => visibleWidth(line) <= width)).toBe(true)
+    }
+  })
+
+  it('routes pager input via component handleInput without registering global listeners', async () => {
+    const addInputListener = vi.fn()
+    let overlay: { handleInput?(data: string): void; render(width: number): string[] } | undefined
+    const promise = showComponentPager({
+      terminal: { rows: 20 },
+      requestRender() {},
+      addInputListener,
+      showOverlay(value: NonNullable<typeof overlay>) { overlay = value; return { hide() {}, focus() {} } },
+    } as never, createPalette('plain'), 'Pager', { render: () => ['line 1'], invalidate() {} })
+    expect(addInputListener).not.toHaveBeenCalled()
+    overlay!.handleInput?.('\x1b[27u')
+    await promise
+  })
+
+  it('re-applies background band SGR codes after inner resets', () => {
+    const dark = createPalette('dark')
+    expect(dark.dialogBand('a\x1b[0mb')).toContain('\x1b[0m\x1b[48;5;236m')
+    expect(dark.diffAddBand('a\x1b[0mb')).toBe('\x1b[48;5;22ma\x1b[0m\x1b[48;5;22mb\x1b[49m')
   })
 })
 

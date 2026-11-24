@@ -23,7 +23,7 @@ import type {
 import { accessToken, logout, readGrant, type CredentialStoreLike } from './auth.js'
 import { discoverModels, seedCatalogue, TEXT_ONLY, type CatalogueModel, type InputModality } from './models.js'
 import { DEFAULT_CONTEXT_WINDOW, PROFILES, getProfile, type CodeBuddyProfile } from './profiles.js'
-import { buildChatPayload, imageTargetOf, type WireImageReader } from './wire.js'
+import { buildChatPayload, imageTargetOf, type ImageRequestTarget, type WireImageReader } from './wire.js'
 import { streamChat } from './stream.js'
 
 /** Catalogue freshness window: a picker open after this refreshes once. */
@@ -108,7 +108,7 @@ type ImageRef = Extract<ContentBlock, { type: 'image' }>['attachment']
 export interface AttachmentImageService {
   readImageRequest(
     ref: ImageRef,
-    target: { width: number; height: number; maxBytes: number },
+    target: ImageRequestTarget,
     signal?: AbortSignal,
   ): Promise<{ data: Uint8Array; mediaType: string }>
 }
@@ -276,7 +276,7 @@ export class CodeBuddyAdapter extends LlmAdapter {
   }
 
   /** The request-image projection this route actually sends. */
-  override imageRequestTarget(_provider: string, _model: string, image: ImageRef): { width: number; height: number; maxBytes: number } {
+  override imageRequestTarget(_provider: string, _model: string, image: ImageRef): ImageRequestTarget {
     return imageTargetOf(image)
   }
 

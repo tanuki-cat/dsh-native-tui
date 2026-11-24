@@ -442,7 +442,7 @@ describe('codebuddy adapter', () => {
     const adapter = new CodeBuddyAdapter({ store: () => undefined })
     const ref = { attachmentId: 'sha256:aa', mediaType: 'image/png', bytes: 10, width: 100, height: 50 }
     expect(adapter.imageRequestTarget('codebuddy', 'chat-a', ref as never))
-      .toEqual({ width: 100, height: 50, maxBytes: 1024 * 1024 })
+      .toEqual({ width: 100, height: 50, maxImageBytes: 1024 * 1024, imageTargetBytes: 1024 * 1024 })
   })
 
   it('never projects a malformed size to an unreadable thumbnail', () => {

@@ -170,9 +170,9 @@ export interface WorkspaceChangesService {
   diff(sessionId: SessionId, seq: number, index: number, signal: AbortSignal): Promise<import('../../runtime/changes.js').WorkspaceDiffView | undefined>
 }
 
-/** Runtime state of one server under the rc.2 core MCP manager. */
+/** Runtime state of one server under the core MCP manager. */
 export interface McpManagedServerStatus {
-  readonly state: 'disabled' | 'connected' | 'connecting' | 'reconnecting' | 'closed' | 'waiting-credentials' | 'failed'
+  readonly state: 'disabled' | 'connected' | 'connecting' | 'reconnecting' | 'closed' | 'waiting-credentials' | 'waiting-authorization' | 'failed'
   readonly reason?: string
   readonly lastError?: string
   readonly toolCount?: number
@@ -182,11 +182,19 @@ export interface McpManagedServerStatus {
   readonly result?: { readonly cleanupError?: string }
 }
 
+export interface McpOAuthAttemptView {
+  readonly id: string
+  readonly phase: 'starting' | 'waiting-browser' | 'exchanging' | 'committing' | 'authorized' | 'cancelled' | 'failed'
+  readonly authorizationUrl?: string
+  readonly lastError?: string
+}
+
 /** One server as the core manager lists it. */
 export interface McpManagedServerView {
   readonly name: string
   readonly configured: boolean
   readonly status: McpManagedServerStatus
+  readonly authorization?: McpOAuthAttemptView
 }
 
 /** Stage-classified one-shot probe outcome. */
@@ -201,11 +209,14 @@ export interface McpProbeResultLike {
   readonly cleanupError?: string
 }
 
-/** The rc.2 core MCP manager surface the TUI calls. */
+/** The core MCP manager surface the TUI calls. */
 export interface McpManagerService {
   list(): readonly McpManagedServerView[]
   restart(name: string): Promise<void>
   probe(name: string, options?: { readonly signal?: AbortSignal }): Promise<McpProbeResultLike>
+  startAuthorization(name: string): Promise<McpOAuthAttemptView>
+  cancelAuthorization(name: string, id: string): Promise<void>
+  signOut(name: string): Promise<void>
 }
 
 /** Per-session projection reads. */

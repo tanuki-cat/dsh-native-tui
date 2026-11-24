@@ -15,9 +15,28 @@
  */
 
 import { LlmError } from '@deepseek-ai/dsh-llm'
+import { readBoundedResponseText } from '../runtime/http-body.js'
 import { redact } from './errors.js'
 import type { CodeBuddyProfile } from './profiles.js'
 import { credentialExpiresAt } from './profiles.js'
+
+const MAX_AUTH_RESPONSE_BYTES = 1024 * 1024
+
+/** Whether a URL uses HTTPS on a trusted OAuth host for the deployment. */
+export function isTrustedAuthUrl(profile: CodeBuddyProfile, value: string): boolean {
+  try {
+    const url = new URL(value)
+    if (url.protocol !== 'https:') return false
+    const host = url.hostname.toLowerCase()
+    return profile.authHosts.some(allowed => {
+      const candidate = allowed.toLowerCase()
+      return host === candidate || host.endsWith('.' + candidate)
+    })
+  }
+  catch {
+    return false
+  }
+}
 
 /** Reference polling cadence and ceiling. */
 export const POLL_INTERVAL_MS = 5_000
@@ -135,7 +154,7 @@ async function readGatewayResponse<T>(
   profile: CodeBuddyProfile,
   response: Response,
 ): Promise<GatewayResponse<T>> {
-  const text = await response.text()
+  const text = await readBoundedResponseText(response, MAX_AUTH_RESPONSE_BYTES)
   if (!response.ok) throw new GatewayError(describeBody(profile, response.status, text), undefined)
   try {
     return JSON.parse(text) as GatewayResponse<T>
@@ -172,6 +191,7 @@ async function requestLoginUrl(
     method: 'POST',
     headers: profile.headers(undefined, { 'X-Domain': profile.domain, ...NO_AUTH_HEADERS }),
     body: '{}',
+    redirect: 'error',
     ...(signal === undefined ? {} : { signal }),
   })
   const body = await readGatewayResponse<StatePayload>(profile, response)
@@ -197,9 +217,13 @@ async function pollToken(
       'X-No-Enterprise-Id': 'true',
       'X-No-Department-Info': 'true',
     }),
+    redirect: 'error',
     ...(signal === undefined ? {} : { signal }),
   })
-  if (!response.ok) return undefined
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined)
+    return undefined
+  }
   const body = await readGatewayResponse<TokenPayload>(profile, response)
   if (body.code === PENDING_CODE) return undefined
   if (body.code !== 0 || body.data === undefined) {
@@ -287,6 +311,7 @@ export async function refreshGrant(
       'Content-Type': 'application/json',
     }),
     body: '{}',
+    redirect: 'error',
     ...(signal === undefined ? {} : { signal }),
   })
   const body = await readGatewayResponse<TokenPayload>(profile, response)

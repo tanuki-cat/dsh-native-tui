@@ -264,12 +264,20 @@ describe('interaction modes', () => {
     }
   })
 
-  it('never weakens a downstream denial, and lets one-shot shell approval stay with its owner', async () => {
+  it('never weakens a downstream denial, and lets only true sandbox escalations stay with their owner', async () => {
     const h = harness()
     const denial = { kind: 'deny', reason: 'another policy' }
     expect(await h.gate(h.exec('bash'), denial)).toBe(denial)
+    expect(await h.gate(h.exec('bash', { sandbox_permissions: 'danger-full-access' }))).toEqual({ kind: 'allow' })
+    expect((await h.gate(h.exec('bash', { sandbox_permissions: 'workspace-write' }))).kind).toBe('ask')
+    expect((await h.gate(h.exec('bash', { sandbox_permissions: 'read-only' }))).kind).toBe('ask')
+    expect((await h.gate(h.exec('bash', { sandbox_permissions: null }))).kind).toBe('ask')
+    expect((await h.gate(h.exec('mcp__fake__write', { sandbox_permissions: 'danger-full-access' }))).kind).toBe('ask')
+
+    h.modes.set(h.agent, 'manual')
     expect(await h.gate(h.exec('bash', { sandbox_permissions: 'workspace-write' }))).toEqual({ kind: 'allow' })
-    expect((await h.gate(h.exec('mcp__fake__write', { sandbox_permissions: 'workspace-write' }))).kind).toBe('ask')
+    expect(await h.gate(h.exec('pwsh', { sandbox_permissions: 'danger-full-access' }))).toEqual({ kind: 'allow' })
+    expect((await h.gate(h.exec('bash', { sandbox_permissions: 'read-only' }))).kind).toBe('ask')
   })
 
   it('does not replace the Host Auto reviewer with an allow decision', async () => {

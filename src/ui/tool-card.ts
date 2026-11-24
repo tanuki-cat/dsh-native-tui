@@ -141,7 +141,7 @@ export class ToolCard implements Component {
         const start = typeof args.offset === 'number' ? args.offset : 1
         tail = (tail ?? '') + palette.dim(':' + start + (typeof args?.limit === 'number' ? '-' + (start + args.limit - 1) : ''))
       } else if (!search && path === undefined && args !== undefined) {
-        const summary = Object.entries(args).slice(0, 5).map(([key, value]) => key + '=' + inline(typeof value === 'string' ? value : JSON.stringify(value) ?? String(value))).join(' ')
+        const summary = Object.entries(args).slice(0, 5).map(([key, value]) => inline(key) + '=' + inline(typeof value === 'string' ? value : JSON.stringify(value) ?? String(value))).join(' ')
         head += ' ' + palette.dim(summary.length > 160 ? summary.slice(0, 159) + '…' : summary)
       }
       container.addChild(toolHeading(head, palette, block, tail))

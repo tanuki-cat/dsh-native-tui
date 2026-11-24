@@ -6,7 +6,7 @@
 
 import { dirname, resolve } from 'node:path'
 import { formatChangesSummary, formatWorkspaceDiff } from '../../runtime/changes.js'
-import { collectDeliverables, formatDeliverables, type PresentedFileView } from '../../runtime/deliverables.js'
+import { collectDeliverables, formatDeliverables, presentedEvents, resolveContainedDeliverable } from '../../runtime/deliverables.js'
 import { listDirectory, readTextPreview } from '../../runtime/files.js'
 import { revealWithSystemApp, systemRevealCommand } from '../../runtime/open.js'
 import { showChoice } from '../dialogs.js'
@@ -109,9 +109,8 @@ export async function changesCommand(ctx: CommandContext, args: string): Promise
 
 /** The `/deliverables` command. */
 export async function deliverablesCommand(ctx: CommandContext, args: string): Promise<void> {
-  const events = ctx.active.agent.session.snapshotEvents()
-    .filter(event => (event.type as string) === 'deliverables/presented')
-    .map(event => event.data as { readonly turn: number; readonly files: readonly PresentedFileView[] })
+  const session = ctx.active.agent.session
+  const events = presentedEvents(session.snapshotEvents(), session.header.cwd ?? ctx.config.cwd)
   if (events.length === 0) {
     ctx.notice('info', 'No presented deliverables in this session yet.')
     return
@@ -153,7 +152,16 @@ export async function deliverablesCommand(ctx: CommandContext, args: string): Pr
       ctx.notice('warning', 'No presented deliverable at index ' + String(index) + '.')
       return
     }
-    if (systemRevealCommand(process.platform, resolve(sessionCwd(ctx), target.path)) === undefined) {
+    const root = target.cwd ?? ctx.config.cwd
+    let path: string
+    try {
+      path = (await resolveContainedDeliverable(root, target.path)).real
+    }
+    catch (error) {
+      ctx.notice('warning', 'Cannot reveal ' + target.path + ': ' + errorMessage(error))
+      return
+    }
+    if (systemRevealCommand(process.platform, path) === undefined) {
       ctx.notice('warning', 'Revealing files is unsupported on this platform.')
       return
     }
@@ -163,7 +171,7 @@ export async function deliverablesCommand(ctx: CommandContext, args: string): Pr
     ], 'Enter selects · Esc cancels', ctx.signal)
     if (confirmed !== 'yes')
       return
-    if (revealWithSystemApp(resolve(sessionCwd(ctx), target.path)))
+    if (revealWithSystemApp(path))
       ctx.notice('info', 'Revealed ' + target.path + ' in the system file manager.')
     else
       ctx.notice('error', 'Could not launch the system file manager for ' + target.path + '.')
@@ -181,7 +189,8 @@ export async function deliverablesCommand(ctx: CommandContext, args: string): Pr
       return
     }
     try {
-      const preview = await readTextPreview(resolve(sessionCwd(ctx), target.path))
+      const { real } = await resolveContainedDeliverable(target.cwd ?? ctx.config.cwd, target.path)
+      const preview = await readTextPreview(real)
       ctx.notice('info', 'File: ' + preview.path + ' (' + String(preview.bytes) + ' bytes'
         + (preview.truncated ? ', truncated' : '') + ')' + NL + preview.text)
     }
