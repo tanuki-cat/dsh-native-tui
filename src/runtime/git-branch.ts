@@ -21,6 +21,9 @@ const BRANCH_REF_PREFIX = 'refs/heads/'
 /** Characters kept from a commit id when `HEAD` is detached. */
 const DETACHED_ID_CHARS = 7
 
+/** Full object id: 40 hex digits for SHA-1, 64 for SHA-256 repositories. */
+const OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu
+
 /**
  * How long one cached reading stands before the next lookup re-reads `HEAD`.
  *
@@ -81,7 +84,9 @@ function parseHead(content: string): string | undefined {
     if (!ref.startsWith(BRANCH_REF_PREFIX)) return undefined
     return ref.slice(BRANCH_REF_PREFIX.length) || undefined
   }
-  return /^[0-9a-f]{40}$/iu.test(head) ? head.slice(0, DETACHED_ID_CHARS) : undefined
+  // OBJECT_ID accepts both hash formats: SHA-1 repositories store 40 hex
+  // digits and SHA-256 repositories store 64.
+  return OBJECT_ID.test(head) ? head.slice(0, DETACHED_ID_CHARS) : undefined
 }
 
 /**

@@ -23,21 +23,37 @@ export interface LogoutDeps {
 }
 
 /**
+ * Cancel a running sign-in and wait for it to release the credential key.
+ *
+ * Callers must run this before they read the stored record: a flow that is
+ * still polling commits its grant when it finishes, which would resurrect a
+ * credential the caller is about to delete.
+ * @param deps - the authorization seam and wait bounds.
+ * @returns true once no flow is in flight, false when it never settled.
+ */
+export async function settleCodexAuthorization(deps: LogoutDeps): Promise<boolean> {
+  deps.authorization.cancel(CODEX_KEY)
+  const wait = deps.wait ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)))
+  const attempts = Math.max(1, deps.attempts ?? 40)
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (deps.signal.aborted) return false
+    if (deps.authorization.describe(CODEX_KEY)?.inFlight !== true) return true
+    if (attempt === attempts - 1) return false
+    await wait(50)
+  }
+  return true
+}
+
+/**
  * Sign out of the Codex route.
  * @param deps - the authorization and credential seams.
  * @returns how the sign-out ended.
  */
 export async function logoutCodex(deps: LogoutDeps): Promise<LogoutOutcome> {
+  // Never decide from the stored record before stopping a live attempt: a login
+  // in flight would commit after the delete below and leave the user signed in.
+  if (!await settleCodexAuthorization(deps)) return 'busy'
   if (await deps.credentials.readRecord(CODEX_KEY) === undefined) return 'not-signed-in'
-  deps.authorization.cancel(CODEX_KEY)
-  const wait = deps.wait ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)))
-  const attempts = Math.max(1, deps.attempts ?? 40)
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    if (deps.signal.aborted) return 'busy'
-    if (deps.authorization.describe(CODEX_KEY)?.inFlight !== true) break
-    if (attempt === attempts - 1) return 'busy'
-    await wait(50)
-  }
   await deps.credentials.deleteRecord(CODEX_KEY)
   return await deps.credentials.readRecord(CODEX_KEY) === undefined ? 'signed-out' : 'still-present'
 }

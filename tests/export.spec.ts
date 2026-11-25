@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -45,5 +45,21 @@ describe('exportSessionLog', () => {
     cleanup.push(dir)
     await exportSessionLog(agent(), 'session.jsonl', dir)
     await expect(exportSessionLog(agent(), 'session.jsonl', dir)).rejects.toMatchObject({ code: 'EEXIST' })
+  })
+
+  it('writes the export with owner-only permissions', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'native-tui-export-'))
+    cleanup.push(dir)
+    const result = await exportSessionLog(agent(), 'session.jsonl', dir)
+    expect((await stat(result.path)).mode & 0o777).toBe(0o600)
+  })
+
+  it('does not write anything when the dispatch is already cancelled', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'native-tui-export-'))
+    cleanup.push(dir)
+    const controller = new AbortController()
+    controller.abort()
+    await expect(exportSessionLog(agent(), 'session.jsonl', dir, controller.signal)).rejects.toThrow()
+    await expect(readFile(join(dir, 'session.jsonl'))).rejects.toMatchObject({ code: 'ENOENT' })
   })
 })

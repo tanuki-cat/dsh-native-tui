@@ -73,9 +73,14 @@ export function isValidEnvName(name: string): boolean {
 
 /**
  * Normalize an HTTP(S) endpoint.
+ *
+ * Only the endpoint itself is an endpoint: a query string, a fragment or an
+ * embedded userinfo section would be repeated in front of every request path
+ * (or sent as credentials the operator did not mean to configure), so they are
+ * refused rather than silently carried into the route.
  * @param value - URL entered by the operator.
  * @returns URL without a trailing slash.
- * @throws when the URL is not HTTP(S).
+ * @throws when the URL is not a bare HTTP(S) endpoint.
  */
 export function normalizeBaseURL(value: string): string {
   let url: URL
@@ -85,6 +90,8 @@ export function normalizeBaseURL(value: string): string {
     throw new Error('baseURL must be a valid URL')
   }
   if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Error('baseURL must use http or https')
+  if (url.search !== '' || url.hash !== '') throw new Error('baseURL must not include a query or fragment')
+  if (url.username !== '' || url.password !== '') throw new Error('baseURL must not include credentials')
   return url.toString().replace(/\/$/u, '')
 }
 

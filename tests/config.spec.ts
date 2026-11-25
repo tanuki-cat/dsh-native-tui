@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { resolve } from 'node:path'
 import { parseResumeArg, resolveConfig } from '../src/config.js'
 
 describe('resolveConfig', () => {
@@ -75,5 +76,36 @@ describe('resolveConfig', () => {
 
   it.each([true, false])('keeps the explicit image thumbnail setting: %s', showImageThumbnails => {
     expect(resolveConfig({ showImageThumbnails }).showImageThumbnails).toBe(showImageThumbnails)
+  })
+
+  it('treats blank startup values as unset', () => {
+    const config = resolveConfig({ sessionId: '  \t', agentPreset: '\n', cwd: '   ' })
+    expect(config.sessionId).toBeUndefined()
+    expect(config.agentPreset).toBeUndefined()
+    expect(config.cwd).toBe(process.cwd())
+  })
+
+  it('trims surrounding whitespace from startup values', () => {
+    const config = resolveConfig({ sessionId: ' session-1 ', agentPreset: ' minimal ', cwd: ' /tmp/workspace ' })
+    expect(config.sessionId).toBe('session-1')
+    expect(config.agentPreset).toBe('minimal')
+    expect(config.cwd).toBe('/tmp/workspace')
+  })
+
+  it('resolves a relative working directory against the process directory', () => {
+    expect(resolveConfig({ cwd: 'packages/app' }).cwd).toBe(resolve('packages/app'))
+    expect(resolveConfig({ cwd: 'packages/app' }).cwd.startsWith('/')).toBe(true)
+  })
+
+  it('normalizes blank volatile references at startup', () => {
+    const ref = <T>(value: T) => ({ get: () => value })
+    const config = resolveConfig({
+      sessionId: ref('   '),
+      cwd: ref('  '),
+      agentPreset: ref('\t'),
+    })
+    expect(config.sessionId).toBeUndefined()
+    expect(config.agentPreset).toBeUndefined()
+    expect(config.cwd).toBe(process.cwd())
   })
 })

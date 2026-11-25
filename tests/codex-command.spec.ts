@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { runCodexCommand } from '../src/runtime/codex-command.js'
 import { routeProfile } from '../src/codex/route.js'
-import type { AuthorizationLike, CredentialStoreLike } from '../src/codex/types.js'
+import type { AuthorizationLike, CredentialRecordLike, CredentialStoreLike } from '../src/codex/types.js'
 import { catalogBody, catalogFetcher, catalogModel, commandDeps, grant, llmOf, settingsOf, usageFetcher, versionOf } from './codex-fixtures.js'
 
 /** A credential store double over one mutable record. */
@@ -504,5 +504,83 @@ describe('Codex catalogue refresh', () => {
     await runCodexCommand('models help', h.deps)
     expect(h.text()).toContain('Usage: /codex')
     expect(catalogue.calls).toHaveLength(0)
+  })
+})
+
+describe('Codex sign-out ordering', () => {
+  it('cancels a running sign-in before checking the stored credential', async () => {
+    // No record is stored yet, but a sign-in is polling and will commit one.
+    // The command must cancel it before reading, or the early "not signed in"
+    // return leaves the credential that flow writes behind.
+    const events: string[] = []
+    let inFlight = true
+    const store: CredentialStoreLike = {
+      readRecord: vi.fn(async () => { events.push('read'); return undefined }),
+      deleteRecord: vi.fn(async () => { events.push('delete') }),
+    }
+    const authorization: AuthorizationLike = {
+      describe: () => ({ inFlight, methods: [{ id: 'oauth', label: 'OAuth' }] }),
+      begin: async () => ({ status: 'authorized' }),
+      cancel: () => { events.push('cancel'); inFlight = false },
+    }
+    const h = commandDeps({ credentials: store, authorization })
+    await runCodexCommand('logout', h.deps)
+    expect(events[0]).toBe('cancel')
+    expect(events).toContain('read')
+    expect(store.deleteRecord).not.toHaveBeenCalled()
+    expect(h.text()).toContain('not signed in')
+  })
+
+  it('waits for the cancelled sign-in to settle before deleting the record', async () => {
+    let stored: CredentialRecordLike | undefined = grant()
+    let inFlight = true
+    const events: string[] = []
+    const store: CredentialStoreLike = {
+      readRecord: vi.fn(async () => stored),
+      deleteRecord: vi.fn(async () => { stored = undefined; events.push('delete') }),
+    }
+    const authorization: AuthorizationLike = {
+      describe: () => ({ inFlight, methods: [{ id: 'oauth', label: 'OAuth' }] }),
+      begin: async () => ({ status: 'authorized' }),
+      cancel: () => {
+        // The flow releases the key on a later tick, after committing its grant.
+        setTimeout(() => { inFlight = false }, 0)
+      },
+    }
+    const h = commandDeps({
+      credentials: store,
+      authorization,
+      choose: async () => 'yes',
+      wait: async () => { await new Promise(resolve => setTimeout(resolve, 0)) },
+    })
+    await runCodexCommand('logout', h.deps)
+    expect(events).toEqual(['delete'])
+    expect(stored).toBeUndefined()
+    expect(h.text()).toContain('signed out')
+  })
+})
+
+describe('Codex catalogue write failure', () => {
+  it('does not claim a saved list when the namespace disappears mid-write', async () => {
+    const settings = settingsOf({ providers: { 'openai-codex': { models: [] } } })
+    const mutate = settings.service.mutate
+    let gone = false
+    settings.service.describe = () => gone ? [] : [{ ns: 'llm-pi-ai', value: settings.value(), revision: 1 }]
+    settings.service.mutate = async (ns, ops, revision) => {
+      await mutate(ns, ops, revision)
+      gone = true
+    }
+    const h = commandDeps({
+      credentials: storeOf(grant()).store,
+      settings: settings.service,
+      llm: llmOf({ models: ['gpt-6.1-sol'] }),
+      fetcher: catalogFetcher(catalogBody([catalogModel({ slug: 'gpt-6.1-terra' })])).fetcher,
+      clientVersion: async () => versionOf(),
+      choose: async () => 'yes',
+      wait: async () => undefined,
+    })
+    await runCodexCommand('models refresh', h.deps)
+    expect(h.text()).toContain('disappeared while saving')
+    expect(h.text()).not.toContain('models registered')
   })
 })

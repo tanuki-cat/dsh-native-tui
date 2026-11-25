@@ -355,6 +355,20 @@ describe('session metrics', () => {
     expect(metrics.contextPercent).toBe(90)
   })
 
+  it('folds a 150k-node shadow set without spreading it into Math.max', () => {
+    const shadowedSeqs = Array.from({ length: 150_000 }, (_, index) => index)
+    const usage = { ...usageEvent(100, 20, 800, 0), seq: 200_000 } as SessionEvent
+    const events = [
+      usage,
+      { type: 'compaction/summary', seq: 200_001, time: 2, data: { shadowedTokenCount: 100, shadowedSeqs } },
+    ] as unknown as SessionEvent[]
+    let contextEstimateTokens: number | undefined
+    expect(() => {
+      contextEstimateTokens = collectSessionMetrics(events, undefined, 1_000).contextEstimateTokens
+    }).not.toThrow()
+    expect(contextEstimateTokens).toBe(800)
+  })
+
   it('omits context figures without a window', () => {
     expect(collectSessionMetrics([usageEvent(1, 1, 1, 0)])).not.toHaveProperty('contextPercent')
   })

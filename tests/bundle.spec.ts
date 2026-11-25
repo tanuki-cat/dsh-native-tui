@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, symlink, truncate, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, truncate, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -62,6 +62,44 @@ const attachments: BundleAttachmentsService = {
 }
 
 describe('exportSessionBundle', () => {
+  it('gives colliding attachment basenames distinct archive entries', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'native-tui-bundle-'))
+    cleanup.push(dir)
+    const agent = {
+      session: {
+        header: { id: 'collisions', cwd: dir, createdAt: 1 },
+        snapshotEvents: () => [{
+          type: 'user/message', seq: 0, time: 1,
+          data: {
+            content: [
+              { type: 'image', attachment: { attachmentId: 'img 1', mediaType: 'image/png', name: 'pixel.png', bytes: 3 } },
+              { type: 'image', attachment: { attachmentId: 'img/1', mediaType: 'image/png', name: 'pixel.png', bytes: 3 } },
+            ],
+          },
+        }],
+      },
+    } as unknown as Agent
+    const service: BundleAttachmentsService = {
+      readImage: async ref => ({ data: Uint8Array.of(ref.attachmentId === 'img 1' ? 1 : 2) }),
+      readFileStream: async function* () {},
+    }
+    const result = await exportSessionBundle(agent, 'bundle.zip', dir, service)
+    const entries = result.attachments.map(record => record.entry)
+    // Both ids reduce to "img_1" and both names are "pixel.png"; the archive map
+    // would otherwise keep only the second payload.
+    expect(new Set(entries).size).toBe(2)
+    const archive = unzipSync(await readFile(result.path))
+    expect(archive[entries[0]!]).toEqual(Uint8Array.of(1))
+    expect(archive[entries[1]!]).toEqual(Uint8Array.of(2))
+  })
+
+  it('writes the archive with owner-only permissions', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'native-tui-bundle-'))
+    cleanup.push(dir)
+    const result = await exportSessionBundle(fakeAgent(dir), 'bundle.zip', dir, attachments)
+    expect((await stat(result.path)).mode & 0o777).toBe(0o600)
+  })
+
   it.each(['assistant/message', 'tool/result'] as const)('includes and deduplicates attachments in %s message.content', async type => {
     const dir = await mkdtemp(join(tmpdir(), 'native-tui-bundle-'))
     cleanup.push(dir)

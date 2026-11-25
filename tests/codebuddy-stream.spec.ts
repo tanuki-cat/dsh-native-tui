@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ContentBlock, GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { buildChatPayload } from '../src/codebuddy/wire.js'
-import { decodeSse, MAX_SSE_BUFFER_CHARS, type SseFrame } from '../src/codebuddy/sse.js'
+import { decodeSse, MAX_SSE_BUFFER_BYTES, type SseFrame } from '../src/codebuddy/sse.js'
 import { streamChat, toStreamChunks } from '../src/codebuddy/stream.js'
 import { cnProfile, enProfile } from '../src/codebuddy/profiles.js'
 
@@ -339,14 +339,63 @@ describe('codebuddy wire serialization', () => {
     expect(fitsMessages[2]?.content.map(part => part.type)).toEqual(['image_url'])
   })
 
-  it('counts repeated image occurrences independently and can offload to an optional count bound', async () => {
+  it('offloads a count-bound request before reading any image', async () => {
     const reader = { readImageRequest: vi.fn(async () => ({ data: new Uint8Array([1]), mediaType: 'image/png' })) }
     const user = (id: string, offloaded?: true) => ({ role: 'user' as const, content: [{ type: 'image' as const, attachment: imageRef, ...offloaded === undefined ? {} : { offloaded } }], source: { kind: 'user' }, id })
     const options = optionsOf({ messages: [user('u1'), user('u2')] })
     await expect(buildChatPayload(options, cnProfile, undefined, { reader, maxRequestImages: 1 })).rejects.toMatchObject({ code: 'IMAGE_OFFLOAD_REQUIRED', failure: { offloadImages: 1 } })
-    expect(reader.readImageRequest).toHaveBeenCalledTimes(1)
+    // The count bound is decidable without a decode, so the rejected request
+    // never pays for bytes it is going to discard.
+    expect(reader.readImageRequest).toHaveBeenCalledTimes(0)
     await expect(buildChatPayload(options, cnProfile, undefined, { reader })).resolves.toHaveProperty('messages')
+    // One attachment cited twice is still read once.
+    expect(reader.readImageRequest).toHaveBeenCalledTimes(1)
     await expect(buildChatPayload(optionsOf({ messages: [user('u1', true), user('u2')] }), cnProfile, undefined, { reader, maxRequestImages: 1 })).resolves.toHaveProperty('messages')
+  })
+
+  it('stops reading images once the measured bytes cannot fit the budget', async () => {
+    // Twelve distinct 4 MiB images: only the first four can ever fit the 20 MiB
+    // base64 budget, so a bounded reader must not decode the remaining eight.
+    const data = new Uint8Array(4 * 1024 * 1024)
+    let reads = 0
+    const refs = Array.from({ length: 12 }, (_, index) => ({ ...imageRef, attachmentId: 'sha256:' + String(index) }))
+    await expect(buildChatPayload(optionsOf({
+      messages: refs.map((attachment, index) => ({
+        role: 'user' as const,
+        content: [{ type: 'image' as const, attachment }],
+        source: { kind: 'user' as const },
+        id: 'u' + String(index),
+      })),
+    }), cnProfile, undefined, {
+      reader: {
+        async readImageRequest() {
+          reads += 1
+          return { data, mediaType: 'image/png' }
+        },
+      },
+    })).rejects.toMatchObject({ code: 'IMAGE_OFFLOAD_REQUIRED' })
+    // Four reads cross the budget; at most the other three in-flight reads of
+    // the pool can complete afterwards.
+    expect(reads).toBeGreaterThan(0)
+    expect(reads).toBeLessThanOrEqual(7)
+    expect(reads).toBeLessThan(refs.length)
+  })
+
+  it('scales the offload quantum with the count excess', async () => {
+    const reader = { async readImageRequest() { return { data: new Uint8Array([1]), mediaType: 'image/png' } } }
+    const user = (index: number) => ({
+      role: 'user' as const,
+      content: [{ type: 'image' as const, attachment: imageRef }],
+      source: { kind: 'user' as const },
+      id: 'u' + String(index),
+    })
+    // Barely over: only the occurrence the bound requires is removed.
+    await expect(buildChatPayload(optionsOf({ messages: Array.from({ length: 8 }, (_, index) => user(index)) }), cnProfile, undefined, { reader, maxRequestImages: 5 }))
+      .rejects.toMatchObject({ code: 'IMAGE_OFFLOAD_REQUIRED', failure: { offloadImages: 3 } })
+    // Far over: the step covers a quarter of the excess, so a long history
+    // converges in a bounded number of rounds instead of one image at a time.
+    await expect(buildChatPayload(optionsOf({ messages: Array.from({ length: 40 }, (_, index) => user(index)) }), cnProfile, undefined, { reader, maxRequestImages: 30 }))
+      .rejects.toMatchObject({ code: 'IMAGE_OFFLOAD_REQUIRED', failure: { offloadImages: 12 } })
   })
 
   it('prices only the messages it actually sends', async () => {
@@ -423,6 +472,37 @@ describe('codebuddy sse decoding', () => {
       { data: '[DONE]' },
     ])
   })
+
+  it('bounds only the incomplete remainder, by UTF-8 byte length', async () => {
+    const encoder = new TextEncoder()
+    // A complete frame larger than the limit is not an unframed buffer: it is
+    // split out and emitted instead of aborting the stream.
+    const big = 'data: ' + 'x'.repeat(MAX_SSE_BUFFER_BYTES + 1024) + '\n\n'
+    const frames: SseFrame[] = []
+    for await (const frame of decodeSse(streamOf([big]))) frames.push(frame)
+    expect(frames).toHaveLength(1)
+    expect(frames[0]?.data.length).toBe(MAX_SSE_BUFFER_BYTES + 1024)
+
+    // The limit is a byte budget: 1.5M three-byte characters are 4.5 MiB on the
+    // wire even though their UTF-16 length is far below the limit.
+    const unterminated = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('数'.repeat(1_500_000)))
+        controller.close()
+      },
+    })
+    await expect((async () => {
+      for await (const _frame of decodeSse(unterminated)) { /* drain */ }
+    })()).rejects.toThrow('SSE frame exceeded buffer limit')
+  })
+
+  it('reports every body chunk, heartbeats included', async () => {
+    let chunks = 0
+    for await (const _frame of decodeSse(streamOf([': ping\n\n', ': ping\n\n', 'data: {"a":1}\n\n']), {
+      onChunk: () => { chunks += 1 },
+    })) { /* drain */ }
+    expect(chunks).toBe(3)
+  })
 })
 
 describe('codebuddy stream translation', () => {
@@ -485,6 +565,42 @@ describe('codebuddy stream translation', () => {
     await expect(chunksOf([JSON.stringify({ code: 11102, msg: 'gone' })]))
       .rejects.toMatchObject({ code: 'NO_SUCH_MODEL' })
   })
+
+  it('treats a null error as absent and a non-zero code as an error', async () => {
+    // `error: null` is what a success frame may carry; presence alone is not a
+    // failure.
+    const chunks = await chunksOf([
+      JSON.stringify({ error: null, choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] }),
+    ])
+    expect(chunks.at(-1)).toEqual({ type: 'finish', reason: { kind: 'stop' } })
+
+    // A business code is an error even when the frame also carries choices.
+    await expect(chunksOf([JSON.stringify({ code: 12345, choices: [] })]))
+      .rejects.toMatchObject({ code: 'UPSTREAM_ERROR' })
+    await expect(chunksOf([JSON.stringify({ code: 11102, choices: [{ delta: {} }] })]))
+      .rejects.toMatchObject({ code: 'NO_SUCH_MODEL' })
+  })
+
+  it('reports a filtered completion as a failure, not a normal stop', async () => {
+    const chunks = await chunksOf([
+      JSON.stringify({ choices: [{ delta: { content: 'partial' }, finish_reason: 'content_filter' }] }),
+    ])
+    expect(chunks.at(-1)).toEqual({
+      type: 'finish',
+      reason: { kind: 'error', failure: { code: 'CONTENT_FILTER', message: expect.stringContaining('content_filter') } },
+    })
+  })
+
+  it('keeps a trailing usage frame that follows the finish frame', async () => {
+    const chunks = await chunksOf([
+      JSON.stringify({ choices: [{ delta: { content: 'hi' }, finish_reason: 'stop' }] }),
+      JSON.stringify({ choices: [], usage: { prompt_tokens: 10, completion_tokens: 2 } }),
+      '[DONE]',
+    ])
+    // The finish frame is emitted last, after the usage frame it preceded.
+    expect(chunks).toContainEqual({ type: 'usage', usage: { inputTokens: 10, outputTokens: 2 } })
+    expect(chunks.at(-1)).toEqual({ type: 'finish', reason: { kind: 'stop' } })
+  })
 })
 
 describe('codebuddy chat transport', () => {
@@ -531,6 +647,98 @@ describe('codebuddy chat transport', () => {
     })) chunks.push(chunk)
     expect(tokens).toEqual(['Bearer stale', 'Bearer fresh'])
     expect(chunks.at(-1)).toEqual({ type: 'finish', reason: { kind: 'stop' } })
+  })
+
+  it('passes the rejected token to the refresh and does not replay a 403', async () => {
+    const seen: string[] = []
+    let calls = 0
+    vi.stubGlobal('fetch', async (_url: string, init: { headers: Record<string, string> }) => {
+      calls += 1
+      if (calls === 1) return new Response('{}', { status: 401 })
+      seen.push(init.headers.Authorization ?? '')
+      return sse([JSON.stringify({ choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] })])
+    })
+    const rejected: string[] = []
+    for await (const _chunk of streamChat({
+      profile: cnProfile,
+      model: 'chat-a',
+      payload: { model: 'chat-a', messages: [], stream: true },
+      access: 'stale',
+      reauthorize: async (token) => { rejected.push(token); return 'fresh' },
+    })) { /* drain */ }
+    expect(rejected).toEqual(['stale'])
+    expect(seen).toEqual(['Bearer fresh'])
+
+    // A 403 is a permission answer about this account: rotating the token would
+    // waste a rotation and can invalidate the one a concurrent request uses.
+    vi.stubGlobal('fetch', async () => new Response('{}', { status: 403 }))
+    const reauthorize = vi.fn(async () => 'unused')
+    await expect((async () => {
+      for await (const _chunk of streamChat({
+        profile: cnProfile,
+        model: 'chat-a',
+        payload: { model: 'chat-a', messages: [], stream: true },
+        access: 'token',
+        reauthorize,
+      })) { /* drain */ }
+    })()).rejects.toMatchObject({ code: 'AUTH' })
+    expect(reauthorize).not.toHaveBeenCalled()
+  })
+
+  it('keeps the idle budget alive on comment heartbeats', async () => {
+    const encoder = new TextEncoder()
+    vi.stubGlobal('fetch', async () => new Response(new ReadableStream({
+      async start(controller) {
+        // Three heartbeat comments over 300ms exceed the 250ms budget in total
+        // but never in one gap; only a chunk-aware timer survives them.
+        for (let beat = 0; beat < 3; beat += 1) {
+          await new Promise(resolve => setTimeout(resolve, 100))
+          controller.enqueue(encoder.encode(': ping\n\n'))
+        }
+        await new Promise(resolve => setTimeout(resolve, 100))
+        controller.enqueue(encoder.encode('data: ' + JSON.stringify({ choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] }) + '\n\n'))
+        controller.close()
+      },
+    }), { status: 200 }))
+    const chunks: StreamChunk[] = []
+    for await (const chunk of streamChat({
+      profile: cnProfile,
+      model: 'chat-a',
+      payload: { model: 'chat-a', messages: [], stream: true },
+      access: 'token',
+      idleTimeoutMs: 250,
+    })) chunks.push(chunk)
+    expect(chunks.at(-1)).toEqual({ type: 'finish', reason: { kind: 'stop' } })
+  })
+
+  it('finishes promptly when only comment heartbeats arrive after finish_reason', async () => {
+    const encoder = new TextEncoder()
+    let heartbeatTimer: ReturnType<typeof setInterval> | undefined
+    vi.stubGlobal('fetch', async () => new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: ' + JSON.stringify({ choices: [{ delta: { content: 'done' }, finish_reason: 'stop' }] }) + '\n\n'))
+        heartbeatTimer = setInterval(() => {
+          try { controller.enqueue(encoder.encode(': ping\n\n')) } catch { /* closed */ }
+        }, 10)
+      },
+      cancel() {
+        if (heartbeatTimer !== undefined) clearInterval(heartbeatTimer)
+      },
+    }), { status: 200 }))
+    try {
+      const chunks: StreamChunk[] = []
+      for await (const chunk of streamChat({
+        profile: cnProfile,
+        model: 'chat-a',
+        payload: { model: 'chat-a', messages: [], stream: true },
+        access: 'token',
+        idleTimeoutMs: 40,
+      })) chunks.push(chunk)
+      expect(chunks.at(-1)).toEqual({ type: 'finish', reason: { kind: 'stop' } })
+    }
+    finally {
+      if (heartbeatTimer !== undefined) clearInterval(heartbeatTimer)
+    }
   })
 
   it('aborts a stream that stops producing frames and reports TIMEOUT', async () => {
@@ -612,7 +820,7 @@ describe('codebuddy chat transport', () => {
 
     const huge = new ReadableStream<Uint8Array>({
       start(controller) {
-        controller.enqueue(encoder.encode('x'.repeat(MAX_SSE_BUFFER_CHARS + 1)))
+        controller.enqueue(encoder.encode('x'.repeat(MAX_SSE_BUFFER_BYTES + 1)))
         controller.close()
       },
     })

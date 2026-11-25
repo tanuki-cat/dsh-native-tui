@@ -76,8 +76,14 @@ export async function loadAttachment(
   const path = resolve(cwd, target)
   const data = await readBoundedFile(path, maxBytes, 'file', 'terminal attachment limit')
   const name = basename(path)
-  const mediaType = IMAGE_TYPES[extname(path).toLowerCase()]
-  if (mediaType !== undefined) {
+  const extensionType = IMAGE_TYPES[extname(path).toLowerCase()]
+  if (extensionType !== undefined) {
+    // The extension is only a hint: a renamed text file must not be handed to
+    // the image path, and a mislabeled JPEG is committed with its real type.
+    const mediaType = detectImageMediaType(data)
+    if (mediaType === undefined) {
+      throw new Error('"' + name + '" does not contain a supported image (PNG, JPEG, GIF, or WebP).')
+    }
     const refs = await attachments.saveImages([{ data, mediaType, name }])
     const ref = refs[0]
     if (ref === undefined) throw new Error('attachment service returned no image reference')

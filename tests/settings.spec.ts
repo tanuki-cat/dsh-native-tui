@@ -155,6 +155,24 @@ describe('settingsParseInput', () => {
     expect(settingsParseInput(spec, 'loud')).toMatchObject({ ok: false })
   })
 
+  it('selects an explicit undefined union branch from its (unset) label', () => {
+    // A schemastery const(undefined) serializes without a value key; the picker
+    // shows it as (unset), and parsing must not mistake the match for a miss.
+    const schema = {
+      uid: 1,
+      refs: {
+        1: { type: 'object', dict: { value: 2 } },
+        2: { type: 'union', list: [3, 4] },
+        3: { type: 'const' },
+        4: { type: 'const', value: 'x' },
+      },
+    }
+    const spec = settingsFormFields(schema)[0]!
+    expect(spec.options).toEqual([undefined, 'x'])
+    expect(settingsParseInput(spec, '(unset)')).toEqual({ ok: true, value: undefined })
+    expect(settingsParseInput(spec, 'x')).toEqual({ ok: true, value: 'x' })
+  })
+
   it('parses JSON for arrays, objects, and unions without literal options', () => {
     expect(settingsParseInput(field('array'), '["a", 1]')).toEqual({ ok: true, value: ['a', 1] })
     expect(settingsParseInput(field('object'), '{"a":1}')).toEqual({ ok: true, value: { a: 1 } })

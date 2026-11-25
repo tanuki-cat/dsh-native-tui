@@ -35,6 +35,11 @@ describe('readGitBranch', () => {
     expect(readGitBranch(await repo('0123456789abcdef0123456789abcdef01234567'))).toBe('0123456')
   })
 
+  it('accepts a SHA-256 detached HEAD as well as SHA-1', async () => {
+    expect(readGitBranch(await repo('0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'))).toBe('0123456')
+    expect(readGitBranch(await repo('0123456789abcdef0123456789abcdef01234567ff'))).toBeUndefined()
+  })
+
   it('follows the git directory a linked worktree points at', async () => {
     const root = await mkdtemp(join(tmpdir(), 'native-tui-git-branch-'))
     cleanup.push(root)

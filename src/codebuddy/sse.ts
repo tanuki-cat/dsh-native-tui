@@ -18,18 +18,40 @@ export interface SseFrame {
   readonly event?: string
 }
 
-/** Maximum unframed SSE buffer retained before aborting the stream. */
-export const MAX_SSE_BUFFER_CHARS = 4 * 1024 * 1024
+/** Decoder options. */
+export interface SseDecodeOptions {
+  /**
+   * Called for every body chunk, before framing. A `:` comment heartbeat and a
+   * chunk that does not complete a frame are both progress: consumers with an
+   * idle budget must observe them, which parsed frames alone cannot report.
+   */
+  readonly onChunk?: () => void
+}
+
+/** Maximum unframed SSE buffer retained, in UTF-8 bytes, before aborting the stream. */
+export const MAX_SSE_BUFFER_BYTES = 4 * 1024 * 1024
+
+/** UTF-8 byte length of one buffer slice, the unit the frame limit is stated in. */
+function utf8Length(text: string): number {
+  return Buffer.byteLength(text, 'utf8')
+}
 
 /**
  * Decode one SSE byte stream into frames.
  * @param body - the response body stream.
+ * @param options - chunk observer for idle-budget consumers.
  * @returns frames in arrival order.
  */
-export async function* decodeSse(body: ReadableStream<Uint8Array>): AsyncGenerator<SseFrame> {
+export async function* decodeSse(
+  body: ReadableStream<Uint8Array>,
+  options: SseDecodeOptions = {},
+): AsyncGenerator<SseFrame> {
   const reader = body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
+  // Tracked in UTF-8 bytes, not UTF-16 code units: the limit is a byte budget,
+  // and a multi-byte character would otherwise count as half of its wire size.
+  let bufferedBytes = 0
   let scanFrom = 0
   let done = false
   try {
@@ -39,28 +61,36 @@ export async function* decodeSse(body: ReadableStream<Uint8Array>): AsyncGenerat
         done = true
         break
       }
+      options.onChunk?.()
       // A fresh decoder call per chunk keeps multi-byte sequences whole.
       buffer += decoder.decode(step.value, { stream: true })
-      if (buffer.length > MAX_SSE_BUFFER_CHARS) {
-        throw new Error('SSE frame exceeded buffer limit')
-      }
+      bufferedBytes += step.value.byteLength
+      // Frames are split out first: only the incomplete remainder is subject to
+      // the buffer limit, so a large but well-formed frame never trips it.
       let index = splitIndex(buffer, scanFrom)
       while (index !== -1) {
+        const length = separatorLength(buffer, index)
         const frame = buffer.slice(0, index)
-        buffer = buffer.slice(index + separatorLength(buffer, index))
+        buffer = buffer.slice(index + length)
+        bufferedBytes -= utf8Length(frame) + (length === 4 ? 4 : 2)
         scanFrom = 0
         const parsed = parseFrame(frame)
         if (parsed !== undefined) yield parsed
         index = splitIndex(buffer, 0)
       }
       scanFrom = Math.max(0, buffer.length - 3)
+      if (bufferedBytes > MAX_SSE_BUFFER_BYTES) {
+        throw new Error('SSE frame exceeded buffer limit')
+      }
     }
-    buffer += decoder.decode()
-    if (buffer.length > MAX_SSE_BUFFER_CHARS) {
+    const tail = decoder.decode()
+    buffer += tail
+    bufferedBytes += utf8Length(tail)
+    if (bufferedBytes > MAX_SSE_BUFFER_BYTES) {
       throw new Error('SSE frame exceeded buffer limit')
     }
-    const tail = parseFrame(buffer)
-    if (tail !== undefined) yield tail
+    const parsed = parseFrame(buffer)
+    if (parsed !== undefined) yield parsed
   }
   finally {
     if (!done) await reader.cancel().catch(() => undefined)

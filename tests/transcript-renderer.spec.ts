@@ -643,3 +643,57 @@ describe('TranscriptRenderer paint memo', () => {
     expect(after.render(80)).not.toBe(painted)
   })
 })
+
+describe('saturated parallel tool calls', () => {
+  const call = (callId: string, command: string, seq: number): TranscriptEntry =>
+    durable('tool/call', { turn: 1, step: 1, callId, name: 'bash', arguments: JSON.stringify({ command }) }, seq)
+  const result = (callId: string, text: string, seq: number): TranscriptEntry =>
+    durable('tool/result', { turn: 1, step: 1, message: { source: { callId }, content: [{ type: 'text', text }] } }, seq)
+
+  it('rebuilds a trimmed window without synthesizing an unnamed card', () => {
+    // The window drops call A but keeps result A, result B and a later row.
+    // A replay used to map result A's sequence to a call whose card was gone,
+    // synthesize a "• Tool" row, and push the real cards out of the window.
+    const renderer = new TranscriptRenderer({ ...options, maxEntries: 2 })
+    const entries: TranscriptEntry[] = [
+      durable('user/message', { content: [{ type: 'text', text: 'run both' }], source: { kind: 'user' } }, 1),
+      call('a', 'printf A', 2),
+      call('b', 'printf B', 3),
+      result('a', 'DONE_A', 4),
+      result('b', 'DONE_B', 5),
+      durable('user/message', { content: [{ type: 'text', text: 'NEXT' }], source: { kind: 'user' } }, 6),
+    ]
+    renderer.set(entries, [])
+    const first = renderer.container.render(100).join('\n')
+    expect(first).toContain('printf B')
+    expect(first).toContain('NEXT')
+    expect(first).not.toContain('printf A')
+
+    const window = entries.slice(renderer.retainedFrom)
+    expect(window.map(entry => entry.type === 'event' ? entry.event.seq : -1)).toEqual([3, 4, 5, 6])
+    renderer.set(window, [])
+    const rebuilt = renderer.container.render(100).join('\n')
+    expect(rebuilt).not.toContain('• Tool')
+    expect(rebuilt).toContain('printf B')
+    expect(rebuilt).toContain('DONE_B')
+    expect(rebuilt).toContain('NEXT')
+  })
+
+  it('ignores a result that arrives after its pending call left the window', () => {
+    const renderer = new TranscriptRenderer({ ...options, maxEntries: 1 })
+    let entries: TranscriptEntry[] = [
+      durable('user/message', { content: [{ type: 'text', text: 'run both' }], source: { kind: 'user' } }, 1),
+      call('a', 'printf A', 2),
+      call('b', 'printf B', 3),
+    ]
+    renderer.set(entries, [])
+    expect(renderer.container.render(100).join('\n')).toContain('printf B')
+    entries = entries.slice(renderer.retainedFrom)
+    entries.push(result('a', 'LATE_DONE_A', 4))
+    renderer.set(entries, [])
+    const rows = renderer.container.render(100).join('\n')
+    expect(rows).not.toContain('• Tool')
+    expect(rows).not.toContain('LATE_DONE_A')
+    expect(rows).toContain('printf B')
+  })
+})

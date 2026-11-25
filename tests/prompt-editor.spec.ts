@@ -1,5 +1,6 @@
-import { CombinedAutocompleteProvider, CURSOR_MARKER, Editor, stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui'
-import { describe, expect, it, vi } from 'vitest'
+import { CombinedAutocompleteProvider, CURSOR_MARKER, Editor, TuiAltScreen, stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
+import { showMultilineInput } from '../src/ui/dialogs.js'
 import { PromptEditor } from '../src/ui/prompt-editor.js'
 import { createPalette, editorTheme } from '../src/ui/theme.js'
 
@@ -163,5 +164,69 @@ describe('PromptEditor', () => {
     editor.handleInput('\t')
     expect(editor.getText()).toBe('/help ')
     expect(editor.getText()).not.toContain('>')
+  })
+})
+
+/** Minimal terminal that keeps the input callback so a test can type through the TUI. */
+class FakeTerminal {
+  columns = 80
+  rows = 24
+  kittyProtocolActive = false
+  onInput: ((data: string) => void) | undefined
+  start(onInput: (data: string) => void): void { this.onInput = onInput }
+  stop(): void {}
+  async drainInput(): Promise<void> {}
+  write(): void {}
+  moveBy(): void {}
+  hideCursor(): void {}
+  showCursor(): void {}
+  clearLine(): void {}
+  clearFromCursor(): void {}
+  clearScreen(): void {}
+  setTitle(): void {}
+  setProgress(): void {}
+  setProgramStatus(): void {}
+  type(data: string): void { this.onInput?.(data) }
+}
+
+describe('PromptEditor hosted by a dialog', () => {
+  it('captures typed text through a real fullscreen multiline dialog without recursing', async () => {
+    // The dialog is the focused component and forwards keys to its editor. The
+    // editor used to forward a key back to the focused component synchronously,
+    // which called the dialog from inside its own handleInput until the stack
+    // overflowed on the first character.
+    const terminal = new FakeTerminal()
+    const tui = new TuiAltScreen(terminal as never, false)
+    onTestFinished(() => { tui.stop() })
+    tui.start()
+    const promise = showMultilineInput(tui, createPalette('plain'), 'Edit schedule', '', 'Enter saves · Esc cancels')
+    expect(tui.getFocusedComponent()).not.toBeNull()
+    terminal.type('a')
+    terminal.type('b')
+    terminal.type('c')
+    terminal.type('\r')
+    await expect(promise).resolves.toBe('abc')
+  })
+
+  it('still forwards a drained paste key to an overlay opened after the paste started', async () => {
+    // Forwarding is only legitimate during an asynchronous paste drain: the
+    // import was started in the editor but the operator moved to an overlay.
+    const terminal = new FakeTerminal()
+    const tui = new TuiAltScreen(terminal as never, false)
+    onTestFinished(() => { tui.stop() })
+    const editor = new PromptEditor(tui, plainTheme)
+    tui.start()
+    tui.setFocus(editor)
+    let release!: (value: string) => void
+    editor.onPaste = () => new Promise<string>(resolve => { release = resolve })
+    const received: string[] = []
+    const overlay = { render: () => ['overlay'], invalidate: () => {}, handleInput: (data: string) => { received.push(data) } }
+    const handle = tui.showOverlay(overlay as never)
+    onTestFinished(() => { handle.hide() })
+    editor.handleInput('\x1b[200~image.png\x1b[201~')
+    editor.handleInput('\r')
+    release('image.png')
+    await vi.waitFor(() => expect(received).toContain('\r'))
+    expect(editor.getText()).toBe('')
   })
 })

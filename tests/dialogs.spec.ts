@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { visibleWidth } from '@earendil-works/pi-tui'
-import { bindAbort, dialogFrame, showApproval, showChoice, showComponentPager, showQuestionBatch, showSearchChoice, showTextInput } from '../src/ui/dialogs.js'
+import { stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui'
+import { bindAbort, dialogFrame, showApproval, showChoice, showComponentPager, showMultilineInput, showQuestionBatch, showSearchChoice, showTextInput } from '../src/ui/dialogs.js'
 import { createPalette } from '../src/ui/theme.js'
 
 describe('dialog cancellation', () => {
@@ -163,6 +163,8 @@ describe('text input dialog', () => {
 function overlayHarness(): { tui: never; overlays: { render(width: number): string[]; handleInput(data: string): void }[] } {
   const overlays: { render(width: number): string[]; handleInput(data: string): void }[] = []
   const tui = {
+    terminal: { rows: 24, columns: 80 },
+    requestRender() {},
     showOverlay(component: { render(width: number): string[]; handleInput(data: string): void }) {
       overlays.push(component)
       return { hide() {} }
@@ -351,5 +353,96 @@ describe('user question dialogs', () => {
     await flush()
     controller.abort()
     await expect(promise).rejects.toMatchObject({ name: 'UserQuestionError', code: 'ASK_ABORTED' })
+  })
+})
+
+describe('question overlay bounds', () => {
+  const palette = createPalette('plain')
+
+  it('keeps a long question detail from pushing the options off screen', async () => {
+    const { tui, overlays } = overlayHarness()
+    const promise = showQuestionBatch(tui, palette, [{
+      id: 'pick',
+      question: 'Pick one',
+      detail: 'detail '.repeat(300),
+      options: [{ label: 'ALPHA' }, { label: 'BETA' }],
+    }], undefined)
+    await flush()
+    const rows = overlays[0]!.render(76)
+    const screen = rows.join('\n')
+    expect(rows.length).toBeLessThan(20)
+    expect(screen).toContain('ALPHA')
+    expect(screen).toContain('BETA')
+    expect(screen).toContain('View full request details')
+    // Enter still submits the highlighted row; the list must have been visible.
+    overlays[0]!.handleInput('\x1b[B')
+    overlays[0]!.handleInput('\r')
+    await expect(promise).resolves.toEqual({ answers: [{ id: 'pick', selected: ['BETA'] }] })
+  })
+
+  it('bounds a long multi-select question the same way', async () => {
+    const { tui, overlays } = overlayHarness()
+    const promise = showQuestionBatch(tui, palette, [{
+      id: 'targets',
+      question: 'Pick targets',
+      detail: 'detail '.repeat(300),
+      multiSelect: true,
+      options: [{ label: 'CODE' }, { label: 'DOCS' }],
+    }], undefined)
+    await flush()
+    const rows = overlays[0]!.render(76)
+    expect(rows.length).toBeLessThan(20)
+    expect(rows.join('\n')).toContain('CODE')
+    expect(rows.join('\n')).toContain('DOCS')
+    overlays[0]!.handleInput('\x1b')
+    await expect(promise).rejects.toMatchObject({ code: 'ASK_ABORTED' })
+  })
+})
+
+describe('prefilled values from Host settings', () => {
+  const palette = createPalette('plain')
+
+  it('strips terminal sequences from a single-line prefill', async () => {
+    let component: { render(width: number): string[]; handleInput(data: string): void } | undefined
+    const promise = showTextInput({
+      showOverlay(value: { render(width: number): string[]; handleInput(data: string): void }) {
+        component = value
+        return { hide() {} }
+      },
+    } as never, palette, 'Wire value', 'high', 'Enter saves', new AbortController().signal,
+    'high\u001b]8;;https://evil.example\u0007link')
+    const rendered = stripTerminalSequences(component!.render(60).join('\n'))
+    expect(rendered).not.toContain('\u001b')
+    expect(rendered).not.toContain('\u0007')
+    expect(rendered).not.toContain('evil.example')
+    component!.handleInput('\r')
+    await expect(promise).resolves.toBe('highlink')
+  })
+
+  it('strips terminal sequences from a multiline prefill while keeping its lines', async () => {
+    const { tui, overlays } = overlayHarness()
+    const promise = showMultilineInput(tui, palette, 'Edit schedule',
+      'line one\nsecond \u001b]8;;https://evil.example/path\u0007line', 'Enter saves · Esc cancels')
+    const rendered = stripTerminalSequences(overlays[0]!.render(60).join('\n'))
+    expect(rendered).not.toContain('\u001b]8')
+    expect(rendered).not.toContain('evil.example')
+    expect(rendered).toContain('line one')
+    overlays[0]!.handleInput('\r')
+    await expect(promise).resolves.toBe('line one\nsecond line')
+  })
+})
+
+describe('narrow multiline dialog', () => {
+  const palette = createPalette('plain')
+
+  it.each([2, 4, 6])('renders at %i columns without recursing through native wrapping', async width => {
+    // A full-width grapheme at a one- or two-column editor makes pi-tui's
+    // wordWrapLine recurse on itself; the dialog must not lay the editor out.
+    const { tui, overlays } = overlayHarness()
+    const promise = showMultilineInput(tui, palette, 'Edit schedule', '你好世界', 'Enter saves')
+    const lines = overlays[0]!.render(width)
+    expect(lines.every(line => visibleWidth(line) <= width)).toBe(true)
+    overlays[0]!.handleInput('\x1b')
+    await expect(promise).resolves.toBeUndefined()
   })
 })

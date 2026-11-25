@@ -41,6 +41,18 @@ export class PromptEditor extends Editor {
   private panelStart = 0
   private attachmentTargets: readonly AttachmentTarget[] = []
   private readonly pasteInput: PasteInput
+  /**
+   * Synchronous input dispatches in progress.
+   *
+   * A key reaches this editor from the terminal, from a host dialog that
+   * forwards it here, or from the asynchronous paste drain. Only the last one
+   * may hand the key back to the focused component: during a synchronous
+   * dispatch the key is already travelling through the component that owns
+   * focus, and forwarding it back would call that host from its own stack.
+   */
+  private inputDepth = 0
+  /** Dialog component that forwards keys to this editor, when one hosts it. */
+  private inputHost: Component | undefined
   attachmentPresentation?: (width: number, maxRows: number) => AttachmentPresentation | undefined
   onPaste?: (text: string) => string | Promise<string>
   onRemoveAttachment?: () => boolean
@@ -55,7 +67,24 @@ export class PromptEditor extends Editor {
   }
 
   override handleInput(data: string): void {
-    this.pasteInput.handleInput(data)
+    this.inputDepth += 1
+    try {
+      this.pasteInput.handleInput(data)
+    }
+    finally {
+      this.inputDepth -= 1
+    }
+  }
+
+  /**
+   * Declare the dialog that hosts this editor.
+   *
+   * A hosted editor is focused by its dialog; input sent to it has already
+   * passed through that component, so a drained key must not bounce back.
+   * @param component - hosting dialog, or undefined for a top-level editor.
+   */
+  hostInput(component: Component | undefined): void {
+    this.inputHost = component
   }
 
   whenInputIdle(): Promise<void> { return this.pasteInput.whenIdle() }
@@ -77,10 +106,16 @@ export class PromptEditor extends Editor {
   }
 
   private handleNativeInput(data: string): void {
-    const focused = (this.tui as TUI & { getFocusedComponent?(): Component | null }).getFocusedComponent?.()
-    if (focused != null && focused !== this) {
-      focused.handleInput?.(data)
-      return
+    // Only an asynchronous paste drain hands a key to the focused component:
+    // the user may have opened an overlay while an image import was running,
+    // and the queued key belongs to that overlay. A synchronous dispatch is
+    // already inside the focused host and must stay here.
+    if (this.inputDepth === 0) {
+      const focused = (this.tui as TUI & { getFocusedComponent?(): Component | null }).getFocusedComponent?.()
+      if (focused != null && focused !== this && focused !== this.inputHost) {
+        focused.handleInput?.(data)
+        return
+      }
     }
     if (matchesKey(data, 'alt+i') && this.onPreviewAttachment !== undefined) {
       this.onPreviewAttachment(0)

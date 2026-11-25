@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { AgentHandle } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
@@ -323,5 +324,167 @@ describe('host runtime', () => {
     await (captured as { setup(ctx: unknown, agent: unknown): Promise<void> }).setup({ on }, session.agent)
     expect(on).toHaveBeenCalledWith('agent/pre-step', expect.any(Function), { prepend: true })
     expect(session.id).toBe(id)
+  })
+})
+
+describe('owned session disposal', () => {
+  it('shares one disposal across concurrent and repeated calls', async () => {
+    const id = SessionId('native-tui-disposal')
+    let finish!: () => void
+    const dispose = vi.fn(() => new Promise<void>(resolve => { finish = resolve }))
+    const handle = { ...fakeHandle(id), dispose } as unknown as AgentHandle
+    const ctx = fakeContext({ get: () => undefined, agents: { create: async () => handle } })
+    const session = await createHostSession(ctx, config)
+    const first = session.dispose()
+    const second = session.dispose()
+    expect(dispose).toHaveBeenCalledOnce()
+    finish()
+    await Promise.all([first, second])
+    await session.dispose()
+    expect(dispose).toHaveBeenCalledOnce()
+  })
+
+  it('keeps disposal retryable after a failure while concurrent callers share the rejection', async () => {
+    const id = SessionId('native-tui-retry')
+    let attempts = 0
+    const dispose = vi.fn(async () => {
+      attempts += 1
+      if (attempts === 1) throw new Error('cleanup failed')
+    })
+    const handle = { ...fakeHandle(id), dispose } as unknown as AgentHandle
+    const ctx = fakeContext({ get: () => undefined, agents: { create: async () => handle } })
+    const session = await createHostSession(ctx, config)
+    const first = session.dispose()
+    const second = session.dispose()
+    await expect(first).rejects.toThrow('cleanup failed')
+    await expect(second).rejects.toThrow('cleanup failed')
+    expect(dispose).toHaveBeenCalledOnce()
+    await session.dispose()
+    expect(dispose).toHaveBeenCalledTimes(2)
+  })
+
+  it('restarts a session whose owned handle was already disposed', async () => {
+    const id = SessionId('native-tui-restart-disposed')
+    const ctx = fakeContext({
+      get: () => undefined,
+      agents: {
+        create: async () => fakeHandle(id),
+        resume: vi.fn(async () => fakeHandle(id)),
+      },
+    })
+    const session = await createHostSession(ctx, config)
+    await session.dispose()
+    const reopened = await restartHostSession(ctx, session)
+    expect(ctx.agents.resume).toHaveBeenCalledOnce()
+    expect(reopened.id).toBe(id)
+  })
+})
+
+describe('createHostSession startup guards', () => {
+  it('normalizes blank session, preset, and cwd values before creating the Agent', async () => {
+    let captured: { sessionId: ReturnType<typeof SessionId>; meta: { cwd: string } } | undefined
+    const resolvePreset = vi.fn(async (preset?: string) => ({ id: preset ?? 'standard' }))
+    const ctx = fakeContext({
+      get: (key: string) => key === 'agentPresets'
+        ? {
+          defaultId: 'standard',
+          list: async () => [],
+          resolve: resolvePreset,
+          mount: async () => ({}),
+          select: async () => 'standard',
+          composedPreset: () => undefined,
+        }
+        : undefined,
+      agents: {
+        create: async (options: unknown) => {
+          captured = options as typeof captured
+          return fakeHandle((options as { sessionId: ReturnType<typeof SessionId> }).sessionId)
+        },
+      },
+    })
+    const session = await createHostSession(ctx, { ...config, sessionId: '  ', agentPreset: '\t', cwd: '   ' })
+    expect(session.id).toContain('native-tui-')
+    expect(captured?.meta.cwd).toBe(process.cwd())
+    expect(resolvePreset).toHaveBeenCalledWith(undefined)
+  })
+
+  it('resolves a relative working directory before creating the Agent', async () => {
+    let captured: { meta: { cwd: string } } | undefined
+    const ctx = fakeContext({
+      get: () => undefined,
+      agents: {
+        create: async (options: unknown) => {
+          captured = options as typeof captured
+          return fakeHandle((options as { sessionId: ReturnType<typeof SessionId> }).sessionId)
+        },
+      },
+    })
+    await createHostSession(ctx, { ...config, cwd: 'packages/app' })
+    expect(captured?.meta.cwd).toBe(resolve('packages/app'))
+  })
+})
+
+describe('compaction-shadowed reasoning', () => {
+  const reasoning = (seq: number, text: string) => ({
+    type: 'assistant/message',
+    seq,
+    data: { message: { role: 'assistant', content: [{ type: 'reasoning', text }] } },
+  })
+
+  it('skips reasoning carried by an event a compaction replaced', () => {
+    const events = [
+      reasoning(1, 'a'.repeat(40)),
+      reasoning(2, 'b'.repeat(40)),
+      { type: 'compaction/summary', seq: 3, data: { shadowedSeqs: [1], shadowedTokenCount: 20 } },
+    ]
+    // Only the live settlement (39 chars → 14 tokens) still reaches the provider.
+    expect(unreplayedReasoningTokens({ snapshotEvents: () => events } as never)).toBe(14)
+  })
+
+  it('skips every shadowed event across pruning and keeps unshadowed ones', () => {
+    const attempt = { ...reasoning(4, 'c'.repeat(40)), type: 'assistant/attempt' }
+    const events = [
+      reasoning(1, 'a'.repeat(40)),
+      attempt,
+      { type: 'compaction/prune', seq: 5, data: { shadowedSeqs: [1, 4], shadowedTokenCount: 40 } },
+      reasoning(6, 'd'.repeat(40)),
+    ]
+    expect(unreplayedReasoningTokens({ snapshotEvents: () => events } as never)).toBe(14)
+  })
+})
+
+describe('resume preset fallback', () => {
+  it.each(['removed', 'broken'] as const)('falls back to the registry default when the recorded preset is %s', async state => {
+    let mounted: string | undefined
+    const ctx = fakeContext({
+      get: (key: string) => key === 'agentPresets'
+        ? {
+          defaultId: 'standard',
+          list: async () => [],
+          resolve: async () => {
+            if (state === 'removed') throw new Error('Unknown agent preset: gone')
+            return { id: 'gone', broken: 'missing plugin' }
+          },
+          mount: async (_ctx: unknown, preset?: string) => { mounted = preset },
+          select: async () => 'standard',
+          composedPreset: () => undefined,
+        }
+        : undefined,
+      agents: {
+        resume: async (options: unknown) => {
+          const candidate = options as {
+            resumeSessionId: ReturnType<typeof SessionId>
+            setup?: (agentCtx: unknown, agent: unknown) => Promise<void>
+          }
+          const handle = fakeHandle(candidate.resumeSessionId, [
+            { type: 'agent-preset/selected', data: { agentPreset: 'gone' } },
+          ])
+          await candidate.setup?.({ on: vi.fn(() => () => {}) }, handle.agent)
+          return handle
+        },
+      },
+    })
+    await resumeHostSession(ctx, SessionId('session-gone'))
+    expect(mounted).toBe('standard')
   })
 })

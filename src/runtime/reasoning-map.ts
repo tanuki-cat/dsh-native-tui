@@ -114,7 +114,11 @@ export function locateReasoningMap(
   const profile = providers[route]
   if (!isRecord(profile)) return { ok: false, reason: 'provider-missing' }
 
-  const models = Array.isArray(profile.models) ? profile.models : undefined
+  // `models: []` is how a catalog route (notably `openai-codex`) selects the
+  // adapter's native model list; it is not an explicit closed list, so it falls
+  // through to the `modelOverrides` branch below instead of refusing every
+  // model as unlisted.
+  const models = Array.isArray(profile.models) && profile.models.length > 0 ? profile.models : undefined
   if (models !== undefined) {
     const index = models.findIndex(entry => isRecord(entry) && entry.id === model)
     const entry = index === -1 ? undefined : models[index]

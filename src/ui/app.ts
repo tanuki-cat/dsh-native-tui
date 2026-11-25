@@ -1,12 +1,4 @@
-import { spawn } from 'node:child_process'
-import {
-  ProcessTerminal,
-  ScrollView,
-  Spacer,
-  Text,
-  TuiAltScreen,
-  VStack,
-} from '@earendil-works/pi-tui'
+import { TuiAltScreen } from '@earendil-works/pi-tui'
 import type { Context } from '@deepseek-ai/cordis'
 import { bindModelSelection } from '../runtime/model-selection.js'
 import type {} from '@deepseek-ai/dsh-commands'
@@ -14,8 +6,7 @@ import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { DisplayMode, ResolvedConfig } from '../config.js'
 import { createHostSession, readContextBreakdown, restartHostSession, resumeHostSession, sessionAgentPreset, type AgentPresetService, type HostSession } from '../runtime/agent.js'
-import { findLauncher, parseProfileArg, resumeHint } from '../runtime/launcher.js'
-import { assertResumed, reloadArgs, RESUME_ENV } from '../runtime/reload.js'
+import { assertResumed, reloadArgs } from '../runtime/reload.js'
 import { createSessionMetricsMemo, type SessionMetrics } from '../runtime/metrics.js'
 import { ContextModelBudgets, readContextInputs, SessionEventCursor } from '../runtime/context-reading.js'
 import { sameRoute } from '../runtime/compaction-policy.js'
@@ -27,9 +18,6 @@ import type { PendingAttachment } from '../runtime/attachments.js'
 import { TuiAutocompleteProvider, type SessionReferenceService, type SkillSuggestion } from './autocomplete.js'
 import { currentPreset, renderStatusRows, terminalWindowTitle } from './status-line.js'
 import { createStatusRows } from './status-rows.js'
-import { StatusBar } from './status-bar.js'
-import { editorTheme, markdownTheme, type Palette } from './theme.js'
-import { createTerminalTheme } from './terminal-theme.js'
 import { debug } from '../debug.js'
 import { globalShortcut } from './keymap.js'
 import { CommandDispatchTracker } from './command-dispatch.js'
@@ -44,21 +32,16 @@ import { openTuiSettings, showHostSettings } from './commands/settings.js'
 import { errorMessage } from './commands/shared.js'
 import { subscribeSessionEvents } from './session-events.js'
 import { streamingRowKey, type TranscriptBlock, type TranscriptEntry } from './transcript.js'
-import { nextFrameDelay, StreamPacer, transcriptFrameChanged } from './stream-pacing.js'
-import { TranscriptRenderer } from './transcript-renderer.js'
-import { TranscriptBody } from './transcript-body.js'
-import { TimedAltScreen, TimedMainScreen } from './paint-timing.js'
-import { WAIT_ROW_TICK_MS, WaitStatusLine, TurnStatus, type WaitRetry } from './waiting.js'
+import type { WaitRetry } from './waiting.js'
 import { holdProcessWarnings, type WarningGuard } from './warnings.js'
 import { consoleTone, holdConsoleOutput, type ConsoleGuard } from './console-guard.js'
-import { ScrollToLatest } from './scroll-indicator.js'
-import { PromptEditor } from './prompt-editor.js'
 import { wireImageInput } from './image-input.js'
 import type { ContextReportData } from './context-report.js'
 import { SessionDrafts } from './session-drafts.js'
 import { enqueuePrompt, submitDraft } from './prompt-submission.js'
 import { pickStoredSession } from './commands/sessions.js'
-
+import { AppShutdown, createSignalExit, createTerminalSurface, replaceProcess, reportExitSession, TranscriptFrames } from './app-lifecycle.js'
+import { handOverSession, resetInteractionScope, runGlobalShortcut, shortcutDisposition, type GlobalShortcutActions } from './app-session.js'
 
 /** Terminal application lifecycle. */
 export interface TerminalApp {
@@ -75,46 +58,6 @@ export interface TerminalApp {
 const MAX_NOTICES = 12
 
 /**
- * Replace the running Node process with a fresh dsh invocation. `execve` keeps
- * the PID and inherited terminal; platforms without it use a child process
- * that owns the same stdio.
- * @param args - launcher arguments after the entry script.
- */
-function replaceProcess(args: readonly string[], sessionId: string): void {
-  const entry = process.argv[1]
-  if (entry === undefined) {
-    process.stderr.write('native-tui: reload failed: cannot locate the dsh entry script\n')
-    process.exit(1)
-  }
-  try {
-    process.stdout.write('\nReloading dsh…\n')
-  } catch {
-    // A closed stdout must not prevent the replacement.
-  }
-  // The flag is the documented surface; the variable survives a launcher that
-  // re-parses its own arguments, so a lost flag cannot start a fresh session.
-  const env = { ...process.env, [RESUME_ENV]: sessionId }
-  try {
-    if (process.execve !== undefined) {
-      process.execve(process.execPath, [process.execPath, entry, ...args], env)
-    }
-    const child = spawn(process.execPath, [entry, ...args], {
-      cwd: process.cwd(),
-      env,
-      stdio: 'inherit',
-    })
-    child.once('error', error => {
-      process.stderr.write('native-tui: reload failed: ' + error.message + '\n')
-      process.exit(1)
-    })
-    child.once('exit', code => { process.exit(code ?? 1) })
-  } catch (error) {
-    process.stderr.write('native-tui: reload failed: ' + (error instanceof Error ? error.message : String(error)) + '\n')
-    process.exit(1)
-  }
-}
-
-/**
  * Mount the pi-tui application over one owned Host Agent.
  * @param host - Host plugin context.
  * @param config - resolved terminal configuration.
@@ -126,70 +69,9 @@ export async function startTerminalApp(
   config: ResolvedConfig,
   onExit: (code: number) => void,
 ): Promise<TerminalApp> {
-  const terminalTheme = createTerminalTheme(config.theme)
-  const palette: Palette = terminalTheme.palette
+  const { terminal, terminalTheme, palette, tui, header, editor, waitStatus, status, footer, renderer } =
+    createTerminalSurface(config)
   let reasoningEffort: string | undefined
-  const terminal = new ProcessTerminal()
-  const tui = config.fullscreen
-    ? new TimedAltScreen(terminal, false, undefined, { mouse: true })
-    : new TimedMainScreen(terminal, false)
-  // Every row uses the width the terminal reports: no stored horizontal inset,
-  // so transcript, status and prompt share one left edge
-  // and stay aligned through a resize.
-  const header = new Text('', 0, 0)
-  const headerGap = new Spacer(1)
-  const composerGap = tui instanceof TuiAltScreen
-    ? new ScrollToLatest(palette, () => tui.isFollowingOutput, () => { tui.scrollToBottom() })
-    : new Spacer(1)
-  const status = new StatusBar(() => palette.dim(' · '))
-  const footer = new StatusBar(() => palette.dim(' · '))
-  const waitStatus = new WaitStatusLine(palette)
-  // Native padding reserves the gutter while the input surface fills the width.
-  const editor = new PromptEditor(tui, editorTheme(palette), palette.autocompleteSelection, palette.dialogBand)
-  editor.placeholder = 'Ask DeepSeek Harness to do anything'
-  const markdown = markdownTheme(palette)
-  const renderer = new TranscriptRenderer({
-    showReasoning: config.showReasoning,
-    thinkingDisplay: config.thinkingDisplay,
-    runCodeDisplay: config.runCodeDisplay,
-    maxEntries: config.maxTranscriptEntries,
-    palette,
-    markdown,
-  })
-
-  // Vertical breathing room only: the transcript shares the full-width column
-  // with the header, status and prompt.
-  const transcript = new TranscriptBody(renderer.container)
-
-  if (tui instanceof TuiAltScreen) {
-    tui.setLayoutRoot(new VStack([
-      { component: header, basis: 'auto' },
-      { component: headerGap, basis: 'auto' },
-      { component: new Spacer(1), basis: 'auto' },
-      {
-        component: new ScrollView(transcript, { follow: 'end', primary: true, overscroll: 'chain' }),
-        basis: 0,
-        grow: 1,
-        minSize: 1,
-      },
-      { component: composerGap, basis: 'auto' },
-      { component: waitStatus, basis: 'auto' },
-      { component: editor, basis: 'auto' },
-      { component: status, basis: 'auto' },
-      { component: footer, basis: 'auto' },
-    ]))
-  } else {
-    tui.addChild(header)
-    tui.addChild(headerGap)
-    tui.addChild(new Spacer(1))
-    tui.addChild(transcript)
-    tui.addChild(composerGap)
-    tui.addChild(waitStatus)
-    tui.addChild(editor)
-    tui.addChild(status)
-    tui.addChild(footer)
-  }
-  tui.setFocus(editor)
 
   let active: HostSession
   try {
@@ -229,14 +111,14 @@ export async function startTerminalApp(
   })
   editor.setAutocompleteProvider(autocomplete)
 
-  let disposed = false
   /** Holds Node warnings while the UI owns the screen; released once it is restored. */
   let warningGuard: WarningGuard | undefined
   /** Holds Host/dependency console output for the same span. */
   let consoleGuard: ConsoleGuard | undefined
   let reportedSession = false
-  let exiting = false
   let switching = false
+  /** Set when a restart closed the old Agent and could not restore it. */
+  let sessionLost = false
   let title = config.title
   /** Last title written to the terminal, so a repaint does not repeat the sequence. */
   let windowTitle: string | undefined
@@ -248,35 +130,18 @@ export async function startTerminalApp(
   let localNotices: TranscriptBlock[] = []
   let pendingAttachments: PendingAttachment[] = []
   const drafts = new SessionDrafts()
-  let transcriptTimer: ReturnType<typeof setTimeout> | undefined
-  const streamPacer = new StreamPacer()
-  /** Bumped whenever a rebuild changes the rows the transcript paints. */
-  let transcriptRevision = 0
-  /** What the last painted frame showed, so an identical one can be skipped. */
-  let painted = { revision: -1, wait: '' }
-  /** performance.now() of the last frame that actually requested a paint. */
-  let lastPaintAt = 0
-  const turnStatus = new TurnStatus()
-  let waitTicker: ReturnType<typeof setInterval> | undefined
   let unsubscribeSession: (() => void) | undefined
   let interactionDisposers: Array<() => void> = []
+  /** Cancellation of the whole terminal, so a dispatch and its dialogs end with it. */
   const interactionAbort = new AbortController()
+  /** Cancellation of the approval/question dialogs bound to the Session on screen. */
+  let sessionScope = new AbortController()
   /** The `/` dispatch in flight, so Escape can cancel the command being waited on. */
   const commandDispatch = new CommandDispatchTracker(interactionAbort.signal)
   const attemptPositions = new Map<string, { turn: number; step: number }>()
   let contextBudgets = new ContextModelBudgets()
   let modelSelection = bindModelSelection(active.agent)
   reasoningEffort = modelSelection.current?.reasoningEffort
-
-  tui.onPaint = paintMs => {
-    const cost = streamPacer.paint(paintMs)
-    if (cost !== undefined) debug(`stream paint: paint=${paintMs.toFixed(1)}ms cost=${cost.toFixed(1)}ms interval=${String(streamPacer.interval)}ms live=${String(renderer.liveContentLength)}`)
-    if (cost !== undefined && transcriptTimer !== undefined) {
-      clearTimeout(transcriptTimer)
-      transcriptTimer = undefined
-      scheduleTranscript()
-    }
-  }
 
   const summaryCwd = (): string | undefined => {
     try { return currentWorkingDirectory(host, active.agent.session, config.cwd) }
@@ -307,94 +172,33 @@ export async function startTerminalApp(
     return undefined
   }
 
-  /**
-   * Build the initial transcript before the first frame paints it.
-   *
-   * Opening or resuming a long session otherwise creates every row on the first
-   * frame, which lands exactly when output starts; warming here pays that
-   * component construction once, before the terminal shows anything. The paint
-   * itself is unchanged.
-   */
-  const warmTranscript = (): void => {
-    if (entries.length === 0) return
-    renderer.set(entries, localNotices, summaryCwd())
-    renderer.container.render(Math.max(1, terminal.columns))
-    streamPacer.prepare(0, true)
-  }
-
-  /**
-   * Rebuild the transcript and paint it.
-   *
-   * Rebuilds are scheduled on a cadence while streaming and once a second while
-   * waiting, so a frame can land with nothing new to show. The revision comes
-   * from the rebuild itself, which lets such a frame skip the repaint instead of
-   * writing an identical screen.
-   */
+  /** Rebuild the transcript and paint it, dropping entries no retained row needs. */
   const renderTranscript = (): void => {
-    if (disposed) return
-    const started = performance.now()
-    renderer.set(entries, localNotices, summaryCwd())
-    const pendingText = turnStatus.text()
-    waitStatus.setText(pendingText)
-    if (renderer.contentChanged) transcriptRevision += 1
-    const revision = transcriptRevision
     // Bound the next rebuild before pacing it.
-    if (renderer.retainedFrom > 0) entries = entries.slice(renderer.retainedFrom)
-    const rebuildMs = performance.now() - started
-    const sincePaint = performance.now() - lastPaintAt
-    debug(`stream frame: rebuild=${rebuildMs.toFixed(1)}ms sincePaint=${sincePaint.toFixed(1)}ms interval=${String(streamPacer.interval)}ms live=${String(renderer.liveContentLength)}`)
-    const mark = { revision, wait: pendingText }
-    if (transcriptFrameChanged(painted, mark)) {
-      painted = mark
-      streamPacer.prepare(rebuildMs, renderer.coldRebuild)
-      lastPaintAt = performance.now()
-      tui.requestRender()
-    }
+    const retained = frames.render(entries, localNotices, summaryCwd())
+    if (retained > 0) entries = entries.slice(retained)
   }
 
-  /**
-   * Ask for a transcript frame.
-   * @param immediate - paint now instead of waiting for the next stream frame.
-   *   Bursts are still coalesced so one interval never paints twice.
-   */
-  const scheduleTranscript = (immediate = false): void => {
-    if (disposed) return
-    const elapsed = performance.now() - lastPaintAt
-    if (immediate && elapsed >= streamPacer.interval) {
-      if (transcriptTimer !== undefined) {
-        clearTimeout(transcriptTimer)
-        transcriptTimer = undefined
-      }
-      renderTranscript()
-      return
-    }
-    if (transcriptTimer !== undefined) return
-    const delay = nextFrameDelay(streamPacer.interval, elapsed)
-    transcriptTimer = setTimeout(() => {
-      transcriptTimer = undefined
-      renderTranscript()
-    }, delay)
-  }
+  /** Paces transcript frames and owns the wait row's elapsed-time ticker. */
+  const frames = new TranscriptFrames({
+    tui,
+    renderer,
+    waitStatus,
+    columns: () => terminal.columns,
+    disposed: () => shutdown.disposed,
+  }, renderTranscript)
 
-  /** Stop the one-second repaint that keeps the wait row's elapsed time live. */
-  const stopWaitTicker = (): void => {
-    if (waitTicker === undefined) return
-    clearInterval(waitTicker)
-    waitTicker = undefined
-  }
+  /** Build the initial transcript before the first frame paints it. */
+  const warmTranscript = (): void => { frames.warm(entries, localNotices, summaryCwd()) }
 
-  /** Clear live status and the last receipt when leaving the session. */
-  const clearWait = (): void => {
-    turnStatus.clear()
-    stopWaitTicker()
-  }
+  /** Ask for a transcript frame; bursts are coalesced into one per interval. */
+  const scheduleTranscript = (immediate = false): void => { frames.schedule(immediate) }
+
+  /** Clear live status, the last receipt and every scheduled frame. */
+  const clearWait = (): void => { frames.clear() }
 
   /** Execution status follows Host events, never receipt or playback of text. */
-  const beginWait = (retry?: WaitRetry): void => {
-    turnStatus.begin(retry)
-    if (waitTicker === undefined) waitTicker = setInterval(() => { scheduleTranscript(true) }, WAIT_ROW_TICK_MS)
-    scheduleTranscript(true)
-  }
+  const beginWait = (retry?: WaitRetry): void => { frames.beginWait(retry) }
 
   const pushNotice = (tone: 'info' | 'warning' | 'error' | 'success', text: string, contextReport?: ContextReportData): void => {
     const streamKey = streamingRowKey(entries)
@@ -444,7 +248,7 @@ export async function startTerminalApp(
   let statusScheduled = false
 
   const renderStatus = (): void => {
-    if (disposed || statusScheduled) return
+    if (shutdown.disposed || statusScheduled) return
     statusScheduled = true
     setImmediate(() => {
       statusScheduled = false
@@ -456,7 +260,7 @@ export async function startTerminalApp(
   const statusRows = createStatusRows({ header, status, footer })
 
   const paintStatus = (): void => {
-    if (disposed) return
+    if (shutdown.disposed) return
     reasoningEffort = modelSelection.current?.reasoningEffort
     const options = active.agent.options
     const inputs = contextInputs()
@@ -505,7 +309,7 @@ export async function startTerminalApp(
       appendEntry: entry => {
         if (entry.type === 'event' && entry.event.type === 'request/context') void refreshContextWindow()
         const chunk = entry.type === 'live' ? entry.event.data.chunk : undefined
-        if (chunk !== undefined) turnStatus.resume()
+        if (chunk !== undefined) frames.resumeWait()
         if (chunk?.type === 'text-delta' || chunk?.type === 'reasoning-delta') {
           debug(`stream chunk: ${chunk.type} ${String(chunk.text.length)} chars`)
         }
@@ -532,7 +336,7 @@ export async function startTerminalApp(
       attemptPosition: id => attemptPositions.get(id),
       beginWait,
       retryScheduled: retry => beginWait(retry),
-      endWait: reason => { turnStatus.finish(reason); stopWaitTicker() },
+      endWait: reason => { frames.finishWait(reason) },
     })
     // The Host's app-boot package declares this event and is outside this plugin's type dependencies.
     const stopReload = (host as unknown as { on(name: 'app-boot/config-reload', callback: () => void): () => void })
@@ -546,11 +350,12 @@ export async function startTerminalApp(
     unsubscribeSession?.()
     unsubscribeSession = undefined
     clearWait()
-    if (transcriptTimer !== undefined) {
-      clearTimeout(transcriptTimer)
-      transcriptTimer = undefined
-    }
   }
+
+  /** Cancellation binding one Host interaction to the terminal and the Session on screen. */
+  const interactionSignal = (requestSignal: AbortSignal | undefined): AbortSignal => requestSignal === undefined
+    ? AbortSignal.any([interactionAbort.signal, sessionScope.signal])
+    : AbortSignal.any([requestSignal, interactionAbort.signal, sessionScope.signal])
 
   const registerInteractions = (): void => {
     const agent = active.agent
@@ -558,10 +363,8 @@ export async function startTerminalApp(
       agent.ctx.on('approval/request', async (request, next) => {
         if (request.agent !== agent) return next()
         const args = approvalArguments(agent.session.snapshotEvents(), request.toolName, request.callId)
-        const outcome = await showApproval(tui, palette, request, request.signal === undefined
-          ? interactionAbort.signal
-          : AbortSignal.any([request.signal, interactionAbort.signal]), { cwd: summaryCwd() })
-        if (!disposed && active.agent === agent) {
+        const outcome = await showApproval(tui, palette, request, interactionSignal(request.signal), { cwd: summaryCwd() })
+        if (!shutdown.disposed && active.agent === agent) {
           const receipt = approvalReceipt(request.toolName, args, outcome)
           pushNotice(receipt.tone, receipt.text)
         }
@@ -569,9 +372,7 @@ export async function startTerminalApp(
       }),
       agent.ctx.on('user-questions/request', async (request, next) => {
         if (request.agent !== agent) return next()
-        return showQuestionBatch(tui, palette, request.questions, request.signal === undefined
-          ? interactionAbort.signal
-          : AbortSignal.any([request.signal, interactionAbort.signal]))
+        return showQuestionBatch(tui, palette, request.questions, interactionSignal(request.signal))
       }),
     ]
   }
@@ -583,48 +384,90 @@ export async function startTerminalApp(
 
   let reasoningCycle = Promise.resolve()
 
-  const switchTo = async (next: () => Promise<HostSession>): Promise<void> => {
+  /**
+   * Move the terminal to another Session.
+   *
+   * A normal switch re-attaches the outgoing Session when it cannot be
+   * released, so a failed disposal leaves a working screen. A restart is the
+   * exception: its opener releases the old Agent itself, so a failure has no
+   * handle to return to and the Session stays lost until a reload.
+   * @param next - opens the replacement.
+   * @param options - `disposesActive` when `next` releases the outgoing Agent.
+   */
+  const switchTo = async (
+    next: () => Promise<HostSession>,
+    options?: { readonly disposesActive?: boolean; readonly previousClosed?: () => boolean },
+  ): Promise<void> => {
     await editor.whenInputIdle()
-    if (switching || disposed) return
+    if (switching || shutdown.disposed) return
     switching = true
     editor.disableSubmit = true
-    let opened: HostSession | undefined
     try {
-      opened = await next()
-      if (opened === active || disposed) return
-      drafts.save(active.agent.session, { text: editor.getExpandedText(), attachments: pendingAttachments }, summaryCwd(), selectedPreset)
-      disposeInteractions()
-      clearSubscriptions()
-      await active.dispose()
-      if (disposed) return
-      active = opened
-      reasoningCycle = Promise.resolve()
-      const draft = drafts.restore(active.id)
-      editor.setText(draft.text)
-      pendingAttachments = draft.attachments
-      selectedPreset = sessionAgentPreset(active.agent.session) ?? selectedPreset
-      entries = active.agent.session.snapshotEvents().map(event => ({ type: 'event', event }))
-      liveSeq = 0
-      attemptPositions.clear()
-      skills.clear()
-      localNotices = []
-      renderer.clear()
-      streamPacer.reset()
-      tui.setFocus(editor)
-      modelSelection = bindModelSelection(active.agent)
-      contextBudgets = new ContextModelBudgets()
-      registerInteractions()
-      subscribeActive()
-      void refreshContextWindow()
-      pushNotice('info', 'Switched to ' + active.id)
-    } catch (error) {
-      pushNotice('error', 'Could not open the session: ' + errorMessage(error))
-    } finally {
-      if (opened !== undefined && opened !== active) {
-        try { await opened.dispose() }
+      const result = await handOverSession<HostSession>({
+        current: active,
+        open: next,
+        release: session => session.dispose(),
+        closedByOpener: options?.disposesActive === true,
+        ...(options?.previousClosed === undefined ? {} : { previousClosed: options.previousClosed }),
+        aborted: () => shutdown.disposed,
+        detach: () => {
+          // The Session leaving the screen owns its draft, subscriptions and
+          // dialogs; stop them before its Agent is released.
+          drafts.save(active.agent.session, { text: editor.getExpandedText(), attachments: pendingAttachments }, summaryCwd(), selectedPreset)
+          disposeInteractions()
+          clearSubscriptions()
+          sessionScope = resetInteractionScope(sessionScope, tui)
+        },
+        attach: () => {
+          // The old Session still owns the screen: restore what a failed
+          // handover detached instead of leaving the terminal disconnected.
+          registerInteractions()
+          subscribeActive()
+        },
+        adopt: opened => {
+          active = opened
+          sessionLost = false
+          reasoningCycle = Promise.resolve()
+          const draft = drafts.restore(active.id)
+          editor.setText(draft.text)
+          pendingAttachments = draft.attachments
+          selectedPreset = sessionAgentPreset(active.agent.session) ?? selectedPreset
+          entries = active.agent.session.snapshotEvents().map(event => ({ type: 'event', event }))
+          liveSeq = 0
+          attemptPositions.clear()
+          skills.clear()
+          localNotices = []
+          renderer.clear()
+          frames.reset()
+          tui.setFocus(editor)
+          modelSelection = bindModelSelection(active.agent)
+          contextBudgets = new ContextModelBudgets()
+          registerInteractions()
+          subscribeActive()
+          void refreshContextWindow()
+          pushNotice('info', 'Switched to ' + active.id)
+        },
+      })
+      if (result.status === 'failed') {
+        if (result.restorable) {
+          pushNotice('error', 'Could not open the session: ' + errorMessage(result.error))
+        }
+        else {
+          // The old Agent is already gone; block prompts until a reload opens
+          // a fresh handle instead of writing to a disposed one.
+          sessionLost = true
+          pushNotice('error', 'Could not restore the session: ' + errorMessage(result.error) + ' · run /reload to reopen it')
+        }
+      }
+      if (result.status !== 'switched' && result.status !== 'same' && result.unopened !== undefined) {
+        try { await result.unopened.dispose() }
         catch (error) { pushNotice('error', 'Could not close the unopened session: ' + errorMessage(error)) }
       }
+    }
+    finally {
       switching = false
+      // Prompts stay blocked by `sessionLost` in handleSubmit; Enter must still
+      // reach `/reload`, the one command that can reopen a lost Session.
       editor.disableSubmit = false
     }
   }
@@ -657,6 +500,10 @@ export async function startTerminalApp(
   }
 
   const sendPrompt = (text: string, historyText = text): boolean => {
+    if (sessionLost) {
+      pushNotice('error', 'The Session is no longer open · run /reload to reopen it')
+      return false
+    }
     try {
       if (!enqueuePrompt(active.agent, text, pendingAttachments)) return false
     } catch (error) {
@@ -678,7 +525,8 @@ export async function startTerminalApp(
   const commandContext = (dispatchSignal?: AbortSignal): CommandContext => {
     const attachments = pendingAttachments
     const session = active, owner = modelSelection
-    const isCurrent = (): boolean => active === session && modelSelection === owner && !switching && !disposed && !exiting
+    const isCurrent = (): boolean => active === session && modelSelection === owner
+      && !switching && !sessionLost && !shutdown.disposed && !shutdown.exiting
     return {
       host,
       config,
@@ -686,10 +534,20 @@ export async function startTerminalApp(
       tui,
       active,
       restartSession: async expected => {
-        if (expected !== active || switching || disposed) throw new Error('The active Session changed; choose permissions again.')
+        if (expected !== active || switching || shutdown.disposed) throw new Error('The active Session changed; choose permissions again.')
+        // Refuse before detaching the UI: a running turn is not a failed restart.
+        if (expected.agent.status === 'running') throw new Error('Wait for the running turn to finish or cancel it before resetting shells.')
         let reopened: HostSession | undefined
-        await switchTo(async () => { reopened = await restartHostSession(host, expected); return reopened })
-        if (reopened === undefined || active !== reopened) throw new Error('Could not restore the Session after closing persistent shells; use /reload to retry.')
+        let disposedPrevious = false
+        await switchTo(async () => {
+          reopened = await restartHostSession(host, expected, () => { disposedPrevious = true })
+          return reopened
+        }, { disposesActive: true, previousClosed: () => disposedPrevious })
+        if (reopened === undefined || active !== reopened) {
+          throw new Error(disposedPrevious
+            ? 'Could not restore the Session after closing persistent shells; use /reload to retry.'
+            : 'Could not close persistent shells for the active Session.')
+        }
         return active
       },
       signal: dispatchSignal ?? commandDispatch.signal(),
@@ -741,7 +599,7 @@ export async function startTerminalApp(
         entries = []
         localNotices = []
         renderer.clear()
-        streamPacer.reset()
+        frames.reset()
         scheduleTranscript(true)
       },
       exit: requestExit,
@@ -755,11 +613,16 @@ export async function startTerminalApp(
   }
 
   const handleSubmit = (text: string): void => {
-    if (exiting) return
+    if (shutdown.exiting) return
     const trimmed = text.trim()
     if (trimmed === '' && pendingAttachments.length === 0) return
     if (trimmed === 'exit' || trimmed === 'quit') {
       requestExit(0)
+      return
+    }
+    if (sessionLost && trimmed !== '/reload') {
+      // The Agent behind this draft is gone; only a reload can reopen a Session.
+      pushNotice('error', 'The Session is no longer open \u00b7 run /reload to reopen it')
       return
     }
     if (trimmed.startsWith('/')) {
@@ -770,33 +633,12 @@ export async function startTerminalApp(
     submitDraft(text, editor, () => sendPrompt(trimmed))
   }
 
-  const requestExit = (code: number): void => {
-    if (exiting || disposed) return
-    exiting = true
-    void dispose().then(() => { onExit(code) }, () => { onExit(code) })
-  }
-
-  const requestReload = (): void => {
-    if (exiting || disposed) return
-    exiting = true
-    const args = reloadArgs(process.argv.slice(2), active.id)
-    const replace = (): void => { replaceProcess(args, active.id) }
-    // Model selection is already durable; do not rewrite profile settings on reload.
-    void dispose(false).then(replace, replace)
-  }
-
-  const onSignal = (): void => {
-    // Disposal may reject (the Host can fail to close a Session); leaving that
-    // unhandled would report a crash on a path that is already exiting.
-    void dispose().catch(() => undefined).then(() => { process.exit(143) })
-  }
-
-  const dispose = async (reportSession = true): Promise<void> => {
-    if (disposed) return
-    disposed = true
+  /** Tear the terminal down once; every exit path awaits this same run. */
+  const performDispose = async (reportSession: boolean): Promise<void> => {
     terminalTheme.dispose()
     editor.cancelPendingInput()
     interactionAbort.abort(new Error('native-tui: terminal disposed'))
+    sessionScope.abort(new Error('native-tui: terminal disposed'))
     disposeInteractions()
     clearSubscriptions()
     process.off('SIGTERM', onSignal)
@@ -824,26 +666,60 @@ export async function startTerminalApp(
     warningGuard = undefined
     if (reportSession && !reportedSession) {
       reportedSession = true
-      const profile = parseProfileArg(process.argv.slice(2))
-      let resume = resumeHint(profile, undefined, active.id)
-      try {
-        resume = resumeHint(profile, await findLauncher(profile), active.id)
-      }
-      catch {
-        // Keep the explicit fallback when the launcher lookup fails.
-      }
-      try {
-        process.stdout.write('\nSession: ' + active.id + '\nResume: ' + resume + '\n')
-      }
-      catch {
-        // A closed stdout must not turn a normal exit into a failure.
-      }
+      await reportExitSession(active.id)
     }
     await active.dispose()
   }
 
+  /** One teardown and one process exit, shared by every exit path. */
+  const shutdown = new AppShutdown(performDispose)
+
+  const dispose = (reportSession = true): Promise<void> => shutdown.dispose(reportSession)
+
+  const requestExit = (code: number): void => {
+    if (!shutdown.claimExit()) return
+    void dispose().then(() => { onExit(code) }, () => { onExit(code) })
+  }
+
+  const requestReload = (): void => {
+    if (!shutdown.claimExit()) return
+    const args = reloadArgs(process.argv.slice(2), active.id)
+    const replace = (): void => { replaceProcess(args, active.id) }
+    // Model selection is already durable; do not rewrite profile settings on reload.
+    void dispose(false).then(replace, replace)
+  }
+
+  /** SIGTERM/SIGHUP share the one teardown and the one process exit. */
+  const onSignal = createSignalExit(shutdown, code => { process.exit(code) })
+
   wireImageInput(editor, commandContext)
   editor.onSubmit = handleSubmit
+  /** What a global shortcut does when the terminal consumes the key. */
+  const shortcutActions: GlobalShortcutActions = {
+    overlayOpen: () => tui.hasOverlay(),
+    newSession: () => { void runCommand('/new') },
+    pickSession: () => {
+      void pickStoredSession(commandContext()).then(id => {
+        if (id !== undefined && id !== active.id) return runCommand('/resume ' + id)
+      }, error => { pushNotice('error', 'Could not open the session picker: ' + errorMessage(error)) })
+    },
+    cycleReasoning: () => {
+      const ctx = commandContext()
+      const selected = ctx.modelSelection.current
+      reasoningCycle = reasoningCycle.then(() => cycleReasoningEffort(ctx, () =>
+        active === ctx.active && !switching && !shutdown.disposed && !shutdown.exiting
+        && modelSelection.current?.provider === selected?.provider
+        && modelSelection.current?.model === selected?.model,
+      )).catch(error => { pushNotice('error', 'Could not cycle reasoning effort: ' + errorMessage(error)) })
+    },
+    toggleToolPreviews: () => { renderer.toggleToolPreviews(); tui.requestRender() },
+    jumpToLatest: () => { if (tui instanceof TuiAltScreen) tui.scrollToBottom() },
+    clearInput: () => { editor.setText(''); tui.requestRender() },
+    cancelCommand: () => commandDispatch.cancel(),
+    cancelTurn: () => { active.agent.cancel({ kind: 'user' }) },
+    exit: () => { requestExit(0) },
+  }
+
   const handleGlobalInput = (data: string): { consume: true } | undefined => {
     const shortcut = globalShortcut(data, {
       running: active.agent.status === 'running',
@@ -852,59 +728,16 @@ export async function startTerminalApp(
       commandRunning: commandDispatch.running,
       scrolledAway: tui instanceof TuiAltScreen && !tui.isFollowingOutput && !tui.hasOverlay(),
     })
-    if (shortcut !== undefined && editor.isProcessingPaste && shortcut !== 'exit' && shortcut !== 'cancel-turn') {
-      editor.deferInput(() => { if (!disposed) handleGlobalInput(data) })
+    const disposition = shortcutDisposition(shortcut, { switching, processingPaste: editor.isProcessingPaste })
+    if (disposition === 'defer') {
+      editor.deferInput(() => { if (!shutdown.disposed) handleGlobalInput(data) })
       return { consume: true }
     }
-    if (switching && shortcut !== 'exit' && shortcut !== 'cancel-turn') return { consume: true }
+    if (disposition === 'swallow') return { consume: true }
+    // Everything below is a real shortcut. A key without one (including a
+    // dialog's Escape) belongs to the focused component.
     if (shortcut === undefined) return undefined
-    if (shortcut === 'new-session' || shortcut === 'pick-session') {
-      if (tui.hasOverlay() || switching) return undefined
-      if (shortcut === 'new-session') void runCommand('/new')
-      else void pickStoredSession(commandContext()).then(id => {
-        if (id !== undefined && id !== active.id) return runCommand('/resume ' + id)
-      }, error => { pushNotice('error', 'Could not open the session picker: ' + errorMessage(error)) })
-      return { consume: true }
-    }
-    if (shortcut === 'cycle-reasoning') {
-      if (tui.hasOverlay()) return undefined
-      const ctx = commandContext()
-      const selected = ctx.modelSelection.current
-      reasoningCycle = reasoningCycle.then(() => cycleReasoningEffort(ctx, () =>
-        active === ctx.active && !switching && !disposed && !exiting
-        && modelSelection.current?.provider === selected?.provider
-        && modelSelection.current?.model === selected?.model,
-      )).catch(error => { pushNotice('error', 'Could not cycle reasoning effort: ' + errorMessage(error)) })
-      return { consume: true }
-    }
-    if (shortcut === 'toggle-tool-previews') {
-      if (tui.hasOverlay()) return undefined
-      renderer.toggleToolPreviews()
-      tui.requestRender()
-      return { consume: true }
-    }
-    if (shortcut === 'jump-to-latest') {
-      if (tui instanceof TuiAltScreen) tui.scrollToBottom()
-      return { consume: true }
-    }
-    if (shortcut === 'clear-input') {
-      editor.setText('')
-      tui.requestRender()
-      return { consume: true }
-    }
-    if (shortcut === 'cancel-command') {
-      // A dialog owns Escape while it is open; its own cancel path unwinds the
-      // handler that opened it.
-      if (tui.hasOverlay()) return undefined
-      return commandDispatch.cancel() ? { consume: true } : undefined
-    }
-    if (shortcut === 'cancel-turn') {
-      if (tui.hasOverlay()) return undefined
-      active.agent.cancel({ kind: 'user' })
-      return { consume: true }
-    }
-    requestExit(0)
-    return { consume: true }
+    return runGlobalShortcut(shortcut, shortcutActions)
   }
   tui.addInputListener(handleGlobalInput)
   process.once('SIGTERM', onSignal)
@@ -930,7 +763,7 @@ export async function startTerminalApp(
     warmTranscript()
     subscribeActive()
     tui.start()
-    terminalTheme.connect(tui, () => { renderer.refreshPalette(); status.invalidate(); footer.invalidate(); streamPacer.reset(); paintStatus(); tui.requestRender(true) })
+    terminalTheme.connect(tui, () => { renderer.refreshPalette(); status.invalidate(); footer.invalidate(); frames.reset(); paintStatus(); tui.requestRender(true) })
     tui.setFocus(editor)
     tui.requestRender()
     void refreshContextWindow()
@@ -943,23 +776,23 @@ export async function startTerminalApp(
   }
   return {
     setDisplayModes: (thinkingDisplay, runCodeDisplay) => {
-      if (disposed) return
+      if (shutdown.disposed) return
       renderer.setDisplayModes(thinkingDisplay, runCodeDisplay)
-      streamPacer.reset()
+      frames.reset()
       tui.requestRender()
     },
     setMaxEntries: maxEntries => {
-      if (disposed || !renderer.setMaxEntries(maxEntries)) return
-      streamPacer.reset()
+      if (shutdown.disposed || !renderer.setMaxEntries(maxEntries)) return
+      frames.reset()
       tui.requestRender()
     },
     setImageThumbnails: enabled => {
-      if (disposed || config.showImageThumbnails === enabled) return
+      if (shutdown.disposed || config.showImageThumbnails === enabled) return
       config.showImageThumbnails = enabled
       tui.requestRender()
     },
     setTitle: next => {
-      if (disposed || next === title) return
+      if (shutdown.disposed || next === title) return
       title = next
       // Both the header and the terminal tab carry the product title.
       syncWindowTitle()

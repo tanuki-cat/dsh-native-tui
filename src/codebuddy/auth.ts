@@ -203,6 +203,16 @@ async function requestLoginUrl(
   return { state, authUrl }
 }
 
+/** Parse one gateway body, tolerating a non-JSON error page. */
+function parseGatewayBody(text: string): GatewayResponse<unknown> {
+  try {
+    return JSON.parse(text) as GatewayResponse<unknown>
+  }
+  catch {
+    return {}
+  }
+}
+
 /** One poll step. Returns undefined while the user has not finished yet. */
 async function pollToken(
   profile: CodeBuddyProfile,
@@ -220,17 +230,21 @@ async function pollToken(
     redirect: 'error',
     ...(signal === undefined ? {} : { signal }),
   })
+  const text = await readBoundedResponseText(response, MAX_AUTH_RESPONSE_BYTES)
+  const body = parseGatewayBody(text)
+  const code = numericCode(body)
+  // Only the gateway's own "still waiting" code on a 200/400 response is a
+  // pending answer. Any other refusal (401/403/429/500) is reported now instead
+  // of being retried until the deadline and then misreported as a timeout.
+  if (code === PENDING_CODE && (response.ok || response.status === 400)) return undefined
   if (!response.ok) {
-    await response.body?.cancel().catch(() => undefined)
-    return undefined
+    throw new GatewayError(describeBody(profile, response.status, text), code, code !== undefined && FATAL_CODES.has(code))
   }
-  const body = await readGatewayResponse<TokenPayload>(profile, response)
-  if (body.code === PENDING_CODE) return undefined
-  if (body.code !== 0 || body.data === undefined) {
-    const code = numericCode(body)
-    throw new GatewayError(describeCode(profile, body), code, code !== undefined && FATAL_CODES.has(code))
+  const typed = body as GatewayResponse<TokenPayload>
+  if (typed.code !== 0 || typed.data === undefined) {
+    throw new GatewayError(describeCode(profile, typed), code, code !== undefined && FATAL_CODES.has(code))
   }
-  return toGrant(body.data)
+  return toGrant(typed.data)
 }
 
 function sleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
@@ -269,17 +283,40 @@ export async function login(profile: CodeBuddyProfile, session: LoginSession): P
       + String(POLL_TIMEOUT_MS / 60_000) + ' minutes.',
   })
 
-  const deadline = Date.now() + POLL_TIMEOUT_MS
-  for (;;) {
-    if (signal.aborted) throw new Error('login cancelled')
-    if (Date.now() >= deadline) throw new Error(profile.id + ': login timed out, run /codebuddy login again')
-    await sleep(POLL_INTERVAL_MS, signal)
-    const grant = await pollToken(profile, state, signal)
-    if (grant !== undefined) {
+  // The deadline bounds the whole attempt, not just the gaps between polls: a
+  // gateway that accepts the connection and never answers must still end the
+  // login, which a loop-top timestamp check alone cannot do.
+  const deadline = new AbortController()
+  const timer = setTimeout(() => { deadline.abort(new Error('login deadline reached')) }, POLL_TIMEOUT_MS)
+  timer.unref()
+  const attemptSignal = AbortSignal.any([signal, deadline.signal])
+  const timedOut = (): Error => new Error(profile.id + ': login timed out, run /codebuddy login again')
+  try {
+    for (;;) {
+      if (signal.aborted) throw new Error(profile.id + ': login cancelled')
+      if (deadline.signal.aborted) throw timedOut()
+      await sleep(POLL_INTERVAL_MS, signal)
+      let grant: CodeBuddyGrant | undefined
+      try {
+        grant = await pollToken(profile, state, attemptSignal)
+      }
+      catch (error) {
+        // The abort above settles a hung request as a transport failure; the
+        // attempt's own deadline is what the human needs to hear about.
+        if (deadline.signal.aborted) throw timedOut()
+        throw error
+      }
+      if (grant === undefined) continue
+      // Re-check immediately before writing: a cancelled attempt must never
+      // resurrect a credential a concurrent /logout just deleted.
+      if (signal.aborted) throw new Error(profile.id + ': login cancelled')
       await session.commit({ kind: 'grant', payload: grant })
       session.notify({ message: profile.id + ': authorization complete' })
       return grant
     }
+  }
+  finally {
+    clearTimeout(timer)
   }
 }
 
@@ -360,21 +397,22 @@ export function grantOf(record: CredentialRecordLike | undefined): CodeBuddyGran
  * @param profile - deployment to authenticate.
  * @param signal - cancellation for a rotation request.
  * @param force - rotate even when the stored grant is not yet due (one controlled 401 replay).
+ * @param rejectedAccess - the token the gateway just refused. A different stored
+ *   token means a concurrent request already rotated it, so that one is returned
+ *   instead of rotating a second time and invalidating the first replay's token.
  * @returns the bearer token to send.
- * @throws {LlmError} code MISSING_CREDENTIAL when nothing is stored, AUTH when rotation fails.
+ * @throws {LlmError} code MISSING_CREDENTIAL when nothing is stored, AUTH when rotation fails, ABORTED when cancelled.
  */
 export async function accessToken(
   store: CredentialStoreLike,
   profile: CodeBuddyProfile,
   signal: AbortSignal | undefined,
   force = false,
+  rejectedAccess?: string,
 ): Promise<string> {
   const initial = await readGrant(store, profile)
   if (initial === undefined) {
-    throw new LlmError(
-      profile.id + ': not signed in. Run /codebuddy login ' + profile.id + ' to authorize this account.',
-      'MISSING_CREDENTIAL',
-    )
+    throw missingCredentialError(profile)
   }
   if (!force && initial.expires > Date.now()) return initial.access
 
@@ -385,6 +423,9 @@ export async function accessToken(
       // Nothing readable to rotate: leave the stored record alone and let the
       // caller's next read report the real state.
       if (grant === undefined) return undefined
+      // Another request already replaced the token this one was rejected for.
+      // Returning without a write lets the caller read that fresh token.
+      if (rejectedAccess !== undefined && grant.access !== rejectedAccess) return undefined
       // Another process rotated while this one waited for the lock.
       if (!force && grant.expires > Date.now()) return undefined
       return { kind: 'grant', payload: await refreshGrant(profile, grant, signal) }
@@ -392,14 +433,29 @@ export async function accessToken(
   }
   catch (error) {
     if (error instanceof LlmError) throw error
+    if (signal?.aborted === true) {
+      throw new LlmError(profile.id + ': credential rotation aborted by the caller', 'ABORTED', { cause: error })
+    }
     throw new LlmError(
       profile.id + ': credential rotation failed: ' + redact(error instanceof Error ? error.message : String(error)),
       error instanceof GatewayError && error.fatal ? 'MISSING_CREDENTIAL' : 'AUTH',
       { cause: error },
     )
   }
-  const grant = grantOf(rotated) ?? initial
+  // A concurrent logout can delete the record while this rotation held the
+  // lock. Falling back to the grant read before the lock would hand the caller
+  // a token the user just removed, so re-read and report the real state.
+  const grant = rotated === undefined ? await readGrant(store, profile) : grantOf(rotated)
+  if (grant === undefined) throw missingCredentialError(profile)
   return grant.access
+}
+
+/** The failure one unauthenticated route reports, naming the command that fixes it. */
+function missingCredentialError(profile: CodeBuddyProfile): LlmError {
+  return new LlmError(
+    profile.id + ': not signed in. Run /codebuddy login ' + profile.id + ' to authorize this account.',
+    'MISSING_CREDENTIAL',
+  )
 }
 
 /**

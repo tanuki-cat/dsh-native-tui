@@ -6,7 +6,14 @@ import { effectiveThreshold, sameRoute, type CompactionPolicy, type ModelRoute }
 import { mountedCompactionPolicy } from './compaction-settings.js'
 import type { CompactionReading, SessionStats } from './metrics.js'
 
-/** Incrementally collects new session events without cloning and freezing the whole log on each repaint. */
+/**
+ * Incrementally collects new session events without cloning and freezing the whole log on each repaint.
+ *
+ * `eventAt` and `snapshotEvents` are the only synchronous event reads the
+ * installed `dsh-session` exposes, and both are marked deprecated in favor of
+ * awaiting Host event reads. No drop-in replacement ships yet, so this cursor
+ * keeps the incremental reads until the Host migration lands.
+ */
 export class SessionEventCursor {
   private session: Agent['session'] | undefined
   private events: SessionEvent[] = []

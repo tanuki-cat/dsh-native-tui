@@ -47,6 +47,21 @@ describe('per-model compaction budgets', () => {
     expect(resolveCompactionPolicy({ modelPolicies: [{ ...qwen, headroomTokens: 17 }] }, qwen).summaryMax).toBe(17)
     expect(() => resolveCompactionPolicy({ modelPolicies: [model, model] }, qwen)).toThrow('Duplicate')
   })
+
+  it('accepts retainRatio and retainTokens together with the token count taking precedence', () => {
+    const policy = resolveCompactionPolicy({ retainRatio: 0.3, retainTokens: 100_000 }, qwen)
+    expect(policy).toMatchObject({ retainRatio: 0.3, retainTokens: 100_000 })
+    // The window can keep 49_152 trigger tokens and the 100_000-token
+    // retention floor exceeds it, so the effective trigger disappears.
+    expect(effectiveThreshold(policy, budget)).toBeUndefined()
+    // Without the token floor the ratio alone would leave a valid trigger.
+    expect(effectiveThreshold({ ...policy, retainTokens: undefined }, budget)).toBe(49_152)
+    expect(resolveCompactionPolicy({ modelPolicies: [{ ...qwen, retainRatio: 0.2, retainTokens: 8000 }] }, qwen))
+      .toMatchObject({ retainRatio: 0.2, retainTokens: 8000 })
+    // A high retainRatio must not veto a lower explicit retainTokens floor.
+    const ratioAboveThreshold = resolveCompactionPolicy({ thresholdRatio: 0.5, retainRatio: 0.9, retainTokens: 1000 }, qwen)
+    expect(effectiveThreshold(ratioAboveThreshold, budget)).toBe(49_152)
+  })
 })
 
 function editorHarness(raw: Record<string, unknown> | undefined = undefined) {

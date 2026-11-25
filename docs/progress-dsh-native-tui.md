@@ -447,3 +447,8 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 
 - 完成 `src/` 安全漏洞（Windows `cmd /c start` 注入、`interaction-modes` 沙箱审批绕过、ToolCard/审批详情转义、CodeBuddy URL 白名单与 `redirect: 'error'`、SSE/HTTP 限长与流取消、`/deliverables` 边界校验、`settingsSetAt`/`/mcp add` 原型键防御、fd 限长读）、性能与资源泄漏（step 结算增量保持与 `EditGroupCard` 复用、`SessionEventCursor` 与 `plan` 游标消除全量日志克隆、主屏 scrollback 快速跳过、流式增量清洗与反向思考扫描、异步 `git-branch`、可取消零拷贝 ZIP Worker、Markdown 与 `StatusBar` 缓存）及 TUI 渲染交互（`SettingsPanel` 子菜单光标、Kitty CSI-u 与搜索框路由、移除全局 pager 监听、窄屏 `dialogFrame`、背景色带 `\x1b[0m` 续写、`StreamMarkdown` 围栏解析、`PasteInput.cancel` 与代理对安全切片）共 27 项修复。[审查与修复记录](design-task-fix-audit-security-perf-render.md)
 - 验证：`pnpm check` 通过（132 个测试文件 / 1,902 项测试、类型检查、构建），无源文件超过 1,000 行。
+
+## 2026-11-25 · 第二轮全量代码审查与全量修复
+
+- 基于 `main`（`c9c87ab`）完成四路全量只读审查并分 4 组完成全部 46 项修复（Critical 1 项、High 10 项、Medium 19 项、Low/Nit 16 项），涵盖多行弹窗栈溢出崩溃、`readBoundedFile` 16 MiB 内存回归、窗口裁剪伪造 `Tool` 卡片、`mcp-recovery` 错误码与正则对齐、`switchTo`/重启会话状态机与双重 dispose、空字符串配置防护、`off` 下 Host `/plan` 门禁、Codex/CodeBuddy 登出取消在途登录、CodeBuddy 目录刷新续期与退避/轮询错误码与 deadline/图片预算/SSE 心跳与 post-finish 宽限、斜杠命令取消/idle 守卫/凭据写入顺序与回滚、`src/ui/app.ts` 拆分降行数等。[第二轮审查与修复记录](design-task-fix-audit-round-2.md)
+- 经独立只读 diff 复审补修 7 项边界问题后，`pnpm check` 全量通过（139 个测试文件 / 2,051 项测试、类型检查、构建），无源文件超过 1,000 行（`src/ui/app.ts` 降至 794 行）。

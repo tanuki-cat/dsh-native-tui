@@ -3,8 +3,10 @@ import { installModelSelection, type Agent, type AgentHandle, type ModelSelectio
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { Session } from '@deepseek-ai/dsh-session'
 import { randomUUID } from 'node:crypto'
+import { resolve } from 'node:path'
 import type { ResolvedConfig } from '../config.js'
 import {
+  compactionShadowedSeqs,
   contextBreakdown,
   contextWindowTokens,
   projectedContextTokens,
@@ -115,8 +117,14 @@ export function readContextMeter(
 export function unreplayedReasoningTokens(session: Session): number {
   // The meter's fixed estimator: 4 characters per token plus 4 per block.
   const price = (text: string): number => Math.ceil(text.length / 4) + 4
+  const events = session.snapshotEvents()
+  // Compaction replaced surface nodes stay in the durable log but no longer
+  // reach the provider, so pricing them would overstate the message bucket.
+  const shadowed = compactionShadowedSeqs(events)
   let tokens = 0
-  for (const event of session.snapshotEvents()) {
+  for (const event of events) {
+    const seq = Number(event.seq)
+    if (Number.isSafeInteger(seq) && shadowed.has(seq)) continue
     const type = event.type as string
     if (type !== 'assistant/message' && type !== 'assistant/attempt') continue
     const message = (event.data as { readonly message?: { readonly role?: unknown; readonly content?: readonly unknown[] } }).message
@@ -179,15 +187,28 @@ function defaultSelection(ctx: Context): ModelSelection {
 
 async function wrap(handle: AgentHandle): Promise<HostSession> {
   const agent = handle.agent
-  return {
-    id: agent.id,
-    agent,
-    handle,
-    dispose: async () => {
-      if (agent.status === 'running') agent.cancel({ kind: 'user' })
-      await handle.dispose()
-    },
+  /**
+   * One disposal for every caller: the terminal, a reload, and a restart can
+   * all release the same Agent, and a failed disposal stays retryable.
+   */
+  let disposal: Promise<void> | undefined
+  const dispose = (): Promise<void> => {
+    if (disposal !== undefined) return disposal
+    if (agent.status === 'running') agent.cancel({ kind: 'user' })
+    disposal = handle.dispose().catch((error: unknown) => {
+      disposal = undefined
+      throw error
+    })
+    return disposal
   }
+  return { id: agent.id, agent, handle, dispose }
+}
+
+/** Treat a blank startup string as unset so an empty profile value cannot reach the Host. */
+function startupValue(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined
+  const trimmed = value.trim()
+  return trimmed === '' ? undefined : trimmed
 }
 
 /**
@@ -197,13 +218,14 @@ async function wrap(handle: AgentHandle): Promise<HostSession> {
  * @returns the owned Agent handle.
  */
 export async function createHostSession(ctx: Context, config: ResolvedConfig): Promise<HostSession> {
-  const sessionId = SessionId(config.sessionId ?? NATIVE_TUI_SESSION_ID_PREFIX + randomUUID())
+  const sessionId = SessionId(startupValue(config.sessionId) ?? NATIVE_TUI_SESSION_ID_PREFIX + randomUUID())
+  const cwd = startupValue(config.cwd)
   const presets = presetsOf(ctx)
-  const preset = presets === undefined ? undefined : await presets.resolve(config.agentPreset)
+  const preset = presets === undefined ? undefined : await presets.resolve(startupValue(config.agentPreset))
   const handle = await ctx.agents.create({
     sessionId,
     meta: {
-      cwd: config.cwd,
+      cwd: cwd === undefined ? process.cwd() : resolve(cwd),
       ...(preset === undefined ? {} : { agentPreset: preset.id }),
     },
     agentOptions: defaultSelection(ctx),
@@ -216,10 +238,35 @@ export async function createHostSession(ctx: Context, config: ResolvedConfig): P
 }
 
 /** Release the idle Agent and its owned resources before restoring the same Session; failed disposal never starts a replacement. */
-export async function restartHostSession(ctx: Context, current: HostSession): Promise<HostSession> {
+export async function restartHostSession(
+  ctx: Context,
+  current: HostSession,
+  onDisposed?: () => void,
+): Promise<HostSession> {
   if (current.agent.status === 'running') throw new Error('Wait for the running turn to finish or cancel it before resetting shells.')
   await current.dispose()
+  onDisposed?.()
   return resumeHostSession(ctx, current.id)
+}
+
+/**
+ * Restore the persisted preset, falling back to the registry default when the
+ * recorded identity was removed (or its mounted revision is broken) after the
+ * Session was written.
+ * @param presets - Host preset registry.
+ * @param agent - resumed Agent carrying the durable selection.
+ * @returns the preset to mount.
+ */
+async function restoredPreset(presets: AgentPresetService, agent: Agent): Promise<string> {
+  const persisted = sessionAgentPreset(agent.session)
+  if (persisted === undefined || persisted.trim() === '') return presets.defaultId
+  try {
+    const resolved = await presets.resolve(persisted)
+    return resolved.broken === undefined ? resolved.id : presets.defaultId
+  }
+  catch {
+    return presets.defaultId
+  }
 }
 
 /**
@@ -235,7 +282,7 @@ export async function resumeHostSession(ctx: Context, id: SessionId): Promise<Ho
     agentOptions: defaultSelection(ctx),
     setup: async (agentCtx: Context, agent: Agent) => {
       installModelSelection(agentCtx)
-      if (presets !== undefined) await presets.mount(agentCtx, sessionAgentPreset(agent.session) ?? presets.defaultId)
+      if (presets !== undefined) await presets.mount(agentCtx, await restoredPreset(presets, agent))
     },
   })
   return wrap(handle)

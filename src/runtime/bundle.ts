@@ -82,6 +82,34 @@ function imageExtension(mediaType: string): string {
   }
 }
 
+/**
+ * Claim one archive entry name, suffixing duplicates instead of overwriting.
+ *
+ * Two attachments can reduce to the same sanitized entry (a shared basename or
+ * ids that differ only in removed characters); an archive map would keep just
+ * the last payload while the manifest still listed both.
+ * @param used - entry names already claimed by this archive.
+ * @param base - preferred entry name.
+ * @returns a name no earlier entry uses.
+ */
+function claimEntry(used: Set<string>, base: string): string {
+  if (!used.has(base)) {
+    used.add(base)
+    return base
+  }
+  const slash = base.lastIndexOf('/')
+  const dot = base.lastIndexOf('.')
+  const stem = dot > slash ? base.slice(0, dot) : base
+  const extension = dot > slash ? base.slice(dot) : ''
+  for (let index = 2; ; index += 1) {
+    const candidate = stem + '-' + String(index) + extension
+    if (!used.has(candidate)) {
+      used.add(candidate)
+      return candidate
+    }
+  }
+}
+
 function collectRefs(events: readonly SessionEvent[]): {
   images: ImageRefLike[]
   files: FileRefLike[]
@@ -232,9 +260,11 @@ export async function exportSessionBundle(
   originalCwd = cwd,
 ): Promise<BundleExportResult> {
   const path = resolve(cwd, target)
+  signal?.throwIfAborted()
   const session = agent.session
   const events = session.snapshotEvents()
   const files: Record<string, Uint8Array> = {}
+  const entries = new Set<string>(['session.jsonl', 'manifest.json', 'README.txt'])
   const skipped: string[] = []
   const attachmentRecords: BundleAttachmentRecord[] = []
   const deliverableRecords: BundleDeliverableRecord[] = []
@@ -265,7 +295,7 @@ export async function exportSessionBundle(
         continue
       }
       const name = safeName(image.name, image.attachmentId + imageExtension(image.mediaType))
-      const entry = 'attachments/' + safeName(image.attachmentId, 'image') + '-' + name
+      const entry = claimEntry(entries, 'attachments/' + safeName(image.attachmentId, 'image') + '-' + name)
       files[entry] = stored.data
       attachmentBytes += stored.data.byteLength
       attachmentRecords.push({ kind: 'image', attachmentId: image.attachmentId, name, entry, bytes: stored.data.byteLength })
@@ -282,7 +312,7 @@ export async function exportSessionBundle(
     try {
       const data = await collectFile(attachments.readFileStream(file, signal), MAX_BUNDLE_ATTACHMENT_BYTES - attachmentBytes)
       const name = safeName(file.name, file.attachmentId)
-      const entry = 'attachments/' + safeName(file.attachmentId, 'file') + '-' + name
+      const entry = claimEntry(entries, 'attachments/' + safeName(file.attachmentId, 'file') + '-' + name)
       files[entry] = data
       attachmentBytes += data.byteLength
       attachmentRecords.push({ kind: 'file', attachmentId: file.attachmentId, name, entry, bytes: data.byteLength })
@@ -315,7 +345,7 @@ export async function exportSessionBundle(
         const data = await readBoundedFile(real, cap, 'deliverable')
         deliverableBytes += data.byteLength
         deliverableIndex += 1
-        const entry = 'deliverables/' + String(deliverableIndex) + '-' + safeName(basename(absolute), 'deliverable')
+        const entry = claimEntry(entries, 'deliverables/' + String(deliverableIndex) + '-' + safeName(basename(absolute), 'deliverable'))
         files[entry] = data
         deliverableRecords.push({ path: itemPath, entry, bytes: data.byteLength })
       } catch (error) {
@@ -353,7 +383,8 @@ export async function exportSessionBundle(
   )
   const archive = await compressBundle(files, signal)
   signal?.throwIfAborted()
-  await writeFile(path, archive, { flag: 'wx' })
+  // The archive carries credentials-adjacent session data; keep it private.
+  await writeFile(path, archive, { flag: 'wx', mode: 0o600 })
   return {
     path,
     eventCount: events.length,

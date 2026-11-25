@@ -32,6 +32,16 @@ const CATALOGUE_TTL_MS = 5 * 60 * 1000
 /** Ceiling for one lazy catalogue refresh. */
 const CATALOGUE_TIMEOUT_MS = 15_000
 
+/**
+ * How long a failed refresh keeps the route from asking again.
+ *
+ * Without it, an unreachable catalogue endpoint costs every `resolveModel` and
+ * `prepareCall` of the outage a full timeout, which is a 15-second stall on
+ * every turn. The wait is short: a recovered gateway is picked up on the next
+ * attempt, and an explicit `/codebuddy models refresh` bypasses it.
+ */
+const CATALOGUE_FAILURE_BACKOFF_MS = 30_000
+
 /** Host retry defaults, read once so the policy below can extend their code set. */
 const HOST_RETRY_DEFAULTS = resolveRetryPolicy(undefined, 'codebuddy retryPolicy')
 
@@ -56,6 +66,10 @@ interface ProfileState {
   models: CatalogueModel[]
   lastRefresh?: number
   lastError?: string
+  /** Earliest instant a failed refresh may be attempted again. */
+  retryAfter?: number
+  /** Access token the failed attempt used, so a changed credential bypasses the wait. */
+  lastFailedAccess?: string
   refreshing?: Promise<void>
 }
 
@@ -280,10 +294,10 @@ export class CodeBuddyAdapter extends LlmAdapter {
     return imageTargetOf(image)
   }
 
-  override resolveModel(provider: string, model: string, _signal?: AbortSignal): Promise<LlmResolvedModelInfo> {
+  override resolveModel(provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo> {
     return Promise.resolve().then(async () => {
       const profile = this.profileOf(provider)
-      return this.modelInfo(profile, model, await this.catalogueOf(profile))
+      return this.modelInfo(profile, model, await this.catalogueOf(profile, signal))
     })
   }
 
@@ -297,11 +311,12 @@ export class CodeBuddyAdapter extends LlmAdapter {
    * picker ever refreshed the catalogue. The refresh is the same TTL-bounded
    * one a listing performs, so a warm route costs no request.
    * @param profile - route to read.
+   * @param signal - caller cancellation for the refresh request.
    * @returns the models capability questions are answered from.
    */
-  private async catalogueOf(profile: CodeBuddyProfile): Promise<readonly CatalogueModel[]> {
+  private async catalogueOf(profile: CodeBuddyProfile, signal?: AbortSignal): Promise<readonly CatalogueModel[]> {
     const state = this.stateOf(profile)
-    await this.refreshCatalogue(profile, state, false)
+    await this.refreshCatalogue(profile, state, false, signal)
     return state.models
   }
 
@@ -343,10 +358,10 @@ export class CodeBuddyAdapter extends LlmAdapter {
     }
   }
 
-  override prepareCall(provider: string, model: string, _signal?: AbortSignal): Promise<PreparedAdapterCall> {
+  override prepareCall(provider: string, model: string, signal?: AbortSignal): Promise<PreparedAdapterCall> {
     return Promise.resolve().then(async () => {
       const profile = this.profileOf(provider)
-      const info = this.modelInfo(profile, model, await this.catalogueOf(profile))
+      const info = this.modelInfo(profile, model, await this.catalogueOf(profile, signal))
       return {
         model: info,
         stream: (options: GenerateOptions) => this.streamWithProfile(options, profile),
@@ -376,45 +391,89 @@ export class CodeBuddyAdapter extends LlmAdapter {
       payload,
       access,
       ...(signal === undefined ? {} : { signal }),
-      // One controlled replay: the first 401/403 rotates the grant and retries.
-      reauthorize: () => accessToken(store, profile, signal, true),
+      // One controlled replay: the first 401 rotates the grant and retries,
+      // reusing a token a concurrent request already rotated when possible.
+      reauthorize: (rejected: string) => accessToken(store, profile, signal, true, rejected),
     })
   }
 
   /**
    * Ensure the catalogue is fresh, at most once per TTL.
+   *
+   * A failure is remembered for a short cooldown so an outage does not cost
+   * every capability question a full request timeout, and the credential is
+   * resolved through {@link accessToken} so an expired grant is rotated before
+   * the request rather than answering the catalogue with a dead token.
    * @param profile - route to refresh.
    * @param state - the route's mutable state.
    * @param force - refresh even when the catalogue is still fresh.
+   * @param signal - caller cancellation for the request.
    */
-  private async refreshCatalogue(profile: CodeBuddyProfile, state: ProfileState, force: boolean): Promise<void> {
+  private async refreshCatalogue(
+    profile: CodeBuddyProfile,
+    state: ProfileState,
+    force: boolean,
+    signal?: AbortSignal,
+  ): Promise<void> {
     const store = this.config.store()
     if (store === undefined) return
-    if (!force && state.lastRefresh !== undefined && Date.now() - state.lastRefresh < CATALOGUE_TTL_MS) return
+    if (!force) {
+      if (state.lastRefresh !== undefined && Date.now() - state.lastRefresh < CATALOGUE_TTL_MS) return
+      if (state.retryAfter !== undefined && Date.now() < state.retryAfter) {
+        // A credential that changed since the failure — a fresh login or a
+        // rotation — is a reason to try again at once: the recorded outage may
+        // belong to the credential that just went away.
+        const current = await readGrant(store, profile)
+        if (current === undefined) return
+        if (state.lastFailedAccess !== undefined && current.access === state.lastFailedAccess) return
+        state.retryAfter = undefined
+      }
+    }
+    else {
+      // An explicit refresh is a human asking again; it must not be swallowed
+      // by the cooldown a previous attempt recorded.
+      state.retryAfter = undefined
+    }
     if (state.refreshing !== undefined) {
       await state.refreshing
       return
     }
+    // The caller's cancellation and this module's timeout are one signal, so a
+    // host that stops waiting also stops the request and a hung endpoint still
+    // ends at the ceiling.
+    const timeout = AbortSignal.timeout(CATALOGUE_TIMEOUT_MS)
+    const requestSignal = signal === undefined ? timeout : AbortSignal.any([signal, timeout])
     const attempt = (async () => {
+      let access: string | undefined
+      let priorAccess: string | undefined
       try {
-        const grant = await readGrant(store, profile)
-        if (grant === undefined) {
-          state.lastError = 'not signed in'
-          return
-        }
-        const result = await discoverModels(profile, grant.access, AbortSignal.timeout(CATALOGUE_TIMEOUT_MS))
+        priorAccess = (await readGrant(store, profile))?.access
+        access = await accessToken(store, profile, requestSignal)
+        const result = await discoverModels(profile, access, requestSignal)
         if (result.error !== undefined) {
-          state.lastError = result.error
-          this.config.onDiagnostic?.(profile.id + ': catalogue refresh failed: ' + result.error)
+          // A caller cancel is not an outage: it says nothing about the route,
+          // so it must not put the catalogue behind a cooldown.
+          if (signal?.aborted === true) return
+          this.recordCatalogueFailure(profile, state, this.describeCatalogueFailure(result.error, requestSignal), access)
           return
         }
         state.models = result.models
         state.lastRefresh = Date.now()
         state.lastError = undefined
+        state.retryAfter = undefined
+        state.lastFailedAccess = undefined
       }
       catch (error) {
-        state.lastError = error instanceof Error ? error.message : String(error)
-        this.config.onDiagnostic?.(profile.id + ': catalogue refresh failed: ' + state.lastError)
+        if (signal?.aborted === true) return
+        // A missing sign-in costs no request and is repaired by logging in, so
+        // it is reported without a cooldown that would outlast the sign-in.
+        if (error instanceof LlmError && error.code === 'MISSING_CREDENTIAL') {
+          state.lastError = 'not signed in'
+          state.lastFailedAccess = undefined
+          return
+        }
+        const message = error instanceof Error ? error.message : String(error)
+        this.recordCatalogueFailure(profile, state, this.describeCatalogueFailure(message, requestSignal), access ?? priorAccess)
       }
     })()
     state.refreshing = attempt
@@ -424,6 +483,27 @@ export class CodeBuddyAdapter extends LlmAdapter {
     finally {
       state.refreshing = undefined
     }
+  }
+
+  /** Name the module's own ceiling instead of the abort it produces. */
+  private describeCatalogueFailure(message: string, requestSignal: AbortSignal): string {
+    return requestSignal.aborted
+      ? 'the catalogue request timed out after ' + String(CATALOGUE_TIMEOUT_MS) + 'ms'
+      : message
+  }
+
+  /** Remember one failed refresh and start its cooldown. */
+  private recordCatalogueFailure(
+    profile: CodeBuddyProfile,
+    state: ProfileState,
+    message: string,
+    access: string | undefined,
+  ): void {
+    state.lastError = message
+    state.retryAfter = Date.now() + CATALOGUE_FAILURE_BACKOFF_MS
+    // Which credential failed, so a later login or rotation bypasses the wait.
+    state.lastFailedAccess = access
+    this.config.onDiagnostic?.(profile.id + ': catalogue refresh failed: ' + message)
   }
 
   /**
@@ -474,14 +554,15 @@ export class CodeBuddyAdapter extends LlmAdapter {
   /**
    * Refresh one route, or both when no id is given.
    * @param profileId - route to refresh.
+   * @param signal - caller cancellation for the refresh requests.
    * @returns one outcome per attempted route.
    */
-  async refresh(profileId?: string): Promise<readonly RefreshOutcome[]> {
+  async refresh(profileId?: string, signal?: AbortSignal): Promise<readonly RefreshOutcome[]> {
     const selected = profileId === undefined ? PROFILES : [this.profileOf(profileId)]
     const outcomes: RefreshOutcome[] = []
     for (const profile of selected) {
       const state = this.stateOf(profile)
-      await this.refreshCatalogue(profile, state, true)
+      await this.refreshCatalogue(profile, state, true, signal)
       outcomes.push({ id: profile.id, ...(state.lastError === undefined ? {} : { error: state.lastError }) })
     }
     return outcomes

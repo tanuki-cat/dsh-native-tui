@@ -5,6 +5,8 @@ import {
   credentialKeyFor,
   grantOf,
   login,
+  POLL_INTERVAL_MS,
+  POLL_TIMEOUT_MS,
   refreshGrant,
   toGrant,
   type CodeBuddyGrant,
@@ -14,7 +16,7 @@ import {
 import { CodeBuddyAdapter } from '../src/codebuddy/adapter.js'
 import { cnProfile } from '../src/codebuddy/profiles.js'
 
-afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
+afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); vi.restoreAllMocks() })
 
 const DAY = 24 * 60 * 60 * 1000
 
@@ -101,6 +103,42 @@ describe('codebuddy access tokens', () => {
     vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ code: 0, data: { accessToken: 'forced', expiresIn: 3600 } })))
     expect(await accessToken(store, cnProfile, undefined, true)).toBe('forced')
   })
+
+  it('reuses a token a concurrent request already rotated for the rejected one', async () => {
+    // The gateway refused 'stale'; the stored token is already a newer one, so
+    // rotating again would invalidate the token the other request just minted.
+    vi.stubGlobal('fetch', async () => { throw new Error('must not rotate a second time') })
+    expect(await accessToken(storeOf(freshRecord), cnProfile, undefined, true, 'stale')).toBe('good')
+  })
+
+  it('still rotates when the stored token is the one the gateway refused', async () => {
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ code: 0, data: { accessToken: 'next', expiresIn: 604800 } })))
+    expect(await accessToken(storeOf(freshRecord), cnProfile, undefined, true, 'good')).toBe('next')
+  })
+
+  it('reports a concurrent deletion instead of returning the stale grant', async () => {
+    let record: CredentialRecordLike | undefined = expiredRecord
+    const store: CredentialStoreLike = {
+      async readRecord() { return record },
+      async modifyRecord() {
+        // A logout deleted the record while this rotation waited for the lock.
+        record = undefined
+        return undefined
+      },
+      async deleteRecord() { record = undefined },
+    }
+    await expect(accessToken(store, cnProfile, undefined)).rejects.toMatchObject({ code: 'MISSING_CREDENTIAL' })
+  })
+
+  it('reports cancellation as ABORTED instead of an auth failure', async () => {
+    const controller = new AbortController()
+    vi.stubGlobal('fetch', async () => {
+      controller.abort()
+      throw new Error('The operation was aborted')
+    })
+    await expect(accessToken(storeOf(expiredRecord), cnProfile, controller.signal))
+      .rejects.toMatchObject({ code: 'ABORTED' })
+  })
 })
 
 describe('codebuddy login flow', () => {
@@ -142,6 +180,78 @@ describe('codebuddy login flow', () => {
     await vi.advanceTimersByTimeAsync(0)
     controller.abort()
     await expect(promise).rejects.toThrowError()
+  })
+
+  it('never commits a grant once the attempt was cancelled', async () => {
+    vi.useFakeTimers()
+    const controller = new AbortController()
+    vi.stubGlobal('fetch', async (url: string) => {
+      if (String(url).includes('/auth/state')) {
+        return new Response(JSON.stringify({ code: 0, data: { state: 's', authUrl: 'u' } }))
+      }
+      // The cancel lands after the gateway answered but before the grant is
+      // committed: the credential must not be written back.
+      controller.abort()
+      return new Response(JSON.stringify({ code: 0, data: { accessToken: 'resurrected', expiresIn: 604800 } }))
+    })
+    const committed: unknown[] = []
+    const promise = login(cnProfile, {
+      signal: controller.signal,
+      notify: () => {},
+      commit: async (record) => { committed.push(record) },
+    })
+    const settled = expect(promise).rejects.toThrowError(/cancelled/u)
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS + 10)
+    await settled
+    expect(committed).toHaveLength(0)
+  })
+
+  it('reports a refused poll instead of waiting out the deadline', async () => {
+    vi.useFakeTimers()
+    for (const status of [401, 403, 429, 500]) {
+      vi.stubGlobal('fetch', async (url: string) => {
+        if (String(url).includes('/auth/state')) {
+          return new Response(JSON.stringify({ code: 0, data: { state: 's', authUrl: 'u' } }))
+        }
+        return new Response(JSON.stringify({ code: 9000 + status, msg: 'refused' }), { status })
+      })
+      const committed: unknown[] = []
+      const promise = login(cnProfile, {
+        signal: new AbortController().signal,
+        notify: () => {},
+        commit: async (record) => { committed.push(record) },
+      })
+      const settled = expect(promise).rejects.toMatchObject({ name: 'GatewayError' })
+      await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS + 10)
+      await settled
+      expect(committed).toHaveLength(0)
+    }
+  })
+
+  it('aborts a hung poll at the login deadline', async () => {
+    vi.useFakeTimers()
+    let aborted = false
+    vi.stubGlobal('fetch', async (url: string, init?: { signal?: AbortSignal }) => {
+      if (String(url).includes('/auth/state')) {
+        return new Response(JSON.stringify({ code: 0, data: { state: 's', authUrl: 'u' } }))
+      }
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          aborted = true
+          reject(new Error('deadline reached'))
+        }, { once: true })
+      })
+    })
+    const promise = login(cnProfile, {
+      signal: new AbortController().signal,
+      notify: () => {},
+      commit: async () => {},
+    })
+    const settled = expect(promise).rejects.toThrowError(/timed out/u)
+    await vi.advanceTimersByTimeAsync(POLL_TIMEOUT_MS + POLL_INTERVAL_MS + 10)
+    await settled
+    // The request itself was aborted, not merely abandoned by the loop.
+    expect(aborted).toBe(true)
   })
 })
 
@@ -263,6 +373,134 @@ describe('codebuddy adapter', () => {
     const info = await adapter.resolveModel('codebuddy', 'chat-a')
     expect(info.inputModalities).toEqual(['text'])
     expect(diagnostics.some(message => message.includes('socket closed'))).toBe(true)
+  })
+
+  it('rotates an expired credential before reading the catalogue', async () => {
+    const store = storeOf(expiredRecord)
+    const seen: string[] = []
+    const authorized: string[] = []
+    vi.stubGlobal('fetch', async (url: string, init: { headers: Record<string, string> }) => {
+      seen.push(String(url))
+      if (String(url).includes('/token/refresh')) {
+        return new Response(JSON.stringify({ code: 0, data: { accessToken: 'rotated', expiresIn: 604800 } }))
+      }
+      authorized.push(init.headers.Authorization ?? '')
+      return new Response(catalogue)
+    })
+    const adapter = new CodeBuddyAdapter({ store: () => store })
+    await adapter.refresh('codebuddy')
+    // The catalogue is read with a request-ready token, not the stored dead one.
+    expect(seen[0]).toContain('/token/refresh')
+    expect(authorized).toEqual(['Bearer rotated'])
+  })
+
+  it('merges the caller signal into the catalogue request', async () => {
+    let seen: AbortSignal | undefined
+    vi.stubGlobal('fetch', async (_url: string, init: { signal?: AbortSignal }) => {
+      seen = init.signal
+      return new Response(catalogue)
+    })
+    const controller = new AbortController()
+    const adapter = new CodeBuddyAdapter({ store: () => storeOf(freshRecord) })
+    await adapter.resolveModel('codebuddy', 'chat-a', controller.signal)
+    expect(seen).toBeDefined()
+    // The forwarded signal is the caller's plus the module's timeout, so a host
+    // cancel reaches the request and the request still has its own ceiling.
+    expect(seen).not.toBe(controller.signal)
+    expect(seen?.aborted).toBe(false)
+    controller.abort()
+    expect(seen?.aborted).toBe(true)
+  })
+
+  it('backs off after a failed catalogue refresh', async () => {
+    const base = Date.now()
+    const now = vi.spyOn(Date, 'now').mockReturnValue(base)
+    let fetches = 0
+    vi.stubGlobal('fetch', async () => {
+      fetches += 1
+      throw new Error('socket closed')
+    })
+    const adapter = new CodeBuddyAdapter({ store: () => storeOf(freshRecord) })
+    await adapter.resolveModel('codebuddy', 'chat-a')
+    await adapter.resolveModel('codebuddy', 'chat-a')
+    await adapter.listModels('codebuddy')
+    // The outage is remembered: a turn made during the cooldown answers from the
+    // seed list instead of stalling for the request timeout again.
+    expect(fetches).toBe(1)
+    expect(adapter.status()[0]?.lastError).toContain('socket closed')
+
+    now.mockReturnValue(base + 31_000)
+    await adapter.listModels('codebuddy')
+    expect(fetches).toBe(2)
+    now.mockRestore()
+  })
+
+  it('retries at once when the credential changed after a failure', async () => {
+    let record: CredentialRecordLike | undefined = { kind: 'grant', payload: { access: 'old', refresh: 'r1', expires: Date.now() + DAY } }
+    const store: CredentialStoreLike = {
+      async readRecord() { return record },
+      async modifyRecord(_key, mutate) {
+        const next = await mutate(record)
+        if (next !== undefined) record = next
+        return record
+      },
+      async deleteRecord() { record = undefined },
+    }
+    let fetches = 0
+    vi.stubGlobal('fetch', async () => {
+      fetches += 1
+      throw new Error('socket closed')
+    })
+    const adapter = new CodeBuddyAdapter({ store: () => store })
+    await adapter.resolveModel('codebuddy', 'chat-a')
+    expect(fetches).toBe(1)
+    // A fresh sign-in writes a new access token; the recorded outage was about
+    // the old credential, so the route tries again instead of waiting it out.
+    record = { kind: 'grant', payload: { access: 'new', refresh: 'r1', expires: Date.now() + DAY } }
+    await adapter.resolveModel('codebuddy', 'chat-a')
+    expect(fetches).toBe(2)
+  })
+
+  it('lets an explicit refresh bypass the failure cooldown', async () => {
+    let fetches = 0
+    vi.stubGlobal('fetch', async () => {
+      fetches += 1
+      throw new Error('socket closed')
+    })
+    const adapter = new CodeBuddyAdapter({ store: () => storeOf(freshRecord) })
+    expect((await adapter.refresh('codebuddy'))[0]?.error).toContain('socket closed')
+    await adapter.listModels('codebuddy')
+    expect(fetches).toBe(1)
+    // A human asking again is not a turn: the cooldown must not swallow it.
+    expect((await adapter.refresh('codebuddy'))[0]?.error).toContain('socket closed')
+    expect(fetches).toBe(2)
+  })
+
+  it('does not cooldown-lock a route that is only missing a sign-in', async () => {
+    let record: CredentialRecordLike | undefined
+    const store: CredentialStoreLike = {
+      async readRecord() { return record },
+      async modifyRecord(_key, mutate) {
+        const next = await mutate(record)
+        if (next !== undefined) record = next
+        return record
+      },
+      async deleteRecord() { record = undefined },
+    }
+    let fetches = 0
+    vi.stubGlobal('fetch', async () => {
+      fetches += 1
+      return new Response(catalogue)
+    })
+    const adapter = new CodeBuddyAdapter({ store: () => store })
+    await adapter.resolveModel('codebuddy', 'chat-a')
+    expect(fetches).toBe(0)
+    expect(adapter.status()[0]?.lastError).toBe('not signed in')
+    // Signing in repairs the route immediately; no cooldown outlives the login.
+    record = freshRecord
+    await adapter.resolveModel('codebuddy', 'chat-a')
+    expect(fetches).toBe(1)
+    expect(adapter.status()[0]?.lastError).toBeUndefined()
   })
 
   it('declares the modalities the catalogue states, once an attachment service is mounted', async () => {

@@ -81,7 +81,7 @@ export interface CodeBuddyService {
   /** Advertised state of both routes. */
   status(): readonly ProfileStatus[]
   /** Refresh one route, or both when no id is given. */
-  refresh(profileId?: string): Promise<readonly RefreshOutcome[]>
+  refresh(profileId?: string, signal?: AbortSignal): Promise<readonly RefreshOutcome[]>
   /** Every model of one route with the modalities it declares. */
   models(profileId: string): readonly ModelSummary[]
   /** A request-ready access token for one route. */
@@ -111,16 +111,22 @@ interface AuthorizationLike {
   registerFlow(flow: AuthorizationFlowLike): () => void
 }
 
-/** Register one browser sign-in flow per deployment. */
-function registerFlows(authorization: AuthorizationLike, profiles: readonly CodeBuddyProfile[]): void {
+/**
+ * Register one browser sign-in flow per deployment.
+ * @param authorization - the authorization seam.
+ * @param profiles - deployments to register a flow for.
+ * @returns the unregister callback of every flow that registered.
+ */
+function registerFlows(authorization: AuthorizationLike, profiles: readonly CodeBuddyProfile[]): (() => void)[] {
+  const unregister: (() => void)[] = []
   for (const profile of profiles) {
     try {
-      authorization.registerFlow({
+      unregister.push(authorization.registerFlow({
         key: credentialKeyFor(profile),
         label: profile.name,
         methods: [{ id: 'oauth', label: 'Sign in with browser' }],
         run: async session => { await login(profile, session as LoginSession) },
-      })
+      }))
     }
     catch (error) {
       // A duplicate key means another family already claims this record; the
@@ -128,6 +134,7 @@ function registerFlows(authorization: AuthorizationLike, profiles: readonly Code
       globalThis.console.warn('codebuddy: sign-in flow not registered for ' + profile.id + ': ' + String(error))
     }
   }
+  return unregister
 }
 
 /**
@@ -158,7 +165,24 @@ export function apply(ctx: Context, config: Config = {}): void {
   // offered whether or not anything is configured yet; a composition without
   // the seam simply has no surface to sign in from.
   ctx.inject(['authorization'], (authorized) => {
-    registerFlows((authorized as unknown as { authorization: AuthorizationLike }).authorization, PROFILES)
+    const scoped = authorized as unknown as {
+      readonly authorization: AuthorizationLike
+      readonly logger?: { warn?(message: string): void }
+      effect(execute: () => () => void): unknown
+    }
+    const unregister = registerFlows(scoped.authorization, PROFILES)
+    // A reload or unload must give the flow keys back: a leaked registration
+    // keeps claiming the record and blocks the replacement plugin's sign-in.
+    scoped.effect(() => () => {
+      for (const withdraw of unregister) {
+        try {
+          withdraw()
+        }
+        catch (error) {
+          scoped.logger?.warn?.('codebuddy: could not unregister a sign-in flow: ' + String(error))
+        }
+      }
+    })
   })
   ctx.logger?.info?.('codebuddy: registered routes ' + PROFILES.map(profile => profile.id).join(', '))
 }

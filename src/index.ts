@@ -100,15 +100,19 @@ export async function apply(ctx: Context, config: TuiConfig): Promise<void> {
     app = await startTerminalApp(ctx, resolved, exit)
     if (replaced !== undefined) clearReloadSession()
     syncLiveSettings()
+    ctx.effect(() => async () => {
+      // A reload unloads the plugin before mounting its replacement; hand the
+      // Session on screen to that replacement. A deliberate exit keeps no claim.
+      if (!exiting && app !== undefined) rememberReloadSession(app.activeSessionId())
+      await app?.dispose()
+    }, 'native-tui: terminal lifecycle')
     debug('apply: terminal started')
   } catch (error) {
+    // Anything that fails after the terminal started (live settings, effect
+    // registration) must dispose it: no lifecycle effect exists to do so.
+    const started = app
+    app = undefined
+    await started?.dispose().catch(() => undefined)
     throw error
   }
-
-  ctx.effect(() => async () => {
-    // A reload unloads the plugin before mounting its replacement; hand the
-    // Session on screen to that replacement. A deliberate exit keeps no claim.
-    if (!exiting && app !== undefined) rememberReloadSession(app.activeSessionId())
-    await app?.dispose()
-  }, 'native-tui: terminal lifecycle')
 }

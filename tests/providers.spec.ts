@@ -291,3 +291,23 @@ describe('provider config helpers', () => {
     expect(defaultApiKeyEnv('my-gateway.v2')).toBe('MY_GATEWAY_V2_API_KEY')
   })
 })
+describe('provider baseURL validation', () => {
+  it('rejects a query, fragment or embedded credentials', () => {
+    // Each would be repeated in front of every request path, or sent as a
+    // credential the operator never configured.
+    expect(() => normalizeBaseURL('https://api.example.com/v1?key=secret')).toThrow('query or fragment')
+    expect(() => normalizeBaseURL('https://api.example.com/v1#section')).toThrow('query or fragment')
+    expect(() => normalizeBaseURL('https://user:pass@api.example.com/v1')).toThrow('credentials')
+    expect(() => normalizeBaseURL('https://user@api.example.com/v1')).toThrow('credentials')
+    expect(normalizeBaseURL('https://api.example.com/v1')).toBe('https://api.example.com/v1')
+    expect(() => buildCustomProvider({
+      route: 'query-gateway',
+      api: 'openai-completions',
+      baseURL: 'https://api.example.com/v1?token=abc',
+      apiKeyEnv: 'QUERY_GATEWAY_KEY',
+      modelId: 'query-model',
+      contextWindow: 128000,
+      maxTokens: 16384,
+    })).toThrow('query or fragment')
+  })
+})

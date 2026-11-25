@@ -10,7 +10,7 @@
 
 import { credentialState, grantOf, readCodexAccount } from '../codex/account.js'
 import { loginCodex } from '../codex/login.js'
-import { logoutCodex } from '../codex/logout.js'
+import { logoutCodex, settleCodexAuthorization } from '../codex/logout.js'
 import {
   countCodexModels,
   ensureCodexRoute,
@@ -393,6 +393,19 @@ async function logout(deps: CodexCommandDeps): Promise<void> {
     deps.notice('warning', 'The authorization or credential service is unavailable in this profile.')
     return
   }
+  // Stop and wait for a running sign-in before deciding whether anything is
+  // stored: its commit lands after this command's delete, so an early
+  // "not signed in" return would leave the credential it writes behind.
+  const settled = await settleCodexAuthorization({
+    authorization: deps.authorization,
+    credentials: deps.credentials,
+    signal: deps.signal,
+    ...(deps.wait === undefined ? {} : { wait: deps.wait }),
+  })
+  if (!settled) {
+    deps.notice('warning', 'A sign-in is still settling; try /codex logout again in a moment.')
+    return
+  }
   if (await deps.credentials.readRecord(CODEX_KEY) === undefined) {
     deps.notice('info', 'Codex: not signed in.')
     return
@@ -594,13 +607,20 @@ async function refreshModels(deps: CodexCommandDeps): Promise<void> {
     deps.notice('warning', 'The llm-pi-ai settings namespace disappeared before writing.')
     return
   }
+  let saved: Awaited<ReturnType<typeof writeSettingsOps>>
   try {
-    await writeSettingsOps(settings, 'llm-pi-ai', [
+    saved = await writeSettingsOps(settings, 'llm-pi-ai', [
       { op: 'set', path: ['providers', CODEX_PROVIDER, 'models'], value: plan.proposed },
     ], namespace.revision)
   }
   catch (error) {
     deps.notice('error', 'Could not save the model list — ' + redact(error instanceof Error ? error.message : String(error)))
+    return
+  }
+  // `undefined` means the namespace vanished while the write was being applied:
+  // the list is not known to be saved, so this must not report a registration.
+  if (saved === undefined) {
+    deps.notice('warning', 'The llm-pi-ai settings namespace disappeared while saving the model list; run /reload and retry.')
     return
   }
   if (plan.newlyAvailable.length > 0 && !await waitForModels(deps.llm, plan.newlyAvailable, { wait: deps.wait })) {

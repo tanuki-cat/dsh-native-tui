@@ -13,7 +13,12 @@ export function literalToolText(text: string): string {
 export function toolLabel(text: string, maxChars = 160, keep: 'start' | 'end' = 'start'): string {
   const normalized = literalToolText(text).replace(/\s+/gu, ' ').trim()
   if (normalized.length <= maxChars) return normalized
-  return keep === 'end' ? '…' + normalized.slice(-(maxChars - 1)) : normalized.slice(0, maxChars - 1) + '…'
+  // The budget is in UTF-16 code units; clamping the cut keeps an emoji or any
+  // other surrogate pair from being split into an isolated half.
+  const budget = Math.max(0, maxChars - 1)
+  return keep === 'end'
+    ? '…' + normalized.slice(safeTailStart(normalized, normalized.length - budget))
+    : normalized.slice(0, safeCut(normalized, budget)) + '…'
 }
 
 /**

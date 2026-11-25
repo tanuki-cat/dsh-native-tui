@@ -76,9 +76,32 @@ describe('reasoning map location', () => {
     expect(unconfigured.target.efforts).toEqual({})
   })
 
+  it('treats an empty models list as a catalog route, not a closed list', () => {
+    // `models: []` (the openai-codex route) selects the adapter's native
+    // catalogue; the map then lives in modelOverrides.
+    const located = locateReasoningMap({
+      'openai-codex': {
+        models: [],
+        modelOverrides: { 'gpt-6-sol': { reasoningEfforts: { high: 'high', max: 'max' } } },
+      },
+    }, 'openai-codex', 'gpt-6-sol')
+    expect(located.ok).toBe(true)
+    if (!located.ok) throw new Error('expected a target')
+    expect(located.target).toMatchObject({
+      storage: 'override',
+      efforts: { high: 'high', max: 'max' },
+    })
+
+    const unconfigured = locateReasoningMap({ 'openai-codex': { models: [] } }, 'openai-codex', 'gpt-6-sol')
+    expect(unconfigured.ok).toBe(true)
+    if (!unconfigured.ok) throw new Error('expected a target')
+    expect(unconfigured.target.efforts).toEqual({})
+  })
+
   it('refuses missing routes, unlisted models, and invalid maps', () => {
     expect(locateReasoningMap({}, 'gateway', 'alpha')).toEqual({ ok: false, reason: 'provider-missing' })
-    expect(locateReasoningMap({ gateway: { models: [] } }, 'gateway', 'alpha'))
+    // A non-empty list is explicit: a model outside it is not offered.
+    expect(locateReasoningMap({ gateway: { models: [{ id: 'beta' }] } }, 'gateway', 'alpha'))
       .toEqual({ ok: false, reason: 'model-not-listed' })
     expect(locateReasoningMap({
       gateway: { models: [{ id: 'alpha', reasoningEfforts: { high: '' } }] },
