@@ -113,7 +113,8 @@ dnt --resume <session-id>        # 参数原样透传；退出时会打印这条
 - 显示密度可配置：`thinkingDisplay` 与 `runCodeDisplay` 均为 `hidden | compact | detailed`，见[配置](#配置)。reasoning 若以 provider 的 `<signature>` 块开头，显示层会剥掉签名与随后的换行，纯签名块不渲染 thinking 卡片；`compact` 的预览在流式时取最后一个已完成段落的首行，结束后取首行，并去掉 `**` 标记。
 - PTC 的 `run_code` 卡片在 `compact` 下列出实际子调用：`skill` 显示实际技能名，如 `Skill daily-log-writer`；文件工具显示路径；bash/pwsh 优先显示实际命令及显式 workdir，多行命令用 `↵` 标记；MCP 显示服务、方法与目标，如 `MCP idea.get_file_problems src/a.ts`；`todo_write` 显示任务数量、进行中/完成数量和当前任务，不虚构文件路径。同一摘要只出现一次，长值标记截断，路径优先保留文件名；超过 10 行折叠为 `+ N more calls`，失败时保留错误首行。
 - 上下文压缩：默认 preset 启用 `compaction-basic` 与 tool-result pruner。TUI 渲染 compaction start/summary/end；prune 隐藏对应 tool 卡片并保留 prune notice；session 级 tool memory 会忽略同一 callId 的晚到 / 重复 call/result，即使原始事件已离开 retained window。进程在 compaction 中途崩溃后 resume，卡片尾行显示 `⚠ interrupted` 而不是一直停在 `⟳ compacting…`。`/compact` 作为 Host command 可手动触发。
-- 终端窗口标题：启动后写入 `<产品标题> · <workspace 目录名>`（OSC 0），标签页能直接看出是哪个 checkout 的会话，例如 `DeepSeek Harness · dsh-native-tui`。控制字符会被压平（BEL 会截断 OSC 序列），目录名超过 48 字符截断；只在标题变化时写入。
+- 终端窗口标题：启动后写入 `<产品标题> · <workspace 目录名>`（OSC 0），标签页能直接看出是哪个 checkout 的会话，例如 `DeepSeek Harness · dsh-native-tui`。控制字符会被压平（BEL 会截断 OSC 序列），目录名超过 48 字符截断；只在标题变化时写入。启动时同时把进程名设为 `dsh`：iTerm2 的 Show current job name 读前台进程的 argv[0]，否则标签页会在标题后追加 `(node)`。
+- 终端标签页状态通过 OSC 7501 Program Status Protocol 上报 `idle` / `working` / `blocked` / `done` / `error`，程序标识固定为 `app=dsh`。turn 运行中为 `working`。审批和问答的提示分别为 `waiting:permission` 和 `waiting:question`，通过 OSC 7501 的 `msg` 字段发送，状态为 `blocked`，类型为 `permission` 或 `question`。`turn/end` 的 `completed` 与 `error` 在下一轮开始前保持 `done` / `error`，取消、中断、token 上限等结束原因回落为 `idle`。默认启动时查询终端是否支持 OSC 7501，收到支持回复后上报状态。状态变化时更新，退出时清除。OSC 0 标题独立维护。
 - 页面骨架：header 展示产品标题和 Session id，区域之间使用留白。输入框以 `›` 开头，空输入时显示 `Ask DeepSeek Harness to do anything`；提示不进入草稿或请求。面板通过终端实际背景混色，滚动时保留隐藏行数提示；执行等待/重试行位于输入框上方。输入框下方固定两行：`provider/model effort · ~/workspace · git main · Ready · Context 42% used`，以及模式、原生权限与快捷键。字段以低对比度的 ` · ` 分隔，工作目录会将 home 简写为 `~`；工作区位于 Git 仓库时在目录后显示当前分支（detached HEAD 显示短 commit），目录不在 Git 仓库内（或 `HEAD` 不可读）时不显示该字段。
 - 状态栏按终端显示列宽自适应：宽屏补充 preset、附件数与已产生的 turns/steps/tok/s/tok/cache，零值计数和未知统计不占主状态行；窄屏缩短目录、去掉 `git ` 标签和字段标签、隐藏辅助字段，优先保留模型、Ready/Working、上下文和附件提示。模式与原生权限优先于快捷键。两行均不自动折行，极窄窗口截断；放大终端会恢复被隐藏的信息，中文、emoji 和 ANSI 着色均按实际列宽计算。
 - 模型名与 reasoning effort 统一使用柔和暖色，目录绿色、Ready 紫色；provider 使用次级文本；上下文与统计字段整段着色：上下文按阈值由强调蓝转黄/红，turns/steps 强调蓝、tok/s 绿色、tok 暖色、cache 紫色。推理选择控件保留 7 档颜色（off 灰 / minimal 青绿 / low 暗绿 / medium 浅蓝 / high 粉红 / xhigh 洋红 / max 红）；preset 保留紫色，附件和交互强调使用蓝色，Git 分支名同样使用强调蓝。Working、告警、危险权限和上下文阈值保留警示色；`plain` 主题不着色。
@@ -609,6 +610,7 @@ node scripts/fake-tty-ptc-compact.mjs        # PTC compact 调用列表（含 PT
 node scripts/fake-tty-presets-compact.mjs    # standard / minimal 不受 PTC 改动影响
 node scripts/fake-tty-thinking-tool.mjs      # reasoning 占位符与工具调用的先后
 node scripts/fake-tty-window-title.mjs       # 终端窗口标题（OSC 0）
+node scripts/fake-tty-tab-status.mjs         # OSC 7501 协商、运行、审批与问答、退出清理
 node scripts/fake-tty-git-branch.mjs         # 状态行 Git 分支：仓库内显示分支、仓库外不显示
 node scripts/fake-tty-stream-smooth.mjs      # 流式大 chunk
 node scripts/fake-tty-main-screen-scroll.mjs # main-screen 长 transcript
@@ -671,6 +673,7 @@ npm 路径预留在 `publish-npm` job，默认跳过：需要仓库变量 `NPM_P
 | 画面被日志覆盖 | 已由 `console` 接管机制处理；仍有输出时用 `DSH_NATIVE_TUI_DEBUG=1` 定位来源 |
 | `dnt` 命令不存在 | 用 `dsh --profile tui` 启动；或检查 `DSH_HOME` 是否为默认值、`DSH_NATIVE_TUI_NO_LAUNCHER` 是否被设置 |
 | 终端标题没变化 | 部分终端默认忽略 OSC 0；需在终端设置里允许应用修改标签页标题 |
+| 标签页不显示 Working / Done | 原生状态需要终端支持并回复 OSC 7501（Rex、cmux、iTerm2 3.7.5+ 等）；不支持的终端只显示 OSC 0 标题 |
 
 ## 已知差距
 

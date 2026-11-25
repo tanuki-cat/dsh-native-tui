@@ -452,3 +452,10 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 
 - 基于 `main`（`c9c87ab`）完成四路全量只读审查并分 4 组完成全部 46 项修复（Critical 1 项、High 10 项、Medium 19 项、Low/Nit 16 项），涵盖多行弹窗栈溢出崩溃、`readBoundedFile` 16 MiB 内存回归、窗口裁剪伪造 `Tool` 卡片、`mcp-recovery` 错误码与正则对齐、`switchTo`/重启会话状态机与双重 dispose、空字符串配置防护、`off` 下 Host `/plan` 门禁、Codex/CodeBuddy 登出取消在途登录、CodeBuddy 目录刷新续期与退避/轮询错误码与 deadline/图片预算/SSE 心跳与 post-finish 宽限、斜杠命令取消/idle 守卫/凭据写入顺序与回滚、`src/ui/app.ts` 拆分降行数等。[第二轮审查与修复记录](design-task-fix-audit-round-2.md)
 - 经独立只读 diff 复审补修 7 项边界问题后，`pnpm check` 全量通过（139 个测试文件 / 2,051 项测试、类型检查、构建），无源文件超过 1,000 行（`src/ui/app.ts` 降至 794 行）。
+
+## 2026-11-25 · 终端标签页状态（OSC 7501）
+
+- `src/ui/tab-status.ts` 根据运行态、审批或问答弹窗和最近一次 `turn/end` 结果生成标签页状态，再通过 pi-tui 按变化上报 OSC 7501 记录，标识为 `app=dsh`。默认启动时发送能力查询 `OSC 7501 ; ? ST`，收到支持回复后上报状态，并在退出时发送 `state=clear`。审批和问答对应 `blocked` 状态的 `permission` 和 `question` 类型，提示分别是 `waiting:permission` 和 `waiting:question`。带 `approval` 意图的问答请求按审批上报。重叠弹窗按实例登记，关闭后保留其余弹窗的顺序。会话切换清空上一轮结果及弹窗记录。
+- 状态语义：弹窗优先于运行态（`blocked`），`completed` → `done`，`error` → `error`，`aborted` / `interrupted` / `blocked` / `forked` / `max-tokens` → `idle`（取消不伪装成完成）；`done` / `error` 保持到下一轮开始。标题仍由 OSC 0 单独维护，两者互不覆盖。
+- 启动时设置 `process.title = 'dsh'`：iTerm2 的 Show current job name 取前台进程 argv[0]（源码为 `argv0 ?? name`），Node 默认显示 `(node)`；改为 `(dsh)`，不影响 OSC 0 标题与 OSC 7501 记录。
+- `tests/tab-status.spec.ts` 的 15 项测试通过，覆盖状态映射、去重、重叠弹窗乱序关闭和旧会话弹窗清理。真实 Host 探针 `scripts/fake-tty-tab-status.mjs` 模拟终端协商回复，验证 `idle → working → done → blocked:permission → done → blocked:question → done → clear` 的完整顺序、两种 `waiting` 提示及 OSC 0 工作区标题。`pnpm check` 通过（140 个测试文件、2,066 项测试、类型检查和构建）。

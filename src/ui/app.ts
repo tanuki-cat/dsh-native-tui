@@ -17,6 +17,7 @@ import { approvalArguments, approvalReceipt } from './approval-preview.js'
 import type { PendingAttachment } from '../runtime/attachments.js'
 import { TuiAutocompleteProvider, type SessionReferenceService, type SkillSuggestion } from './autocomplete.js'
 import { currentPreset, renderStatusRows, terminalWindowTitle } from './status-line.js'
+import { TabBlockingDialogs, TabStatusReporter, tabActivity, type TabBlockedKind, type TabOutcome } from './tab-status.js'
 import { createStatusRows } from './status-rows.js'
 import { debug } from '../debug.js'
 import { globalShortcut } from './keymap.js'
@@ -69,6 +70,9 @@ export async function startTerminalApp(
   config: ResolvedConfig,
   onExit: (code: number) => void,
 ): Promise<TerminalApp> {
+  // iTerm2 appends the foreground job's argv[0] to the tab title; a Node
+  // process is named `node`, which says nothing about the program.
+  process.title = 'dsh'
   const { terminal, terminalTheme, palette, tui, header, editor, waitStatus, status, footer, renderer } =
     createTerminalSurface(config)
   let reasoningEffort: string | undefined
@@ -122,6 +126,11 @@ export async function startTerminalApp(
   let title = config.title
   /** Last title written to the terminal, so a repaint does not repeat the sequence. */
   let windowTitle: string | undefined
+  /** Terminal tab record; a repaint writes it only when the state moves. */
+  const tabStatus = new TabStatusReporter(terminal)
+  const blockingDialogs = new TabBlockingDialogs()
+  /** Outcome of the last settled turn, held until the next turn starts. */
+  let tabOutcome: TabOutcome | undefined
   let selectedPreset: string | undefined = sessionAgentPreset(active.agent.session)
     ?? config.agentPreset
     ?? (host.get('agentPresets') as AgentPresetService | undefined)?.defaultId
@@ -164,6 +173,30 @@ export async function startTerminalApp(
     terminal.setTitle(next)
   }
 
+  /**
+   * Report the tab's program state (OSC 7501).
+   *
+   * The tab names the whole program, not one frame: the record follows turn
+   * boundaries, blocking dialogs and settlements, not every painted row.
+   */
+  const syncTabStatus = (): void => {
+    if (shutdown.disposed) return
+    tabStatus.report(tabActivity({
+      running: active.agent.status === 'running',
+      blocked: blockingDialogs.current,
+      outcome: tabOutcome,
+    }))
+  }
+
+  const trackBlockingDialog = (kind: TabBlockedKind): (() => void) => {
+    const close = blockingDialogs.open(kind)
+    syncTabStatus()
+    return () => {
+      close()
+      syncTabStatus()
+    }
+  }
+
   const lastDurableSeq = (): number | undefined => {
     for (let index = entries.length - 1; index >= 0; index -= 1) {
       const entry = entries[index]
@@ -198,7 +231,11 @@ export async function startTerminalApp(
   const clearWait = (): void => { frames.clear() }
 
   /** Execution status follows Host events, never receipt or playback of text. */
-  const beginWait = (retry?: WaitRetry): void => { frames.beginWait(retry) }
+  const beginWait = (retry?: WaitRetry): void => {
+    // A starting turn replaces the settled record kept for the last one.
+    tabOutcome = undefined
+    frames.beginWait(retry)
+  }
 
   const pushNotice = (tone: 'info' | 'warning' | 'error' | 'success', text: string, contextReport?: ContextReportData): void => {
     const streamKey = streamingRowKey(entries)
@@ -286,6 +323,8 @@ export async function startTerminalApp(
       stats: inputs.stats,
       events: inputs.events,
     }, metricsFold)
+    // The record is terminal state; the row's own deduplication does not apply.
+    syncTabStatus()
     if (!statusRows.changed) return
     syncWindowTitle()
     tui.requestRender()
@@ -336,7 +375,11 @@ export async function startTerminalApp(
       attemptPosition: id => attemptPositions.get(id),
       beginWait,
       retryScheduled: retry => beginWait(retry),
-      endWait: reason => { frames.finishWait(reason) },
+      endWait: reason => {
+        frames.finishWait(reason)
+        tabOutcome = reason.kind === 'completed' ? 'done' : reason.kind === 'error' ? 'error' : undefined
+        syncTabStatus()
+      },
     })
     // The Host's app-boot package declares this event and is outside this plugin's type dependencies.
     const stopReload = (host as unknown as { on(name: 'app-boot/config-reload', callback: () => void): () => void })
@@ -363,16 +406,25 @@ export async function startTerminalApp(
       agent.ctx.on('approval/request', async (request, next) => {
         if (request.agent !== agent) return next()
         const args = approvalArguments(agent.session.snapshotEvents(), request.toolName, request.callId)
-        const outcome = await showApproval(tui, palette, request, interactionSignal(request.signal), { cwd: summaryCwd() })
-        if (!shutdown.disposed && active.agent === agent) {
-          const receipt = approvalReceipt(request.toolName, args, outcome)
-          pushNotice(receipt.tone, receipt.text)
+        const close = trackBlockingDialog('permission')
+        try {
+          const outcome = await showApproval(tui, palette, request, interactionSignal(request.signal), { cwd: summaryCwd() })
+          if (!shutdown.disposed && active.agent === agent) {
+            const receipt = approvalReceipt(request.toolName, args, outcome)
+            pushNotice(receipt.tone, receipt.text)
+          }
+          return outcome
         }
-        return outcome
+        finally { close() }
       }),
       agent.ctx.on('user-questions/request', async (request, next) => {
         if (request.agent !== agent) return next()
-        return showQuestionBatch(tui, palette, request.questions, interactionSignal(request.signal))
+        const kind = request.questions.some(question => question.intent?.kind === 'approval') ? 'permission' : 'question'
+        const close = trackBlockingDialog(kind)
+        try {
+          return await showQuestionBatch(tui, palette, request.questions, interactionSignal(request.signal))
+        }
+        finally { close() }
       }),
     ]
   }
@@ -416,6 +468,9 @@ export async function startTerminalApp(
           drafts.save(active.agent.session, { text: editor.getExpandedText(), attachments: pendingAttachments }, summaryCwd(), selectedPreset)
           disposeInteractions()
           clearSubscriptions()
+          // A settled turn or blocking dialog belongs to the Session leaving.
+          blockingDialogs.clear()
+          tabOutcome = undefined
           sessionScope = resetInteractionScope(sessionScope, tui)
         },
         attach: () => {
