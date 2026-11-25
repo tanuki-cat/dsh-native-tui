@@ -87,12 +87,19 @@ export async function presetCommand(
   }
 }
 
+/** A filesystem-safe stem for a default export name derived from the Session id. */
+function exportFileStem(id: string): string {
+  const cleaned = id.replace(/[^A-Za-z0-9._-]+/gu, '_').replace(/^[.]+/u, '').slice(0, 80)
+  return cleaned === '' ? 'session' : cleaned
+}
+
 /** The `/export` command. */
 export async function exportCommand(ctx: CommandContext, args: string): Promise<void> {
   // A default name is derived from the Session, so a second export would collide
   // with the first one's file; the operator's own path keeps its exact spelling.
+  // The id is untrusted storage data and must not steer the name outside cwd.
   const defaultTarget = (extension: 'jsonl' | 'html' | 'zip'): Promise<string> =>
-    availableExportPath(resolve(sessionCwd(ctx), 'dsh-session-' + ctx.active.id + '.' + extension))
+    availableExportPath(resolve(sessionCwd(ctx), 'dsh-session-' + exportFileStem(ctx.active.id) + '.' + extension))
   if (args === 'html' || args.startsWith('html ')) {
     const target = args === 'html'
       ? await defaultTarget('html')
@@ -102,7 +109,7 @@ export async function exportCommand(ctx: CommandContext, args: string): Promise<
       return
     }
     try {
-      const result = await exportSessionHtml(ctx.active.agent, target, sessionCwd(ctx))
+      const result = await exportSessionHtml(ctx.active.agent, target, sessionCwd(ctx), ctx.signal)
       ctx.notice('info', 'Exported HTML: ' + result.path + ' (' + String(result.bytes) + ' bytes, ' + String(result.eventCount) + ' events)')
     }
     catch (error) {
@@ -137,7 +144,7 @@ export async function exportCommand(ctx: CommandContext, args: string): Promise<
   }
   const target = args === '' ? await defaultTarget('jsonl') : args
   try {
-    const result = await exportSessionLog(ctx.active.agent, target, sessionCwd(ctx))
+    const result = await exportSessionLog(ctx.active.agent, target, sessionCwd(ctx), ctx.signal)
     ctx.notice('info', 'Exported ' + String(result.eventCount) + ' events to ' + result.path)
   }
   catch (error) {

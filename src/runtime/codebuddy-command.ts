@@ -42,6 +42,10 @@ interface AuthorizationLike {
     }
     readonly signal?: AbortSignal
   }): Promise<{ readonly status: string }>
+  /** Registered flow state, when the seam reports it. */
+  describe?(key: string): { readonly inFlight: boolean } | undefined
+  /** Cancel a running flow, when the seam supports it. */
+  cancel?(key: string): void
 }
 
 /** One choice row in the guided system-prompt flow. */
@@ -100,6 +104,8 @@ export interface CodeBuddyCommandDeps {
   ) => Promise<string | undefined>
   /** Edit multi-line text; absent on surfaces without overlays. */
   readonly editText?: (title: string, initialValue: string, hint: string) => Promise<string | undefined>
+  /** Poll interval used while waiting for a cancelled sign-in to release its key. */
+  readonly wait?: (ms: number) => Promise<void>
 }
 
 /** Shared placeholder for command runs that are not part of a streaming turn. */
@@ -127,7 +133,10 @@ export const CODEBUDDY_USAGE = [
 /** Providers named by the argument, or every provider when it names none. */
 export function selectProfiles(target: string): CodeBuddyProfile[] | undefined {
   if (target === '' || target === 'all') return [...PROFILES]
-  const id: ProfileId | undefined = PROFILE_ALIASES[target] ?? getProfile(target)?.id
+  // `Object.hasOwn` keeps inherited names such as `constructor` or `toString`
+  // from resolving to a profile alias and passing an unrelated object on.
+  const alias = Object.hasOwn(PROFILE_ALIASES, target) ? PROFILE_ALIASES[target] : undefined
+  const id: ProfileId | undefined = alias ?? getProfile(target)?.id
   return id === undefined ? undefined : [getProfile(id) as CodeBuddyProfile]
 }
 
@@ -244,6 +253,35 @@ async function login(deps: CodeBuddyCommandDeps, target: string): Promise<void> 
   }
 }
 
+/** Boundaries for waiting on a cancelled sign-in. */
+const LOGOUT_SETTLE_ATTEMPTS = 40
+const LOGOUT_SETTLE_INTERVAL_MS = 50
+
+/**
+ * Cancel one deployment's running sign-in and wait for it to release the key.
+ *
+ * The polling flow commits its grant when it finishes, so deleting the record
+ * without stopping it first lets a login the user just cancelled write the
+ * credential straight back.
+ * @param deps - command deps carrying the authorization seam and cancellation.
+ * @param profile - deployment being signed out.
+ * @returns false when the flow did not settle in time.
+ */
+async function settleLogin(deps: CodeBuddyCommandDeps, profile: CodeBuddyProfile): Promise<boolean> {
+  const authorization = deps.authorization
+  if (authorization?.cancel === undefined) return true
+  const key = credentialKeyFor(profile)
+  const wait = deps.wait ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)))
+  authorization.cancel(key)
+  for (let attempt = 0; attempt < LOGOUT_SETTLE_ATTEMPTS; attempt += 1) {
+    if (authorization.describe?.(key)?.inFlight !== true) return true
+    if (deps.signal.aborted) return false
+    if (attempt === LOGOUT_SETTLE_ATTEMPTS - 1) return false
+    await wait(LOGOUT_SETTLE_INTERVAL_MS)
+  }
+  return false
+}
+
 /** logout sub-command. */
 async function logout(deps: CodeBuddyCommandDeps, target: string): Promise<void> {
   const selected = selectProfiles(target)
@@ -256,6 +294,10 @@ async function logout(deps: CodeBuddyCommandDeps, target: string): Promise<void>
     return
   }
   for (const profile of selected) {
+    if (!await settleLogin(deps, profile)) {
+      report(deps, [profile.id + ': sign-in is still settling; try /codebuddy logout again in a moment'], 'warning')
+      continue
+    }
     await deps.credentials.deleteRecord(credentialKeyFor(profile))
     report(deps, [profile.id + ': signed out'])
   }
@@ -276,7 +318,7 @@ async function refresh(deps: CodeBuddyCommandDeps, target: string): Promise<void
   const lines: string[] = []
   let failed = false
   for (const profile of selected) {
-    const outcomes = await service.refresh(profile.id)
+    const outcomes = await service.refresh(profile.id, deps.signal)
     for (const outcome of outcomes) {
       if (outcome.error === undefined) lines.push(outcome.id + ': refreshed')
       else {

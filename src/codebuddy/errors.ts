@@ -101,7 +101,10 @@ export function classifyFailure(status: number, body: string): FailureKind {
 const SECRET_PATTERNS: readonly [RegExp, string][] = [
   [/\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\b/g, '<jwt>'],
   [/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/g, '$1 <redacted>'],
-  [/("(?:access|refresh|accessToken|refreshToken|id_token|state)"\s*:\s*")[^"]{4,}(")/gi, '$1<redacted>$2'],
+  [
+    /("(?:access|refresh|accessToken|refreshToken|access_token|refresh_token|id_token|state)"\s*:\s*")[^"]{4,}(")/gi,
+    '$1<redacted>$2',
+  ],
   [/\b(access_token|refresh_token|accessToken|refreshToken|state|code)=([^&\s"']{4,})/gi, '$1=<redacted>'],
 ]
 

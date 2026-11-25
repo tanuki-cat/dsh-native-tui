@@ -41,7 +41,7 @@ export interface SettingsFieldSpec {
   /** Whether the owner marks this slot secret. */
   readonly secret: boolean
   /** Allowed values for const/union-of-const nodes. */
-  readonly options?: readonly (string | number | boolean | null)[]
+  readonly options?: readonly (string | number | boolean | null | undefined)[]
   /** Declared children for object nodes. */
   readonly children?: readonly SettingsFieldSpec[]
   /** Item schema for array/dict nodes. */
@@ -123,14 +123,14 @@ function metaOf(node: Record<string, unknown> | undefined): Record<string, unkno
     : {}
 }
 
-function optionsOf(node: Record<string, unknown> | undefined, refs: Record<string, unknown> | undefined, depth = 0): readonly (string | number | boolean | null)[] | undefined {
+function optionsOf(node: Record<string, unknown> | undefined, refs: Record<string, unknown> | undefined, depth = 0): readonly (string | number | boolean | null | undefined)[] | undefined {
   if (node === undefined || depth > 8) return undefined
   const type = fieldType(node)
-  if (type === 'const') return [node.value as string | number | boolean | null]
+  if (type === 'const') return [node.value as string | number | boolean | null | undefined]
   if (type !== 'union') return undefined
   const list = node.list
   if (!Array.isArray(list)) return undefined
-  const values: (string | number | boolean | null)[] = []
+  const values: (string | number | boolean | null | undefined)[] = []
   for (const entry of list) {
     const resolved = resolveNode(entry, refs)
     const nested = optionsOf(resolved, refs, depth + 1)
@@ -343,8 +343,11 @@ export function settingsParseInput(spec: SettingsFieldSpec, raw: string): Settin
   const text = raw.trim()
   const options = spec.options ?? []
   if ((spec.type === 'const' || spec.type === 'union') && options.length > 0) {
-    const match = options.find(option => settingsFormatValue(option, 4096) === text)
-    if (match !== undefined) return { ok: true, value: match }
+    // Find by position: a union may declare an explicit `undefined` branch and
+    // `Array.prototype.find` cannot distinguish that match from "not found".
+    // `(unset)` is the label the picker and the preview use for that branch.
+    const index = options.findIndex(option => settingsFormatValue(option, 4096) === text)
+    if (index !== -1) return { ok: true, value: options[index] }
     return { ok: false, error: 'Expected one of: ' + options.map(option => settingsFormatValue(option, 60)).join(', ') }
   }
   if (spec.type === 'boolean') {

@@ -52,8 +52,12 @@ describe('bounded preview reads', () => {
     await expect(readTextPreview('broken.txt')).rejects.toThrow('read failed')
     expect(broken.close).toHaveBeenCalledOnce()
     const directory = fileHandle(6, false)
+    vi.mocked(fs.open).mockClear()
     await expect(readTextPreview('directory')).rejects.toThrow('not a regular file')
+    // A non-regular path is refused before its descriptor is opened, so there is
+    // nothing to close (and a Windows named pipe never blocks inside `open`).
     expect(directory.read).not.toHaveBeenCalled()
-    expect(directory.close).toHaveBeenCalledOnce()
+    expect(fs.open).not.toHaveBeenCalled()
+    expect(directory.close).not.toHaveBeenCalled()
   })
 })

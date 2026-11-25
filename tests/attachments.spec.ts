@@ -55,12 +55,31 @@ describe('loadAttachment', () => {
   it('commits image extensions through saveImages', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'native-tui-attach-'))
     cleanup.push(dir)
-    await writeFile(join(dir, 'pixel.png'), Uint8Array.from([137, 80, 78, 71]))
+    await writeFile(join(dir, 'pixel.png'), Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]))
     const result = await loadAttachment('pixel.png', dir, service())
     expect(result.kind).toBe('image')
     expect(result.block).toMatchObject({
       type: 'image',
       attachment: { attachmentId: 'image-0', mediaType: 'image/png' },
+    })
+  })
+
+  it('rejects an image extension whose bytes are not an image', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'native-tui-attach-'))
+    cleanup.push(dir)
+    await writeFile(join(dir, 'renamed.png'), 'plain text')
+    await expect(loadAttachment('renamed.png', dir, service())).rejects.toThrow('does not contain a supported image')
+  })
+
+  it('commits mismatched bytes with the sniffed media type', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'native-tui-attach-'))
+    cleanup.push(dir)
+    await writeFile(join(dir, 'photo.png'), Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 0x00]))
+    const result = await loadAttachment('photo.png', dir, service())
+    expect(result.kind).toBe('image')
+    expect(result.block).toMatchObject({
+      type: 'image',
+      attachment: { attachmentId: 'image-0', mediaType: 'image/jpeg' },
     })
   })
 

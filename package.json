@@ -48,8 +48,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check": "pnpm typecheck && pnpm test && pnpm build",
-    "spike:carrier": "node --import tsx src/spike/carrier.ts"
+    "check": "pnpm typecheck && pnpm test && pnpm build"
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "3.20.0-alpha.1",

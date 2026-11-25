@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, st
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { ensureLauncher, findLauncher, launcherName, launcherScript, parseProfileArg, resumeHint } from '../src/runtime/launcher.js'
+import { ensureLauncher, findLauncher, launcherName, launcherScript, parseProfileArg, resumeHint, shellQuote } from '../src/runtime/launcher.js'
 
 const cleanup: string[] = []
 
@@ -45,6 +45,10 @@ describe('launcher naming and content', () => {
     const script = launcherScript('tui')
     expect(script).toContain('# dsh-native-tui launcher: run the "tui" profile.')
     expect(script).toContain("exec dsh --profile 'tui' \"$@\"")
+  })
+
+  it('escapes a profile that would otherwise close the shell quote', () => {
+    expect(launcherScript("x'y")).toContain(`exec dsh --profile 'x'\\''y' "$@"`)
   })
 })
 
@@ -90,6 +94,31 @@ describe('ensureLauncher', () => {
     const outcome = await ensureLauncher('tui', env)
     expect(outcome).toMatchObject({ status: 'skipped', reason: 'foreign file' })
     expect(readFileSync(path, 'utf8')).toContain('foreign')
+  })
+
+  it('never overwrites an entry it cannot read for a reason other than ENOENT', async () => {
+    const root = tempRoot()
+    const env = envFor(root)
+    const path = join(root, 'bin', 'dnt')
+    // A directory at the launcher path makes readFile fail with EISDIR, not ENOENT.
+    mkdirSync(path, { recursive: true })
+
+    const outcome = await ensureLauncher('tui', env)
+    expect(outcome).toMatchObject({ status: 'skipped', reason: 'unreadable file' })
+    expect(existsSync(path) && statSync(path).isDirectory()).toBe(true)
+  })
+
+  it('restores executable bits when the content already matches', async () => {
+    const root = tempRoot()
+    const env = envFor(root)
+    const path = join(root, 'bin', 'dnt')
+    mkdirSync(join(root, 'bin'), { recursive: true })
+    writeFileSync(path, launcherScript('tui'), { mode: 0o644 })
+    chmodSync(path, 0o644)
+
+    expect((await ensureLauncher('tui', env)).status).toBe('current')
+    expect(statSync(path).mode & 0o111).not.toBe(0)
+    expect(readFileSync(path, 'utf8')).toBe(launcherScript('tui'))
   })
 
   it('recognizes a custom-named launcher for the same profile', async () => {
@@ -139,5 +168,34 @@ describe('launcher lookup and resume hint', () => {
     expect(resumeHint('work', undefined, 's1')).toBe('dsh --profile work --resume s1')
     expect(resumeHint(undefined, undefined, 's1')).toBe('dsh --profile tui --resume s1')
     expect(resumeHint('../x', undefined, 's1')).toBe('dsh --profile tui --resume s1')
+  })
+
+  it('quotes a session id that would otherwise be a shell command', () => {
+    expect(resumeHint('tui', '/home/u/.local/bin/dnt', 's1; rm -rf ~')).toBe("dnt --resume 's1; rm -rf ~'")
+    expect(resumeHint('tui', '/home/u/.local/bin/dnt', '$(touch /tmp/pwned)')).toBe("dnt --resume '$(touch /tmp/pwned)'")
+    expect(resumeHint('tui', '/home/u/.local/bin/dnt', `a'b`)).toBe(`dnt --resume 'a'\\''b'`)
+  })
+
+  it('quotes a launcher basename with shell-significant characters', () => {
+    expect(resumeHint('tui', '/home/u/.local/bin/my dnt', 's1')).toBe("'my dnt' --resume s1")
+    expect(resumeHint('tui', `/home/u/.local/bin/it's`, 's1')).toBe(`'it'\\''s' --resume s1`)
+  })
+
+  it('removes terminal instructions and line breaks from a resume session id', () => {
+    const escape = String.fromCharCode(27)
+    const bell = String.fromCharCode(7)
+    const hostile = 's1' + escape + ']52;c;UFJPT0Y=' + bell + '\n--profile other'
+    const hint = resumeHint('tui', undefined, hostile)
+    expect(hint).not.toContain(escape)
+    expect(hint).not.toContain('\n')
+    expect(hint).toBe("dsh --profile tui --resume 's1 --profile other'")
+  })
+
+  it('quotes shell words only when needed', () => {
+    expect(shellQuote('tui')).toBe('tui')
+    expect(shellQuote('a-b_c.d/e:f,g+h@i%j=k')).toBe('a-b_c.d/e:f,g+h@i%j=k')
+    expect(shellQuote('')).toBe("''")
+    expect(shellQuote('a b')).toBe("'a b'")
+    expect(shellQuote('a\nb')).toBe("'a\nb'")
   })
 })

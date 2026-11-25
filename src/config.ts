@@ -1,5 +1,6 @@
 import z from '@deepseek-ai/schemastery'
 import type { Volatile } from '@deepseek-ai/cordis'
+import { resolve } from 'node:path'
 
 /** How one optional transcript block is rendered. */
 export type DisplayMode = 'hidden' | 'compact' | 'detailed'
@@ -138,11 +139,18 @@ export function resolveVolatileValue<T>(value: T | Volatile<T> | undefined): T |
   return value as T | undefined
 }
 
+/** Treat a blank startup string as unset; `/settings host` can persist an empty value. */
+function startupValue(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined
+  const trimmed = value.trim()
+  return trimmed === '' ? undefined : trimmed
+}
+
 export function resolveConfig(config: Config | undefined): ResolvedConfig {
   const showReasoning = resolveVolatileValue(config?.showReasoning) ?? true
   return {
-    sessionId: resolveVolatileValue(config?.sessionId),
-    cwd: resolveVolatileValue(config?.cwd) ?? process.cwd(),
+    sessionId: startupValue(resolveVolatileValue(config?.sessionId)),
+    cwd: resolve(startupValue(resolveVolatileValue(config?.cwd)) ?? process.cwd()),
     showReasoning,
     showImageThumbnails: resolveVolatileValue(config?.showImageThumbnails) ?? false,
     thinkingDisplay: resolveDisplayMode(config?.thinkingDisplay) ?? (showReasoning ? 'detailed' : 'hidden'),
@@ -150,7 +158,7 @@ export function resolveConfig(config: Config | undefined): ResolvedConfig {
     maxTranscriptEntries: resolveVolatileValue(config?.maxTranscriptEntries) ?? 600,
     fullscreen: resolveVolatileValue(config?.fullscreen) ?? false,
     theme: resolveVolatileValue(config?.theme) ?? 'auto',
-    agentPreset: resolveVolatileValue(config?.agentPreset),
+    agentPreset: startupValue(resolveVolatileValue(config?.agentPreset)),
     title: resolveVolatileValue(config?.title) ?? 'DeepSeek Harness',
   }
 }

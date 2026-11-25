@@ -1,6 +1,15 @@
-import { describe, expect, it } from 'vitest'
-import { enumerateHostFields } from '../src/ui/commands/settings-host.js'
+import { describe, expect, it, vi } from 'vitest'
+import { enumerateHostFields, openHostSettings } from '../src/ui/commands/settings-host.js'
 import type { SettingsDescriptor } from '../src/ui/commands/settings-common.js'
+import type { CommandContext } from '../src/ui/commands/context.js'
+import { showChoice, showSearchChoice, showTextInput } from '../src/ui/dialogs.js'
+import type { SettingsService } from '../src/ui/commands/services.js'
+
+vi.mock('../src/ui/dialogs.js', () => ({
+  showChoice: vi.fn(),
+  showSearchChoice: vi.fn(),
+  showTextInput: vi.fn(),
+}))
 
 const schema = {
   uid: 1,
@@ -106,5 +115,45 @@ describe('enumerateHostFields', () => {
     const models = fields.find(field => field.path.join('.') === 'models')
     expect(models?.array).toBe(true)
     expect(fields.some(field => field.path.join('.') === 'models.0')).toBe(false)
+  })
+})
+
+describe('openHostSettings prefill safety', () => {
+  const stringSchema = {
+    uid: 1,
+    refs: { 1: { type: 'object', dict: { name: 2 } }, 2: { type: 'string' } },
+  }
+
+  function context(): CommandContext {
+    return {
+      tui: {} as CommandContext['tui'],
+      palette: {} as CommandContext['palette'],
+      signal: new AbortController().signal,
+      notice: () => undefined,
+    } as unknown as CommandContext
+  }
+
+  it('strips terminal control sequences from a text input prefill', async () => {
+    const settings = {
+      describe: () => [{
+        ns: 'demo',
+        schema: stringSchema,
+        value: { name: '\u001B[31mred\u001B[0m\u0007' },
+        user: {},
+        secrets: [],
+        revision: 1,
+        applies: 'live' as const,
+        autoGenerate: true,
+      }],
+    } as unknown as SettingsService
+    vi.mocked(showSearchChoice).mockResolvedValueOnce('f0').mockResolvedValueOnce('__back__')
+    vi.mocked(showChoice).mockResolvedValueOnce('edit')
+    vi.mocked(showTextInput).mockResolvedValueOnce(undefined)
+
+    await openHostSettings(context(), settings, 'demo')
+
+    const call = vi.mocked(showTextInput).mock.calls[0]!
+    expect(call[3]).not.toContain('\u001B')
+    expect(call[6]).toBe('red')
   })
 })

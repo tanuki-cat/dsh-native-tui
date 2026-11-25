@@ -36,9 +36,10 @@ export interface ChatStreamOptions {
   readonly signal?: AbortSignal
   /**
    * Rotate the credential and return a fresh token when the gateway rejects
-   * the supplied one. Called at most once per request.
+   * the supplied one. Called at most once per request; the rejected token is
+   * passed so the rotation can reuse one a concurrent request already minted.
    */
-  readonly reauthorize?: () => Promise<string>
+  readonly reauthorize?: (rejectedAccess: string) => Promise<string>
   /** Idle budget override; defaults to {@link DEFAULT_STREAM_IDLE_TIMEOUT_MS}. */
   readonly idleTimeoutMs?: number
 }
@@ -146,26 +147,73 @@ async function postChat(
  * budget. The abort fires after the rejection so the abandoned step still
  * releases its socket, and so this call's outcome cannot be mistaken for the
  * transport error the abort produces.
- * @param step - the pending request or frame read.
- * @param timeoutMs - idle budget for this step.
- * @param idle - controller aborted when the budget expires.
- * @param label - error text naming the route and budget.
- * @returns the step's value.
- * @throws {LlmError} with code `TIMEOUT` when the budget expires.
+ *
+ * The budget belongs to the whole stream, not to one wait: bytes pushed through
+ * the transport (including `:` comment heartbeats that complete no frame) call
+ * `touch`, which restarts the current wait's timer. A live connection therefore
+ * never expires merely because its frames are only heartbeats.
  */
-async function withIdleDeadline<T>(step: Promise<T>, timeoutMs: number, idle: AbortController, label: string): Promise<T> {
+interface IdleGuard {
+  /** Aborted when the budget expires; shared with the request signal. */
+  readonly signal: AbortSignal
+  /**
+   * Await one step.
+   * @param step - the pending request or frame read.
+   * @returns the step's value.
+   * @throws {LlmError} with code `TIMEOUT` when the budget expires.
+   */
+  wait<T>(step: Promise<T>): Promise<T>
+  /** Push the deadline back because the transport produced bytes. */
+  touch(): void
+  /** Clear any active idle timer once frame consumption ends. */
+  close(): void
+}
+
+/** Maximum wait for an optional trailing usage frame once `finish_reason` arrived. */
+const POST_FINISH_GRACE_MS = 2_000
+
+/**
+ * Build the idle guard for one stream.
+ * @param idle - controller aborted when the budget expires.
+ * @param timeoutMs - idle budget for each awaited step.
+ * @param label - error text naming the route and budget.
+ * @returns the guard.
+ */
+function idleGuard(idle: AbortController, timeoutMs: number, label: string): IdleGuard {
   let timer: ReturnType<typeof setTimeout> | undefined
-  const expired = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => {
-      reject(new LlmError(label, 'TIMEOUT'))
-      idle.abort()
-    }, timeoutMs)
-  })
-  try {
-    return await Promise.race([step, expired])
-  }
-  finally {
-    clearTimeout(timer)
+  let rearm: (() => void) | undefined
+  return {
+    signal: idle.signal,
+    async wait<T>(step: Promise<T>): Promise<T> {
+      let rejectExpired: ((error: Error) => void) | undefined
+      const expired = new Promise<never>((_resolve, reject) => { rejectExpired = reject })
+      const arm = (): void => {
+        if (timer !== undefined) clearTimeout(timer)
+        timer = setTimeout(() => {
+          rejectExpired?.(new LlmError(label, 'TIMEOUT'))
+          idle.abort()
+        }, timeoutMs)
+        timer.unref?.()
+      }
+      rearm = arm
+      arm()
+      try {
+        return await Promise.race([step, expired])
+      }
+      finally {
+        if (timer !== undefined) clearTimeout(timer)
+        timer = undefined
+        if (rearm === arm) rearm = undefined
+      }
+    },
+    touch(): void {
+      rearm?.()
+    },
+    close(): void {
+      if (timer !== undefined) clearTimeout(timer)
+      timer = undefined
+      rearm = undefined
+    },
   }
 }
 
@@ -173,30 +221,27 @@ async function withIdleDeadline<T>(step: Promise<T>, timeoutMs: number, idle: Ab
  * Re-arm the idle budget around every frame wait, so a stream that keeps
  * producing frames is never abandoned while it makes progress.
  * @param frames - decoded frames of one response body.
- * @param timeoutMs - idle budget between two frames.
- * @param idle - controller aborted when the budget expires.
- * @param label - error text naming the route and budget.
+ * @param guard - the stream's idle budget.
  * @returns the same frames, in order.
  * @throws {LlmError} with code `TIMEOUT` when no frame arrives in time.
  */
 async function* framesWithIdleDeadline(
   frames: AsyncGenerator<SseFrame>,
-  timeoutMs: number,
-  idle: AbortController,
-  label: string,
+  guard: IdleGuard,
+  isFinished: () => boolean,
 ): AsyncGenerator<SseFrame> {
   const iterator = frames[Symbol.asyncIterator]()
   try {
     for (;;) {
-      const step = await withIdleDeadline(iterator.next(), timeoutMs, idle, label)
+      const step = isFinished() ? await iterator.next() : await guard.wait(iterator.next())
       if (step.done === true) return
       yield step.value
     }
   }
   finally {
+    guard.close()
     // Release the abandoned demand; the read settles once the abort lands.
-    const abandoned = iterator.return?.(undefined)
-    void abandoned?.catch(() => {})
+    void iterator.return?.(undefined)?.catch(() => {})
   }
 }
 
@@ -240,21 +285,25 @@ export async function* streamChat(options: ChatStreamOptions): AsyncGenerator<St
   // replays, and aborts the socket so the request is not left open.
   const idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS
   const idle = new AbortController()
-  const requestSignal = signal === undefined ? idle.signal : AbortSignal.any([signal, idle.signal])
   const idleLabel = profile.id + ': no frame for ' + String(idleTimeoutMs) + 'ms; request aborted'
+  const guard = idleGuard(idle, idleTimeoutMs, idleLabel)
+  const requestSignal = signal === undefined ? idle.signal : AbortSignal.any([signal, idle.signal])
   let access = options.access
   let response: Response
   try {
-    response = await withIdleDeadline(postChat(profile, access, options.payload, requestSignal), idleTimeoutMs, idle, idleLabel)
-    if ((response.status === 401 || response.status === 403) && options.reauthorize !== undefined) {
+    response = await guard.wait(postChat(profile, access, options.payload, requestSignal))
+    // Only an outright rejection of the credential replays the body. A 403 is a
+    // permission answer about this account, and rotating the token would both
+    // waste a rotation and invalidate the token another request may be using.
+    if (response.status === 401 && options.reauthorize !== undefined) {
       try {
         await response.body?.cancel()
       }
       catch {
         // Best effort; the retry below is what matters.
       }
-      access = await options.reauthorize()
-      response = await withIdleDeadline(postChat(profile, access, options.payload, requestSignal), idleTimeoutMs, idle, idleLabel)
+      access = await options.reauthorize(access)
+      response = await guard.wait(postChat(profile, access, options.payload, requestSignal))
     }
   }
   catch (error) {
@@ -268,7 +317,15 @@ export async function* streamChat(options: ChatStreamOptions): AsyncGenerator<St
   }
   if (response.body === null) throw new LlmError(profile.id + ' returned no response body', 'MALFORMED_RESPONSE')
   try {
-    yield* toStreamChunks(framesWithIdleDeadline(decodeSse(response.body), idleTimeoutMs, idle, idleLabel), options.model, signal)
+    // Bytes on the wire are progress before a finish frame arrives: a `:`
+    // heartbeat keeps a long-running completion alive without completing a
+    // frame. Once `finish_reason` lands, heartbeats must not prolong the wait.
+    let finished = false
+    const frames = decodeSse(response.body, { onChunk: () => { if (!finished) guard.touch() } })
+    yield* toStreamChunks(framesWithIdleDeadline(frames, guard, () => finished), options.model, signal, {
+      onFinish: () => { finished = true; guard.close() },
+      postFinishGraceMs: Math.min(idleTimeoutMs, POST_FINISH_GRACE_MS),
+    })
   }
   catch (error) {
     if (error instanceof LlmError) throw error
@@ -286,10 +343,28 @@ interface OpenBlock {
   arguments: string
 }
 
-/** Map one OpenAI finish reason onto the harness vocabulary. */
-function mapFinishReason(reason: string): FinishReason {
+/**
+ * Map one OpenAI finish reason onto the harness vocabulary.
+ *
+ * `content_filter` is not a successful stop: the completion was cut by the
+ * provider's policy, and reporting `stop` would let the harness record a
+ * half-answer as a finished one.
+ * @param reason - upstream `finish_reason`.
+ * @param model - model id, for the failure text.
+ * @returns the harness finish reason.
+ */
+function mapFinishReason(reason: string, model: string): FinishReason {
   if (reason === 'tool_calls' || reason === 'function_call') return { kind: 'tool-calls' }
   if (reason === 'length') return { kind: 'max-tokens' }
+  if (reason === 'content_filter') {
+    return {
+      kind: 'error',
+      failure: {
+        code: 'CONTENT_FILTER',
+        message: model + ': the gateway filtered this completion (finish_reason content_filter)',
+      },
+    }
+  }
   return { kind: 'stop' }
 }
 
@@ -329,99 +404,150 @@ function usageOf(raw: unknown): TokenUsage | undefined {
  * @param signal - caller cancellation.
  * @returns raw chunks in stream order.
  */
+/** Optional hooks controlling the post-finish trailing-frame wait. */
+interface StreamChunkOptions {
+  /** Invoked as soon as a frame carries `finish_reason`. */
+  readonly onFinish?: () => void
+  /** Maximum wait for one trailing usage frame after `finish_reason`. */
+  readonly postFinishGraceMs?: number
+}
+
+/** Wait for at most one trailing frame within `graceMs`; returns `undefined` on expiry. */
+async function nextWithinGrace(
+  iterator: AsyncIterator<SseFrame>,
+  graceMs: number,
+): Promise<IteratorResult<SseFrame> | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const step = iterator.next()
+  // Avoid unhandled rejections if the grace timer wins and `return()` aborts the read.
+  step.catch(() => {})
+  const expired = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => { resolve(undefined) }, graceMs)
+    timer.unref?.()
+  })
+  try {
+    return await Promise.race([step, expired])
+  }
+  finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
 export async function* toStreamChunks(
   frames: AsyncIterable<SseFrame>,
   model: string,
   signal?: AbortSignal,
+  options?: StreamChunkOptions,
 ): AsyncGenerator<StreamChunk> {
   let nextIndex = 0
   let textBlock: OpenBlock | undefined
   let reasoningBlock: OpenBlock | undefined
   const toolBlocks = new Map<number, OpenBlock>()
   let sawTerminal = false
+  let finishReason: FinishReason | undefined
   let usage: TokenUsage | undefined
 
-  for await (const frame of frames) {
-    if (signal?.aborted === true) throw new LlmError(model + ' request aborted by caller', 'ABORTED')
-    const data = frame.data.trim()
-    if (data === '') continue
-    if (data === '[DONE]') {
-      sawTerminal = true
-      break
-    }
-    const parsed = parseJson(data)
-    if (parsed === null || typeof parsed !== 'object') continue
-    const body = parsed as Record<string, unknown>
-    const code = gatewayCodeOf(body)
-    const choices = body.choices
-    if (body.error !== undefined || (code !== undefined && code !== 0 && !Array.isArray(choices))) {
-      throw upstreamError(model, 0, data, code)
-    }
-    if (body.usage !== undefined) usage = usageOf(body.usage) ?? usage
-    if (!Array.isArray(choices) || choices.length === 0) continue
-    const choice = choices[0]
-    if (choice === null || typeof choice !== 'object') continue
-    const record = choice as Record<string, unknown>
-    const delta = record.delta
-    if (delta !== null && typeof delta === 'object') {
-      const fields = delta as Record<string, unknown>
-      const content = fields.content
-      if (typeof content === 'string' && content !== '') {
-        if (textBlock === undefined) {
-          textBlock = { index: nextIndex++, type: 'text', text: '', arguments: '' }
-          yield { type: 'block-start', index: textBlock.index, blockType: 'text' }
-        }
-        textBlock.text += content
-        yield { type: 'text-delta', index: textBlock.index, text: content }
+  const iterator = frames[Symbol.asyncIterator]()
+  try {
+    for (;;) {
+      const step = finishReason !== undefined && options?.postFinishGraceMs !== undefined
+        ? await nextWithinGrace(iterator, options.postFinishGraceMs)
+        : await iterator.next()
+      if (step === undefined || step.done === true) break
+      const frame = step.value
+      if (signal?.aborted === true) throw new LlmError(model + ' request aborted by caller', 'ABORTED')
+      const data = frame.data.trim()
+      if (data === '') continue
+      if (data === '[DONE]') {
+        sawTerminal = true
+        break
       }
-      const reasoning = typeof fields.reasoning_content === 'string'
-        ? fields.reasoning_content
-        : typeof fields.reasoning === 'string' ? fields.reasoning : ''
-      if (reasoning !== '') {
-        if (reasoningBlock === undefined) {
-          reasoningBlock = { index: nextIndex++, type: 'reasoning', text: '', arguments: '' }
-          yield { type: 'block-start', index: reasoningBlock.index, blockType: 'reasoning' }
-        }
-        reasoningBlock.text += reasoning
-        yield { type: 'reasoning-delta', index: reasoningBlock.index, text: reasoning }
+      const parsed = parseJson(data)
+      if (parsed === null || typeof parsed !== 'object') continue
+      const body = parsed as Record<string, unknown>
+      const code = gatewayCodeOf(body)
+      const choices = body.choices
+      // `error: null` is the shape a success frame may carry; only a non-null
+      // error object is a failure. A non-zero business code is always one, even
+      // when the frame also carries (possibly empty) choices.
+      if ((body.error !== undefined && body.error !== null) || (code !== undefined && code !== 0)) {
+        throw upstreamError(model, 0, data, code)
       }
-      const calls = fields.tool_calls
-      if (Array.isArray(calls)) {
-        for (const raw of calls) {
-          if (raw === null || typeof raw !== 'object') continue
-          const call = raw as { index?: unknown; id?: unknown; function?: { name?: unknown; arguments?: unknown } }
-          const callIndex = typeof call.index === 'number' ? call.index : toolBlocks.size
-          let block = toolBlocks.get(callIndex)
-          if (block === undefined) {
-            block = { index: nextIndex++, type: 'tool-call', text: '', arguments: '' }
-            toolBlocks.set(callIndex, block)
-            yield { type: 'block-start', index: block.index, blockType: 'tool-call' }
+      if (body.usage !== undefined) usage = usageOf(body.usage) ?? usage
+      // A finish frame already settled this completion. At most one trailing
+      // frame is consumed within the grace window so OpenAI usage accounting is
+      // preserved without hanging on post-finish heartbeats.
+      if (finishReason !== undefined) break
+      if (!Array.isArray(choices) || choices.length === 0) continue
+      const choice = choices[0]
+      if (choice === null || typeof choice !== 'object') continue
+      const record = choice as Record<string, unknown>
+      const delta = record.delta
+      if (delta !== null && typeof delta === 'object') {
+        const fields = delta as Record<string, unknown>
+        const content = fields.content
+        if (typeof content === 'string' && content !== '') {
+          if (textBlock === undefined) {
+            textBlock = { index: nextIndex++, type: 'text', text: '', arguments: '' }
+            yield { type: 'block-start', index: textBlock.index, blockType: 'text' }
           }
-          if (typeof call.id === 'string' && call.id !== '') block.id = call.id
-          if (typeof call.function?.name === 'string' && call.function.name !== '') block.name = call.function.name
-          const argumentsDelta = typeof call.function?.arguments === 'string' ? call.function.arguments : ''
-          block.arguments += argumentsDelta
-          yield {
-            type: 'tool-call-delta',
-            index: block.index,
-            id: ToolCallId(block.id ?? 'call_' + String(callIndex)),
-            ...(block.name === undefined ? {} : { name: block.name }),
-            argumentsDelta,
+          textBlock.text += content
+          yield { type: 'text-delta', index: textBlock.index, text: content }
+        }
+        const reasoning = typeof fields.reasoning_content === 'string'
+          ? fields.reasoning_content
+          : typeof fields.reasoning === 'string' ? fields.reasoning : ''
+        if (reasoning !== '') {
+          if (reasoningBlock === undefined) {
+            reasoningBlock = { index: nextIndex++, type: 'reasoning', text: '', arguments: '' }
+            yield { type: 'block-start', index: reasoningBlock.index, blockType: 'reasoning' }
+          }
+          reasoningBlock.text += reasoning
+          yield { type: 'reasoning-delta', index: reasoningBlock.index, text: reasoning }
+        }
+        const calls = fields.tool_calls
+        if (Array.isArray(calls)) {
+          for (const raw of calls) {
+            if (raw === null || typeof raw !== 'object') continue
+            const call = raw as { index?: unknown; id?: unknown; function?: { name?: unknown; arguments?: unknown } }
+            const callIndex = typeof call.index === 'number' ? call.index : toolBlocks.size
+            let block = toolBlocks.get(callIndex)
+            if (block === undefined) {
+              block = { index: nextIndex++, type: 'tool-call', text: '', arguments: '' }
+              toolBlocks.set(callIndex, block)
+              yield { type: 'block-start', index: block.index, blockType: 'tool-call' }
+            }
+            if (typeof call.id === 'string' && call.id !== '') block.id = call.id
+            if (typeof call.function?.name === 'string' && call.function.name !== '') block.name = call.function.name
+            const argumentsDelta = typeof call.function?.arguments === 'string' ? call.function.arguments : ''
+            block.arguments += argumentsDelta
+            yield {
+              type: 'tool-call-delta',
+              index: block.index,
+              id: ToolCallId(block.id ?? 'call_' + String(callIndex)),
+              ...(block.name === undefined ? {} : { name: block.name }),
+              argumentsDelta,
+            }
           }
         }
       }
-    }
-    const reason = record.finish_reason
-    if (typeof reason === 'string' && reason !== '') {
-      sawTerminal = true
-      if (textBlock === undefined && reasoningBlock === undefined && toolBlocks.size === 0) {
-        throw new LlmError(model + ': upstream returned a completion with no content', 'EMPTY_RESPONSE')
+      const reason = record.finish_reason
+      if (typeof reason === 'string' && reason !== '') {
+        sawTerminal = true
+        if (textBlock === undefined && reasoningBlock === undefined && toolBlocks.size === 0) {
+          throw new LlmError(model + ': upstream returned a completion with no content', 'EMPTY_RESPONSE')
+        }
+        // Keep reading for one bounded post-finish step so trailing usage is
+        // captured without hanging if the gateway only sends heartbeats.
+        if (finishReason === undefined) {
+          finishReason = mapFinishReason(reason, model)
+          options?.onFinish?.()
+        }
       }
-      yield* closeBlocks(textBlock, reasoningBlock, toolBlocks, model)
-      if (usage !== undefined) yield { type: 'usage', usage }
-      yield { type: 'finish', reason: mapFinishReason(reason) }
-      return
     }
+  }
+  finally {
+    void iterator.return?.(undefined)?.catch(() => {})
   }
 
   if (!sawTerminal) {
@@ -432,7 +558,7 @@ export async function* toStreamChunks(
   }
   yield* closeBlocks(textBlock, reasoningBlock, toolBlocks, model)
   if (usage !== undefined) yield { type: 'usage', usage }
-  yield { type: 'finish', reason: { kind: 'stop' } }
+  yield { type: 'finish', reason: finishReason ?? { kind: 'stop' } }
 }
 
 /** Close every open block, in allocation order, as one chunk list. */

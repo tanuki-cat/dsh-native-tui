@@ -135,3 +135,60 @@ describe('Codex route setup', () => {
     await expect(countCodexModels(undefined)).resolves.toEqual({ count: 0, error: 'the LLM catalogue service is unavailable' })
   })
 })
+
+describe('Codex route conflict recovery', () => {
+  it('reports a concurrently written route instead of overwriting it', async () => {
+    let value: Record<string, unknown> = { providers: {} }
+    let revision = 1
+    let conflicted = false
+    const mutate = vi.fn(async (_ns: string, ops: readonly SettingsPathOp[], expected?: number) => {
+      if (!conflicted) {
+        // Another worker commits its own route while this write held a stale
+        // revision; replaying the object write would silently replace it.
+        conflicted = true
+        value = { providers: { 'openai-codex': { models: [{ id: 'gpt-6-sol', reasoningEfforts: { high: 'high' } }] } } }
+        revision += 1
+        throw Object.assign(new Error('stale revision'), { code: 'SETTINGS_CONFLICT' })
+      }
+      if (expected !== undefined && expected !== revision) {
+        throw Object.assign(new Error('stale revision'), { code: 'SETTINGS_CONFLICT' })
+      }
+      for (const op of ops) {
+        if (op.op === 'set') setPath(value, op.path, op.value)
+        else unsetPath(value, op.path)
+      }
+      revision += 1
+    })
+    const service: SettingsAccess = {
+      describe: (): readonly SettingsNamespace[] => [{ ns: 'llm-pi-ai', value, revision }],
+      mutate,
+    }
+    const state = await ensureCodexRoute(service, llmOf())
+    expect(state).toEqual({ kind: 'present' })
+    expect(mutate).toHaveBeenCalledTimes(1)
+    expect((value.providers as Record<string, unknown>)['openai-codex'])
+      .toEqual({ models: [{ id: 'gpt-6-sol', reasoningEfforts: { high: 'high' } }] })
+  })
+
+  it('reports a concurrently added credential reference instead of erasing it', async () => {
+    let value: Record<string, unknown> = { providers: {} }
+    let revision = 1
+    let conflicted = false
+    const service: SettingsAccess = {
+      describe: (): readonly SettingsNamespace[] => [{ ns: 'llm-pi-ai', value, revision }],
+      mutate: async (_ns, _ops, expected) => {
+        if (!conflicted) {
+          conflicted = true
+          value = { providers: { 'openai-codex': { apiKeyEnv: 'CODEX_API_KEY' } } }
+          revision += 1
+          throw Object.assign(new Error('stale revision'), { code: 'SETTINGS_CONFLICT' })
+        }
+        if (expected !== undefined && expected !== revision) {
+          throw Object.assign(new Error('stale revision'), { code: 'SETTINGS_CONFLICT' })
+        }
+        revision += 1
+      },
+    }
+    await expect(ensureCodexRoute(service, llmOf())).resolves.toEqual({ kind: 'blocked', apiKeyEnv: 'CODEX_API_KEY' })
+  })
+})

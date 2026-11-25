@@ -18,14 +18,26 @@ interface PartComponent {
   readonly text: string
   readonly raw: string
   readonly display: string
+  /** Whether `display` contains any ESC/C1 byte that could open a multi-chunk sequence. */
+  readonly hasControl: boolean
+  /** Whether this part belongs to a still-streaming block; compact previews follow it. */
+  readonly live: boolean
   readonly component: Component
   readonly body: PartBody
 }
 
-function canIncrementallySanitize(previous: string, next: string): boolean {
-  if (!next.startsWith(previous) || previous.endsWith('\r')) return false
-  const tail = previous.slice(-16)
-  return !/\u001B[^\n]*$/u.test(tail) && !/[\u0080-\u009F][^\n]*$/u.test(tail)
+const CONTROL_BYTE = /[\u001B\u0080-\u009F]/u
+
+/**
+ * Whether appending a chunk can reuse the already sanitized prefix.
+ *
+ * Sanitizing a slice cannot see a terminal sequence whose introducer is in the
+ * settled prefix, so the prefix must be plain text. Tracking `hasControl`
+ * incrementally per appended chunk keeps normal streaming O(n) while still
+ * catching arbitrarily long OSC 8 bodies or URIs.
+ */
+function canIncrementallySanitize(previous: PartComponent, next: string): boolean {
+  return !previous.hasControl && !previous.display.endsWith('\r') && next.startsWith(previous.display)
 }
 
 /** One message keeps its completed parts and only updates the streaming leaf. */
@@ -45,29 +57,35 @@ export class AssistantMessage extends Container {
       ...(block.reasoning === undefined ? [] : [{ type: 'reasoning' as const, text: block.reasoning }]),
       { type: 'text' as const, text: block.text },
     ]
-    const visible: Array<Pick<PartComponent, 'type' | 'text' | 'raw' | 'display'>> = []
+    const visible: Array<Pick<PartComponent, 'type' | 'text' | 'raw' | 'display' | 'hasControl' | 'live'>> = []
     for (const part of content) {
       // A signature-only block has nothing to show; it must not add a card.
       const display = part.type === 'reasoning' ? reasoningText(part.text) : part.text
       if (display.trim() === '' || part.type === 'reasoning' && mode === 'hidden') continue
+      const live = part.type === 'reasoning' && block.live
       const before = this.parts[visible.length]
+      const extendsPrefix = before?.type === part.type && display.startsWith(before.display)
+      const delta = extendsPrefix ? display.slice(before.display.length) : display
+      const hasControl = extendsPrefix ? before.hasControl || CONTROL_BYTE.test(delta) : CONTROL_BYTE.test(display)
       let text: string
-      if (before?.type === part.type && before.raw === part.text) {
+      if (before?.type === part.type && before.raw === part.text && before.live === live) {
         text = before.text
       } else if (part.type === 'text' || mode !== 'compact') {
-        text = before?.type === part.type && canIncrementallySanitize(before.display, display)
-          ? before.text + sanitizeTerminalText(display.slice(before.display.length))
+        text = before?.type === part.type && before.live === live && canIncrementallySanitize(before, display)
+          ? before.text + sanitizeTerminalText(delta)
           : sanitizeTerminalText(display)
       } else {
         text = 'thinking · ' + clipGraphemes(sanitizeTerminalText(reasoningPreview(display, block.live)), 240)
       }
-      visible.push({ type: part.type, text, raw: part.text, display })
+      visible.push({ type: part.type, text, raw: part.text, display, hasControl, live })
     }
     const next = visible.map((part, index): PartComponent => {
       const before = this.parts[index]
       if (before?.type === part.type) {
         if (before.text !== part.text) before.body.setText(part.text)
-        return before.text === part.text && before.raw === part.raw ? before : { ...before, ...part }
+        return before.text === part.text && before.raw === part.raw && before.live === part.live
+          ? before
+          : { ...before, ...part }
       }
       if (part.type === 'text') {
         const body = new StreamMarkdown(part.text, this.options.markdown)

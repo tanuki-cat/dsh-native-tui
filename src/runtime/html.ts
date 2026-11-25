@@ -39,14 +39,17 @@ function section(kind: string, title: string, body: string): string {
  * @param agent - active Agent whose durable log is exported.
  * @param target - relative path resolved from cwd, or an absolute path.
  * @param cwd - Session workspace root used for relative targets.
+ * @param signal - cancels generation and the write when the command is aborted.
  * @returns written path, event count, and byte length.
  */
-export async function exportSessionHtml(agent: Agent, target: string, cwd: string): Promise<HtmlExportResult> {
+export async function exportSessionHtml(agent: Agent, target: string, cwd: string, signal?: AbortSignal): Promise<HtmlExportResult> {
+  signal?.throwIfAborted()
   const path = resolve(cwd, target)
   const session = agent.session
   const events = session.snapshotEvents()
   const chunks: string[] = []
   for (const event of events) {
+    signal?.throwIfAborted()
     if (event.type === 'user/message') {
       const source = event.data.source
       const text = contentText(event.data)
@@ -72,6 +75,7 @@ export async function exportSessionHtml(agent: Agent, target: string, cwd: strin
     }
   }
   const exportedAt = new Date().toISOString()
+  signal?.throwIfAborted()
   const html = '<!doctype html>\n<html lang="en"><head><meta charset="utf-8">'
     + '<meta name="viewport" content="width=device-width,initial-scale=1">'
     + '<title>DeepSeek Harness Session ' + escapeHtml(String(session.header.id)) + '</title>'
@@ -87,6 +91,7 @@ export async function exportSessionHtml(agent: Agent, target: string, cwd: strin
     + ' · ' + escapeHtml(session.header.cwd ?? cwd) + ' · ' + String(events.length) + ' events</div></header>'
     + chunks.join('\n')
     + '<footer>Exported ' + escapeHtml(exportedAt) + ' by dsh-native-tui.</footer></main></body></html>\n'
-  await writeFile(path, html, { encoding: 'utf8', flag: 'wx' })
+  // A transcript can quote prompts and tool output; keep the file private.
+  await writeFile(path, html, { encoding: 'utf8', flag: 'wx', mode: 0o600 })
   return { path, eventCount: events.length, bytes: Buffer.byteLength(html) }
 }

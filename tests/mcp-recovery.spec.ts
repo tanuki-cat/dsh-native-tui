@@ -29,6 +29,11 @@ function harness(manager: {
 const flush = (): Promise<void> => new Promise(resolve => setTimeout(resolve, 0))
 const failure = (message: string): unknown => ({ isError: true, error: { message } })
 const codedFailure = (code: string): unknown => ({ isError: true, error: { message: 'closed', info: { code } } })
+/** The Host's real shape: a HarnessError message plus its name/code info. */
+const hostFailure = (message: string, code: string): unknown => ({
+  isError: true,
+  error: { message, info: { name: 'McpToolError', code } },
+})
 const connected = (name: string): View => ({ name, status: { state: 'connected' } })
 
 describe('mcp recovery', () => {
@@ -76,6 +81,42 @@ describe('mcp recovery', () => {
     const restart = vi.fn(async () => undefined)
     const h = harness({ list: () => [connected('idea')], restart })
     h.emit({ name: 'mcp__idea__list' }, codedFailure('ConnectionClosed'))
+    await flush()
+    expect(restart).toHaveBeenCalledWith('idea')
+  })
+
+  it('restarts at once on the Host MCP_CONNECTION_CLOSED code', async () => {
+    const restart = vi.fn(async () => undefined)
+    const h = harness({ list: () => [connected('idea')], restart })
+    // The Host classifies the SDK's ConnectionClosed as MCP_CONNECTION_CLOSED.
+    h.emit({ name: 'mcp__idea__list' }, hostFailure(
+      'MCP tool "list_issues" failed: ConnectionClosed: Connection closed',
+      'MCP_CONNECTION_CLOSED',
+    ))
+    await flush()
+    expect(restart).toHaveBeenCalledWith('idea')
+  })
+
+  it('strips the Host failure prefix before matching transport text', async () => {
+    const restart = vi.fn(async () => undefined)
+    const h = harness({ list: () => [connected('fetch')], restart })
+    // mcpRequestError() prefixes tool and resource failures; the transport
+    // text follows the prefix and used to defeat the ^-anchored patterns.
+    h.emit({ name: 'mcp__fetch__get' }, failure('MCP tool "get" failed: Error POSTing to endpoint (HTTP 404)'))
+    await flush()
+    expect(restart).not.toHaveBeenCalled()
+    h.emit({ name: 'mcp__fetch__get' }, failure('MCP tool "get" failed: Connection closed'))
+    await flush()
+    expect(restart).toHaveBeenCalledWith('fetch')
+  })
+
+  it('recognizes the Host MCP transport closed message', async () => {
+    const restart = vi.fn(async () => undefined)
+    const h = harness({ list: () => [connected('idea')], restart })
+    h.emit({ name: 'mcp__idea__list' }, failure('MCP resources/read failed: MCP transport closed'))
+    await flush()
+    expect(restart).not.toHaveBeenCalled()
+    h.emit({ name: 'mcp__idea__list' }, failure('MCP tool "list" failed: MCP transport closed'))
     await flush()
     expect(restart).toHaveBeenCalledWith('idea')
   })

@@ -70,8 +70,10 @@ export const positiveTokens = (n: number): boolean => tokenValue(n) && n > 0
 function retention(config: Record<string, unknown> | undefined): Pick<CompactionPolicy, 'retainTokens' | 'retainRatio'> | undefined {
   const ratio = numberField(config, 'retainRatio', ratioValue)
   const tokens = numberField(config, 'retainTokens', tokenValue)
-  if (ratio !== undefined && tokens !== undefined) throw new Error('Compaction retention has both retainRatio and retainTokens.')
-  return ratio !== undefined ? { retainRatio: ratio } : tokens !== undefined ? { retainTokens: tokens } : undefined
+  // A Host config may state both; the token count takes precedence when the
+  // policy is evaluated, so keeping the ratio alongside preserves that order.
+  if (tokens !== undefined) return ratio === undefined ? { retainTokens: tokens } : { retainRatio: ratio, retainTokens: tokens }
+  return ratio !== undefined ? { retainRatio: ratio } : undefined
 }
 
 /** Resolve the same exact-target fields from a raw preset or an active Host config. */
@@ -102,7 +104,8 @@ export function thresholdTokens(window: number, reserved: number, ratio: number,
 }
 
 export function effectiveThreshold(policy: CompactionPolicy, { window, reserved }: CompactionBudget): number | undefined {
-  if (!positiveTokens(window) || !tokenValue(reserved) || policy.retainRatio !== undefined && policy.retainRatio >= policy.ratio) return undefined
+  if (!positiveTokens(window) || !tokenValue(reserved)) return undefined
+  if (policy.retainTokens === undefined && policy.retainRatio !== undefined && policy.retainRatio >= policy.ratio) return undefined
   const tokens = thresholdTokens(window, reserved, policy.ratio, policy.headroom)
   const kept = policy.retainTokens ?? Math.floor((window - reserved) * (policy.retainRatio ?? 0))
   return tokens > kept ? tokens : undefined

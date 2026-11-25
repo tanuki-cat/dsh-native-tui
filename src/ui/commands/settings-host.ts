@@ -25,6 +25,7 @@ import {
   settingsSpecOfNode,
   settingsValueAt,
 } from '../../runtime/settings.js'
+import { sanitizeTerminalText } from '../../runtime/terminal-text.js'
 import { showChoice, showSearchChoice, showTextInput } from '../dialogs.js'
 import type { CommandContext } from './context.js'
 import { findSettingsNamespace, writeSettingsOps, type SettingsDescriptor } from './settings-common.js'
@@ -201,7 +202,7 @@ async function promptValue(
   title: string,
 ): Promise<string | undefined> {
   if (spec.options !== undefined && spec.options.length > 0) {
-    const keep = settingsFormatValue(current, 200)
+    const keep = sanitizeTerminalText(settingsFormatValue(current, 200))
     return showChoice(ctx.tui, ctx.palette, title, [
       { value: '__keep__', label: 'Keep current', description: keep },
       ...spec.options.map(option => ({
@@ -213,17 +214,20 @@ async function promptValue(
   }
   if (spec.type === 'boolean') {
     return showChoice(ctx.tui, ctx.palette, title, [
-      { value: '__keep__', label: 'Keep current', description: settingsFormatValue(current) },
+      { value: '__keep__', label: 'Keep current', description: sanitizeTerminalText(settingsFormatValue(current)) },
       { value: 'true', label: 'on' },
       { value: 'false', label: 'off' },
     ], 'Enter selects · Esc cancels', ctx.signal)
   }
-  const preview = settingsFormatValue(current, 2000)
-  const initial = current === undefined
+  // A Host value can come from a remote catalogue or profile the terminal does
+  // not own; strip terminal instructions before a dialog pre-fills them.
+  const preview = sanitizeTerminalText(settingsFormatValue(current, 2000))
+  const initialText = current === undefined
     ? undefined
     : typeof current === 'string' ? current
       : typeof current === 'number' ? String(current)
         : JSON.stringify(current)
+  const initial = initialText === undefined ? undefined : sanitizeTerminalText(initialText)
   return showTextInput(
     ctx.tui,
     ctx.palette,

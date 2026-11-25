@@ -95,6 +95,18 @@ describe('file commands follow the active workspace', () => {
     }
   })
 
+  it('sanitizes the session id used for a default export name', async () => {
+    const { ctx, current, notices } = await fixture()
+    const hostile = {
+      ...ctx,
+      active: { ...ctx.active, id: '../../escape/id' },
+    } as unknown as CommandContext
+    await exportCommand(hostile, '')
+    const expected = join(current, 'dsh-session-_.._escape_id.jsonl')
+    expect(notices.join('\n')).toContain(expected)
+    expect((await readFile(expected)).byteLength).toBeGreaterThan(0)
+  })
+
   it('resolves relative deliverables for preview', async () => {
     const { ctx, notices } = await fixture()
     await deliverablesCommand(ctx, 'open 0')

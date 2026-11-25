@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -42,5 +42,21 @@ describe('exportSessionHtml', () => {
     expect(html).toContain('hello &amp; goodbye')
     expect(html).toContain('Tool · read')
     expect(html).toContain('file body')
+  })
+
+  it('writes the transcript with owner-only permissions', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'native-tui-html-'))
+    cleanup.push(dir)
+    const result = await exportSessionHtml(fakeAgent(dir), 'session.html', dir)
+    expect((await stat(result.path)).mode & 0o777).toBe(0o600)
+  })
+
+  it('stops before writing when the dispatch is already cancelled', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'native-tui-html-'))
+    cleanup.push(dir)
+    const controller = new AbortController()
+    controller.abort()
+    await expect(exportSessionHtml(fakeAgent(dir), 'session.html', dir, controller.signal)).rejects.toThrow()
+    await expect(readFile(join(dir, 'session.html'))).rejects.toMatchObject({ code: 'ENOENT' })
   })
 })

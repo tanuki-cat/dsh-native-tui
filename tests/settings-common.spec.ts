@@ -75,4 +75,21 @@ describe('writeSettingsOps', () => {
     }
     await expect(writeSettingsOps(settings, 'demo', [], 1)).rejects.toThrow('boom')
   })
+
+  it('surfaces a conflict instead of replaying an index-addressed edit', async () => {
+    let writes = 0
+    const settings: SettingsService = {
+      describe: () => [descriptor('demo', 9)],
+      update: async () => undefined,
+      mutate: async () => {
+        writes += 1
+        throw Object.assign(new Error('conflict'), { code: 'SETTINGS_CONFLICT' })
+      },
+    }
+    // Another writer may have removed or reordered the element at index 0; a
+    // replay at the fresh revision would touch a different item.
+    await expect(writeSettingsOps(settings, 'demo', [{ op: 'set', path: ['models', '0', 'id'], value: 'x' }], 8))
+      .rejects.toMatchObject({ code: 'SETTINGS_CONFLICT' })
+    expect(writes).toBe(1)
+  })
 })

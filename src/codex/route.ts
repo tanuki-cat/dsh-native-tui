@@ -9,7 +9,7 @@
  * @module dsh-native-tui/codex/route
  */
 
-import { findSettingsNamespace, writeSettingsOps, type SettingsAccess } from '../runtime/settings-write.js'
+import { findSettingsNamespace, isSettingsConflict, writeSettingsOps, type SettingsAccess } from '../runtime/settings-write.js'
 import { CODEX_PROVIDER, type ModelCatalog } from './types.js'
 
 /** What setup found or changed. */
@@ -148,10 +148,26 @@ export async function ensureCodexRoute(
   const access = settings as SettingsAccess
   const descriptor = findSettingsNamespace(access, 'llm-pi-ai')
   if (descriptor === undefined) return { kind: 'unavailable', reason: 'the llm-pi-ai settings namespace disappeared' }
-  const fresh = await writeSettingsOps(access, 'llm-pi-ai', [
-    { op: 'set', path: ['providers', CODEX_PROVIDER], value: { models: [] } },
-  ], descriptor.revision)
-  if (fresh === undefined) return { kind: 'unavailable', reason: 'the llm-pi-ai settings namespace disappeared while saving' }
+  const ops = [{ op: 'set' as const, path: ['providers', CODEX_PROVIDER], value: { models: [] } }]
+  try {
+    await access.mutate('llm-pi-ai', ops, descriptor.revision)
+  }
+  catch (error) {
+    if (!isSettingsConflict(error)) throw error
+    // The retry must not replay the write blindly: another worker may have
+    // configured this exact route in the meantime, and overwriting it with
+    // `{ models: [] }` would silently discard the settings it just wrote.
+    const fresh = routeProfile(access)
+    if (fresh.kind === 'unavailable') return { kind: 'unavailable', reason: 'the llm-pi-ai settings namespace disappeared while saving' }
+    if (fresh.kind === 'present') return { kind: 'present' }
+    if (fresh.kind === 'blocked') return { kind: 'blocked', apiKeyEnv: fresh.apiKeyEnv ?? '' }
+    const retry = findSettingsNamespace(access, 'llm-pi-ai')
+    if (retry === undefined) return { kind: 'unavailable', reason: 'the llm-pi-ai settings namespace disappeared while saving' }
+    await access.mutate('llm-pi-ai', ops, retry.revision)
+  }
+  if (findSettingsNamespace(access, 'llm-pi-ai') === undefined) {
+    return { kind: 'unavailable', reason: 'the llm-pi-ai settings namespace disappeared while saving' }
+  }
 
   return await waitForProvider(llm, options)
     ? { kind: 'added' }

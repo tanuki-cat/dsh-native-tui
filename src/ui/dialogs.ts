@@ -204,7 +204,9 @@ class TextInputDialog implements Component {
   ) {
     this.input = new Input({ prompt: '› ', placeholder })
     if (initialValue !== undefined) {
-      this.input.setValue(initialValue)
+      // Host settings are untrusted data: escape sequences there would reach the
+      // terminal through the Input, and a single-line field cannot hold breaks.
+      this.input.setValue(sanitizeTerminalText(initialValue).replace(/[\r\n\t]/gu, ' '))
       // setValue leaves the cursor before the old text; a prefilled field should
       // open at its end so typing extends the value instead of prepending to it.
       this.input.handleInput('\x05')
@@ -373,12 +375,22 @@ class MultilineInputDialog implements Component {
       borderColor: text => palette.dim(text),
       selectList: selectTheme(palette),
     }, palette.autocompleteSelection, palette.dialogBand)
-    this.editor.setText(initialValue)
+    // Host-supplied text must not carry terminal instructions into the editor.
+    this.editor.setText(sanitizeTerminalText(initialValue))
+    this.editor.hostInput(this)
     this.editor.focused = true
   }
 
   render(width: number): string[] {
     const inner = Math.max(1, width - 4)
+    // pi-tui's word wrapping recurses when a grapheme is wider than the line,
+    // which a native editor at one or two columns cannot avoid. Such a dialog
+    // cannot show its field anyway, so render the frame alone.
+    if (inner < 4) {
+      return dialogFrame([
+        ...new Text(sanitizeTerminalText(this.title), 0, 0).render(inner),
+      ], width, this.palette)
+    }
     return dialogFrame([
       ...new Text(sanitizeTerminalText(this.title), 0, 0).render(inner),
       '',
@@ -633,6 +645,14 @@ function questionTitle(question: AskUserQuestionItem, index: number, total: numb
 }
 
 /**
+ * Title rows a question overlay may occupy.
+ *
+ * A long `detail` would otherwise push the option list below the overlay's
+ * height while Enter still submits the highlighted (invisible) row.
+ */
+const QUESTION_TITLE_ROWS = 4
+
+/**
  * Toggle list for a multi-select question. Space checks the highlighted option,
  * Enter submits the checked labels, and the trailing Other row opens a
  * free-text answer that supplements them.
@@ -715,8 +735,12 @@ class MultiChoiceDialog implements Component {
 
   render(width: number): string[] {
     const inner = Math.max(1, width - 4)
+    const title = new Text(sanitizeTerminalText(this.title), 0, 0).render(inner)
+    const shown = title.length > QUESTION_TITLE_ROWS
+      ? [...title.slice(0, QUESTION_TITLE_ROWS - 1), this.palette.dim('… View full request details')]
+      : title
     return dialogFrame([
-      ...new Text(sanitizeTerminalText(this.title), 0, 0).render(inner),
+      ...shown,
       '',
       ...this.list.render(inner),
       '',
@@ -795,7 +819,7 @@ async function answerOne(
       const mode = await showChoice(tui, palette, title, [
         { value: 'answer', label: 'Answer…', description: 'Type a free-text answer' },
         { value: SKIP_ANSWER_VALUE, label: 'Skip this question', description: 'Leave this answer empty and continue' },
-      ], 'Enter selects · Esc cancels the batch', signal)
+      ], 'Enter selects · Esc cancels the batch', signal, () => QUESTION_TITLE_ROWS)
       if (mode === undefined) throw abortedQuestion()
       if (mode === SKIP_ANSWER_VALUE) return { id: question.id, selected: [] }
       const custom = await showTextInput(tui, palette, title, 'type an answer', 'Enter submits · Esc cancels the batch', signal, undefined, true)
@@ -824,7 +848,7 @@ async function answerOne(
     return { id: question.id, selected: picked.selected, ...(custom === '' ? {} : { custom }) }
   }
   for (;;) {
-    const choice = await showChoice(tui, palette, title, items, 'Enter selects · Esc cancels the batch', signal)
+    const choice = await showChoice(tui, palette, title, items, 'Enter selects · Esc cancels the batch', signal, () => QUESTION_TITLE_ROWS)
     if (choice === undefined) throw abortedQuestion()
     if (choice === SKIP_ANSWER_VALUE) return { id: question.id, selected: [] }
     if (choice !== OTHER_ANSWER_VALUE) return { id: question.id, selected: [choice] }

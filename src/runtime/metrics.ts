@@ -433,6 +433,46 @@ interface MetricsFoldState {
   decodeTokens: number
 }
 
+/** Shadow information one compaction event states about the surface it replaced. */
+interface CompactionShadow {
+  readonly shadowedSeqs?: unknown
+  readonly shadowedRange?: { readonly end?: unknown }
+}
+
+/** Durable seqs one compaction event lists as shadowed, in surface order. */
+function shadowedSeqValues(data: CompactionShadow): number[] {
+  return Array.isArray(data.shadowedSeqs)
+    ? data.shadowedSeqs.filter((seq): seq is number => typeof seq === 'number' && Number.isSafeInteger(seq))
+    : []
+}
+
+/** Highest shadowed seq. A loop keeps a 100k-node compaction from overflowing the spread stack. */
+function highestShadowedSeq(seqs: readonly number[]): number | undefined {
+  let highest: number | undefined
+  for (const seq of seqs) if (highest === undefined || seq > highest) highest = seq
+  return highest
+}
+
+/**
+ * Surface seqs this session's compactions replaced.
+ *
+ * A shadowed event stays in the durable log but no longer reaches the provider;
+ * consumers pricing the live surface skip these seqs. `shadowedSeqs` is the
+ * authoritative set: `shadowedRange` is a surface-position span whose start may
+ * be greater than its end after a prior replace, so it cannot stand in.
+ * @param events - complete durable Session event log.
+ * @returns every shadowed seq across all compaction events.
+ */
+export function compactionShadowedSeqs(events: readonly SessionEvent[]): ReadonlySet<number> {
+  const shadowed = new Set<number>()
+  for (const event of events) {
+    const type = event.type as string
+    if (type !== 'compaction/summary' && type !== 'compaction/prune') continue
+    for (const seq of shadowedSeqValues(event.data as CompactionShadow)) shadowed.add(seq)
+  }
+  return shadowed
+}
+
 /**
  * Empty fold state.
  * @returns a state that has processed no events yet.
@@ -479,12 +519,9 @@ function foldEvents(state: MetricsFoldState, events: readonly SessionEvent[], ha
         readonly shadowedSeqs?: unknown
         readonly shadowedRange?: { readonly end?: unknown }
       }
-      const shadowedSeqs = Array.isArray(data.shadowedSeqs)
-        ? data.shadowedSeqs.filter((seq): seq is number => typeof seq === 'number' && Number.isSafeInteger(seq))
-        : []
-      const shadowedEnd = shadowedSeqs.length > 0
-        ? Math.max(...shadowedSeqs)
-        : typeof data.shadowedRange?.end === 'number' ? data.shadowedRange.end : undefined
+      const shadowedSeqs = shadowedSeqValues(data)
+      const shadowedEnd = highestShadowedSeq(shadowedSeqs)
+        ?? (typeof data.shadowedRange?.end === 'number' ? data.shadowedRange.end : undefined)
       const shadowed = data.shadowedTokenCount
       if (state.latestUsageSeq !== undefined && shadowedEnd !== undefined && shadowedEnd <= state.latestUsageSeq
         && typeof shadowed === 'number' && Number.isFinite(shadowed) && shadowed > 0) {

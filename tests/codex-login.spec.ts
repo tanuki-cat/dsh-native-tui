@@ -170,3 +170,31 @@ describe('Codex sign-in driver', () => {
     expect(h.notices[0]?.text).toContain('No openai-codex sign-in flow')
   })
 })
+
+describe('Codex sign-in notices', () => {
+  it('does not repeat the manual-open hint for a URL already shown', async () => {
+    const authorization = flow(async request => {
+      request.interaction.notify({ message: 'Open', url: 'https://auth.openai.com/authorize' })
+      request.interaction.notify({ message: 'Waiting', url: 'https://auth.openai.com/authorize' })
+      request.interaction.notify({ message: 'Still waiting', url: 'https://auth.openai.com/authorize' })
+      return { status: 'authorized' }
+    })
+    const h = harness(authorization, { openUrl: () => false })
+    await loginCodex(h.deps)
+    const text = h.notices.map(notice => notice.text).join('\n')
+    // The first announcement could not open a browser, so it carries the hint;
+    // repeats of the same page must not read as if every one had failed.
+    expect(text.match(/open this URL in a browser/gu)).toHaveLength(1)
+  })
+
+  it('keeps the hint for a first announcement the browser cannot open', async () => {
+    const authorization = flow(async request => {
+      request.interaction.notify({ message: 'Docs', url: 'https://example.com/docs' })
+      return { status: 'authorized' }
+    })
+    const h = harness(authorization)
+    await loginCodex(h.deps)
+    expect(h.opened).toEqual([])
+    expect(h.notices.map(notice => notice.text).join('\n')).toContain('(open this URL in a browser)')
+  })
+})

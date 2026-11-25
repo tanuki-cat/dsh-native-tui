@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   isWebUrl,
+  launchSystemCommand,
   openUrlInBrowser,
   systemOpenCommand,
   systemRevealCommand,
@@ -36,6 +37,18 @@ describe('isWebUrl', () => {
     expect(isWebUrl('javascript:alert(1)')).toBe(false)
     expect(isWebUrl('./relative/page.md')).toBe(false)
     expect(isWebUrl('not a url')).toBe(false)
+  })
+})
+
+describe('launchSystemCommand', () => {
+  it('reports a missing executable instead of a false success', () => {
+    // `spawn` surfaces ENOENT on an asynchronous 'error' event; the synchronous
+    // caller must not claim the opener started.
+    expect(launchSystemCommand({ command: 'dsh-native-tui-no-such-opener-xyz', args: [] })).toBe(false)
+  })
+
+  it('starts an executable that exists', () => {
+    expect(launchSystemCommand({ command: process.execPath, args: ['-e', '0'] })).toBe(true)
   })
 })
 

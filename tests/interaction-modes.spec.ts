@@ -13,8 +13,9 @@ function harness() {
   const events: Array<{ type: string; data: { preset?: string; active?: boolean } }> = []
   let preset = 'accept-edits', auto = true, hasPlan = true, directPlan = true
   let planState: { active: boolean; pending?: boolean } = { active: false }
+  let names = ['read-only', 'workspace-write', 'danger-full-access', 'manual', 'accept-edits', 'plan']
   const permissions = {
-    get names() { return ['read-only', 'workspace-write', 'danger-full-access', 'manual', 'accept-edits', 'plan', ...(auto ? ['auto'] : [])] },
+    get names() { return auto ? [...names, 'auto'] : names },
     defaultPreset: 'accept-edits',
     current: () => preset,
     resolve: vi.fn((mode: string) => ({ sandbox: mode === 'auto' ? 'danger-full-access' : mode === 'accept-edits' ? 'workspace-write' : 'read-only', approval: 'ask' })),
@@ -50,6 +51,7 @@ function harness() {
     get preset() { return preset },
     set preset(value: string) { preset = value },
     set auto(value: boolean) { auto = value },
+    set names(value: string[]) { names = value },
     set hasPlan(value: boolean) { hasPlan = value },
     set directPlan(value: boolean) { directPlan = value },
     set planState(value: { active: boolean; pending?: boolean }) { planState = value },
@@ -116,7 +118,7 @@ describe('interaction modes', () => {
   it.each(['read-only', 'workspace-write', 'danger-full-access', 'custom'])('keeps native %s permissions untouched in off mode', async preset => {
     const h = harness()
     h.preset = preset
-    h.planState = { active: true }
+    h.planState = { active: false }
     expect(h.modes.current(h.agent)).toBe('off')
     await h.step()
     expect(h.permissions.set).not.toHaveBeenCalled()
@@ -161,6 +163,57 @@ describe('interaction modes', () => {
     await h.step()
     expect(h.preset).toBe('workspace-write')
     expect(h.modes.current(h.agent)).toBe('off')
+  })
+
+  it.each(['read-only', 'workspace-write', 'danger-full-access'] as const)(
+    'enforces plan gating while the native %s preset is selected, then restores it',
+    async preset => {
+      const h = harness()
+      h.permissions.set(h.agent.session, preset)
+      h.planState = { active: true }
+      expect(h.modes.current(h.agent)).toBe('plan')
+      expect(h.modes.planDenial(h.exec('write'))).toContain('blocks tool')
+      expect(h.modes.planDenial(h.exec('apply_patch'))).toContain('blocks tool')
+      expect(h.modes.planDenial(h.exec('bash'))).toContain('blocks tool')
+      expect(h.modes.planDenial(h.exec('bash', { sandbox_permissions: 'danger-full-access' }))).toContain('escalation')
+      expect(h.modes.planDenial(h.exec('read'))).toBeUndefined()
+      await h.step()
+      expect(h.preset).toBe('plan')
+      h.planState = { active: false }
+      await h.step()
+      expect(h.preset).toBe(preset)
+      expect(h.modes.current(h.agent)).toBe('off')
+    },
+  )
+
+  it('treats an unavailable plan projection as no plan instead of throwing', async () => {
+    const h = harness()
+    h.plan.get = vi.fn(() => { throw new Error('PLAN_STATE_UNAVAILABLE') })
+    expect(() => h.modes.current(h.agent)).not.toThrow()
+    expect(h.modes.current(h.agent)).toBe('accept-edits')
+    await expect(h.step()).resolves.toEqual({ kind: 'accept' })
+    expect(() => h.modes.set(h.agent, 'off')).not.toThrow()
+    expect(h.preset).toBe('workspace-write')
+  })
+
+  it('falls back to the profile default instead of a hardcoded mode when plan exits', () => {
+    const h = harness()
+    h.names = ['plan', 'custom-native']
+    h.permissions.defaultPreset = 'custom-native'
+    h.permissions.set(h.agent.session, 'plan')
+    h.planState = { active: false }
+    h.modes.reconcilePlan(h.agent)
+    expect(h.preset).toBe('custom-native')
+  })
+
+  it('falls back to a native profile default when no non-plan selection was logged', () => {
+    const h = harness()
+    h.names = ['plan', 'read-only']
+    h.permissions.defaultPreset = 'read-only'
+    h.permissions.set(h.agent.session, 'plan')
+    h.planState = { active: false }
+    h.modes.reconcilePlan(h.agent)
+    expect(h.preset).toBe('read-only')
   })
 
   it('uses a native profile default when no native selection has been logged', async () => {
@@ -250,7 +303,7 @@ describe('interaction modes', () => {
     expect(h.preset).toBe('accept-edits')
   })
 
-  it.each(['read', 'read_image', 'glob', 'grep', 'web_fetch', 'skill', 'ask_user_question', 'exit_plan_mode', 'write', 'edit'])('leaves %s to the Host file sandbox or read path in accept-edits mode', async name => {
+  it.each(['read', 'read_image', 'glob', 'grep', 'web_fetch', 'skill', 'ask_user_question', 'exit_plan_mode', 'write', 'edit', 'apply_patch'])('leaves %s to the Host file sandbox or read path in accept-edits mode', async name => {
     const h = harness()
     expect(await h.gate(h.exec(name))).toEqual({ kind: 'allow' })
   })

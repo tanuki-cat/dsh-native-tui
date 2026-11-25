@@ -10,6 +10,11 @@ import type { CommandContext } from './context.js'
 import type { McpManagedServerStatus, McpManagerService, McpOAuthAttemptView, McpProbeResultLike, SettingsService } from './services.js'
 import { NL, errorMessage } from './shared.js'
 
+/** Re-read the mcp-manager revision before a confirmation-delayed write. */
+function currentMcpRevision(settings: SettingsService, fallback: number): number {
+  return settings.describe({ redactSecrets: true }).find(row => row.ns === 'mcp-manager')?.revision ?? fallback
+}
+
 /** The `/mcp` command. */
 export async function mcpCommand(ctx: CommandContext, args: string): Promise<void> {
   const settings = ctx.host.get('settings') as unknown as SettingsService | undefined
@@ -43,7 +48,7 @@ export async function mcpCommand(ctx: CommandContext, args: string): Promise<voi
       const transport = typeof raw?.transport === 'string' ? raw.transport : view.configured ? 'unknown' : '(not configured)'
       const target = describeTarget(raw)
       return view.name + '  ' + transport + (target === '' ? '' : '  ' + target)
-        + '  ' + statusLabel(view.status, ctx.palette)
+        + '  ' + statusLabel(view.status)
         + (view.authorization === undefined ? '' : ' · OAuth ' + view.authorization.phase)
     })
     ctx.notice('info', 'MCP servers:' + NL + rows.join(NL)
@@ -83,7 +88,8 @@ export async function mcpCommand(ctx: CommandContext, args: string): Promise<voi
     if (confirmed !== 'yes')
       return
     try {
-      await settings.mutate('mcp-manager', [{ op: 'unset', path: ['servers', name] }], descriptor.revision)
+      // The confirmation can outlive the descriptor read at dispatch time.
+      await settings.mutate('mcp-manager', [{ op: 'unset', path: ['servers', name] }], currentMcpRevision(settings, descriptor.revision))
       ctx.notice('info', 'MCP server removed: ' + name + '. The manager reconciles it.')
     }
     catch (error) {
@@ -157,6 +163,9 @@ export async function mcpCommand(ctx: CommandContext, args: string): Promise<voi
   ctx.notice('warning', 'Usage: /mcp [add | list | reload [name] | probe <name> | remove <name> | auth <name> | signout <name>]')
 }
 
+/** Hard ceiling for one browser authorization attempt, including its polling wait. */
+const AUTHORIZATION_TIMEOUT_MS = 5 * 60 * 1000
+
 async function authorizeServer(ctx: CommandContext, manager: McpManagerService, name: string): Promise<void> {
   if (ctx.host.get('webServer') === undefined) {
     ctx.notice('warning', 'Enable mcp-oauth-webserver in this profile to receive the OAuth callback.')
@@ -168,28 +177,43 @@ async function authorizeServer(ctx: CommandContext, manager: McpManagerService, 
     const view = manager.list().find(server => server.name === name)?.authorization
     return view?.id === started.id ? view : undefined
   }
+  // The polling loop otherwise waits forever for a phase that never arrives;
+  // the deadline is combined with the dispatch signal so Escape still wins.
+  const deadline = new AbortController()
+  const timer = setTimeout(
+    () => deadline.abort(new Error('MCP authorization timed out')),
+    AUTHORIZATION_TIMEOUT_MS,
+  )
+  const signal = AbortSignal.any([ctx.signal, deadline.signal])
   let attempt: McpOAuthAttemptView | undefined = started
   let phase: McpOAuthAttemptView['phase'] | undefined
   let url: string | undefined
   try {
     while (attempt !== undefined && mcpAuthorizationInProgress(attempt.phase)) {
-      ctx.signal.throwIfAborted()
+      signal.throwIfAborted()
       if (attempt.phase !== phase || attempt.authorizationUrl !== url) {
         phase = attempt.phase
         url = attempt.authorizationUrl
         ctx.notice('info', 'MCP OAuth ' + name + ' · ' + phase + (url === undefined ? '' : NL + 'Copy into your browser: ' + url))
       }
-      await waitForRetry(1000, ctx.signal)
+      await waitForRetry(1000, signal)
       attempt = current()
     }
   } catch (error) {
-    if (!ctx.signal.aborted) throw error
+    if (!signal.aborted) throw error
     try { await manager.cancelAuthorization(name, started.id) }
     catch (cleanupError) {
       ctx.notice('error', 'Could not cancel MCP OAuth ' + name + ': ' + errorMessage(cleanupError))
       return
     }
+    if (!ctx.signal.aborted) {
+      ctx.notice('error', 'MCP OAuth ' + name + ' timed out after 5 minutes; start it again when ready.')
+      return
+    }
     attempt = current()
+  }
+  finally {
+    clearTimeout(timer)
   }
   if (attempt === undefined) {
     ctx.notice('warning', 'MCP OAuth ' + name + ' attempt is no longer available.')
@@ -340,7 +364,9 @@ async function addServer(
   }
   try {
     ctx.notice('info', 'Applying MCP server ' + name + '…')
-    await settings.mutate('mcp-manager', [{ op: 'set', path: ['servers', name], value: config }], revision)
+    // The wizard can take minutes; write against the revision read just now
+    // instead of the one captured before the first prompt.
+    await settings.mutate('mcp-manager', [{ op: 'set', path: ['servers', name], value: config }], currentMcpRevision(settings, revision))
     ctx.notice('info', 'MCP server saved: ' + name + ' · ' + transport + '. Checking its connection…')
     if (manager === undefined) return
     let status: McpManagedServerStatus | undefined
@@ -407,19 +433,19 @@ function describeTarget(raw: Record<string, unknown> | undefined): string {
 }
 
 /** Collapsed connection state with the Host diagnostic. */
-function statusLabel(status: McpManagedServerStatus, palette: CommandContext['palette']): string {
+function statusLabel(status: McpManagedServerStatus): string {
   const detail = status.lastError ?? status.result?.cleanupError
   const suffix = detail === undefined ? '' : ': ' + detail.slice(0, 110)
   switch (status.state) {
-    case 'connected': return palette.success('connected' + (status.toolCount === undefined ? '' : ' · ' + String(status.toolCount) + ' tools'))
-    case 'disabled': return palette.dim('disabled')
-    case 'connecting': return palette.warning('connecting')
-    case 'reconnecting': return palette.warning('reconnecting' + (status.attempt === undefined ? '' : ' (attempt ' + String(status.attempt) + ')'))
-    case 'waiting-credentials': return palette.warning('waiting for credentials')
-    case 'waiting-authorization': return palette.warning('waiting for authorization'
-      + (status.reason === undefined ? '' : ' (' + status.reason + ')'))
-    case 'closed': return palette.error('closed')
-    case 'failed': return palette.error('failed' + (status.reason === undefined ? '' : ' (' + status.reason + ')') + suffix)
+    case 'connected': return 'connected' + (status.toolCount === undefined ? '' : ' · ' + String(status.toolCount) + ' tools')
+    case 'disabled': return 'disabled'
+    case 'connecting': return 'connecting'
+    case 'reconnecting': return 'reconnecting' + (status.attempt === undefined ? '' : ' (attempt ' + String(status.attempt) + ')')
+    case 'waiting-credentials': return 'waiting for credentials'
+    case 'waiting-authorization': return 'waiting for authorization'
+      + (status.reason === undefined ? '' : ' (' + status.reason + ')')
+    case 'closed': return 'closed'
+    case 'failed': return 'failed' + (status.reason === undefined ? '' : ' (' + status.reason + ')') + suffix
   }
 }
 

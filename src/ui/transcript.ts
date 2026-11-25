@@ -141,7 +141,13 @@ export interface ToolCallMemory {
   readonly prunedSeqs: Set<number>
   /** Event sequence to call identity for calls and results. */
   readonly callBySeq: Map<number, string>
-  /** Membership index for calls and results, retained across window rebuilds. */
+  /**
+   * Calls whose own call entry was reduced, retained across window rebuilds.
+   *
+   * Results do not join this index: a row synthesized from a result alone must
+   * be rebuilt from that same result entry, or a compressed history would lose
+   * it after the first window change.
+   */
   readonly knownCalls: Set<string>
 }
 
@@ -745,7 +751,6 @@ export function createTranscriptReducer(options: TranscriptOptions) {
           const callId = event.data.message.source.callId
           const seenSeq = callIdBySeq.get(seq) === callId
           callIdBySeq.set(seq, callId)
-          knownCalls.add(callId)
           // A duplicate result after a session resume/replay must not revive a
           // call that was already settled or whose output was pruned.
           if (hiddenCodeExecutionCalls.has(callId)) {
@@ -767,6 +772,16 @@ export function createTranscriptReducer(options: TranscriptOptions) {
           const diffs = resultFileDiffs(event.data.meta, prior?.kind === 'tool' ? prior.args : '')
           const operation = resultOperation(event.data.meta)
           if (index === undefined) {
+            // The call card was reduced in an earlier window and has since been
+            // trimmed. A card rebuilt from this result alone would be named
+            // "tool" and push the real retained cards out of the window, so the
+            // late result is behind the retained history and is dropped. A
+            // result whose call never appeared (a resumed log tail) is still
+            // rendered below.
+            if (knownCalls.has(callId)) {
+              settledCalls.add(callId)
+              break
+            }
             blocks.push({
               kind: 'tool',
               callId,

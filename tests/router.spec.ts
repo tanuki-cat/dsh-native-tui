@@ -25,6 +25,7 @@ function harness(options: { readonly hostResult?: unknown; readonly skills?: rea
   const notices: Notice[] = []
   const calls: string[] = []
   const switched: Array<() => Promise<unknown>> = []
+  const executed: AbortSignal[] = []
   const prompts: string[] = []
   const history: string[] = []
   let contextBuilds = 0
@@ -38,7 +39,10 @@ function harness(options: { readonly hostResult?: unknown; readonly skills?: rea
           if (options.hostListThrows === true) throw new Error('registry exploded')
           return []
         },
-        execute: async () => options.hostResult,
+        execute: async (...args: unknown[]) => {
+          executed.push(args[3] as AbortSignal)
+          return options.hostResult
+        },
       },
     },
     config: { cwd: '/tmp', agentPreset: 'ptc' },
@@ -69,10 +73,10 @@ function harness(options: { readonly hostResult?: unknown; readonly skills?: rea
     persistSelection: async () => undefined,
   } as unknown as CommandContext
   const deps: CommandRouterDeps = {
-    context: () => {
+    context: signal => {
       contextBuilds += 1
       if (options.contextThrows === true) throw new Error('context exploded')
-      return context
+      return signal === undefined ? context : { ...context, signal }
     },
     switchTo: async next => { switched.push(next) },
     openNewSession: async (cwd, preset) => { calls.push('openNew:' + cwd + ':' + preset); return context.active },
@@ -86,7 +90,7 @@ function harness(options: { readonly hostResult?: unknown; readonly skills?: rea
     },
     skills: async () => options.skills ?? [],
   }
-  return { deps, notices, calls, switched, prompts, history, contextBuilds: () => contextBuilds }
+  return { deps, notices, calls, switched, executed, prompts, history, contextBuilds: () => contextBuilds }
 }
 
 describe('command router', () => {
@@ -142,6 +146,24 @@ describe('command router', () => {
     const h = harness()
     await runCommandLine('/resume session-1', h.deps)
     expect(h.switched).toEqual([])
+  })
+
+  it('refuses to switch sessions while a turn is running', async () => {
+    const h = harness({ running: true })
+    await runCommandLine('/new', h.deps)
+    await runCommandLine('/resume session-2', h.deps)
+    expect(h.switched).toEqual([])
+    expect(h.notices.map(notice => notice.text)).toEqual([
+      'Wait for the running turn to finish before /new, or run /cancel first.',
+      'Wait for the running turn to finish before /resume, or run /cancel first.',
+    ])
+  })
+
+  it('passes the dispatch signal to Host commands', async () => {
+    const h = harness()
+    const controller = new AbortController()
+    await runCommandLine('/host-command', { ...h.deps, signal: controller.signal })
+    expect(h.executed).toEqual([controller.signal])
   })
 
   it('dispatches /codex to the local handler', async () => {

@@ -28,6 +28,7 @@ import {
   type ConfigurableProviderEntry,
   type ProviderProtocol,
 } from '../../runtime/providers.js'
+import type { SettingsPathOp } from '../../runtime/settings.js'
 import type { CommandContext } from './context.js'
 import { chooseRouteModelInput, openModelInputEditor } from './model-input.js'
 import { selectModel } from './model.js'
@@ -211,12 +212,14 @@ async function listProviders(
   }
   const rows: string[] = []
   for (const [route, raw] of entries) {
-    let count = 0
+    let modelState: string
     try {
-      count = (await llm.listModels(route)).length
+      modelState = String((await llm.listModels(route)).length) + ' model(s)'
     }
     catch {
-      // Missing credentials or invalid route: show the configured entry anyway.
+      // A missing key or unreachable endpoint is not a provider with zero
+      // models; say the catalogue is unavailable instead of implying empty.
+      modelState = 'models unavailable'
     }
     const env = raw !== null && typeof raw === 'object' && typeof (raw as { readonly apiKeyEnv?: unknown }).apiKeyEnv === 'string'
       ? (raw as { readonly apiKeyEnv: string }).apiKeyEnv
@@ -248,7 +251,7 @@ async function listProviders(
         envState = '  ' + env + (masked === undefined ? stored ? ' (stored)' : ' (not set)' : ' (' + masked + ')')
       }
     }
-    rows.push(route + '  ' + String(count) + ' model(s)' + envState)
+    rows.push(route + '  ' + modelState + envState)
   }
   ctx.notice('info', 'Configured third-party providers:' + NL + rows.join(NL)
     + NL + 'Use /provider add to add one, /provider edit <route> to fetch models, /provider remove <route> to delete one.')
@@ -303,8 +306,11 @@ async function fetchProviderModels(ctx: CommandContext, settings: SettingsServic
     return
   }
   const merged = mergeDiscoveredProviderModels(raw, discovered)
+  // Write only the model list: the route came from a redacted describe() view,
+  // so restating the whole object would replace secret fields with placeholders.
+  const discoveredModels = Array.isArray(merged.provider.models) ? merged.provider.models : []
   try {
-    await settings.mutate('llm-pi-ai', [{ op: 'set', path: ['providers', route], value: merged.provider }], latest.revision)
+    await settings.mutate('llm-pi-ai', [{ op: 'set', path: ['providers', route, 'models'], value: discoveredModels }], latest.revision)
   }
   catch (error) {
     ctx.notice('error', 'Fetched models but could not save them: ' + errorMessage(error))
@@ -448,12 +454,23 @@ async function addProvider(ctx: CommandContext, state: WizardState): Promise<voi
       return
     let env: string | undefined
     let apiKey: string | undefined
+    // The credential write waits until every confirmation and validation has
+    // passed: storing it here would rotate a working key even when the wizard
+    // is cancelled at a later step.
+    let pendingSecret: { readonly env: string; readonly value: string } | undefined
     if (credentialSource === 'native') {
       env = undefined
     }
     else if (credentialSource === 'store') {
       if (credentials === undefined) {
         ctx.notice('warning', 'The credential store is unavailable in this profile; choose the environment-variable option instead.')
+        return
+      }
+      // Validate the reference before prompting for the secret so a bad name
+      // cannot end the wizard after the key was typed.
+      env = envDefault
+      if (!isValidEnvName(env)) {
+        ctx.notice('warning', 'The derived credential reference "' + env + '" is not a valid environment variable name; choose the environment-variable option instead.')
         return
       }
       const secret = await showTextInput(ctx.tui, ctx.palette, 'API key (stored in DSH credentials)', 'paste the key here', 'Visible while typing; stored outside the profile config · Esc cancels', ctx.signal)
@@ -464,16 +481,8 @@ async function addProvider(ctx: CommandContext, state: WizardState): Promise<voi
         ctx.notice('warning', 'API key must not be empty.')
         return
       }
-      env = envDefault
-      try {
-        await credentials.set(env, value)
-      }
-      catch (error) {
-        ctx.notice('error', 'Could not store the API key: ' + errorMessage(error))
-        return
-      }
+      pendingSecret = { env, value }
       apiKey = value
-      ctx.notice('info', 'Stored API key under credential reference ' + env + '.')
     }
     else {
       const value = await showTextInput(ctx.tui, ctx.palette, 'API key env var NAME (not the key)', envDefault, 'UPPERCASE name like MY_GATEWAY_KEY; export the secret before launch · Esc cancels', ctx.signal, envDefault)
@@ -601,32 +610,86 @@ async function addProvider(ctx: CommandContext, state: WizardState): Promise<voi
         }
       }
     }
-    if (Object.hasOwn(providerRecord, route)) {
-      const existing = providerRecord[route]
-      if (kind === 'catalog') {
-        const confirmed = await showChoice(ctx.tui, ctx.palette, 'Provider route ' + route + ' already exists', [
-          { value: 'yes', label: 'Replace credential', description: 'Replace this catalog route profile' },
-          { value: 'no', label: 'Cancel' },
-        ], 'Enter selects · Esc cancels', ctx.signal)
-        if (confirmed !== 'yes')
-          return
+    const isNewRoute = !Object.hasOwn(providerRecord, route)
+    let ops: SettingsPathOp[]
+    let keyReference = (provider as { apiKeyEnv?: string }).apiKeyEnv ?? nativeEnv
+    if (isNewRoute) {
+      ops = [{ op: 'set', path: ['providers', route], value: provider }]
+    }
+    else if (kind === 'catalog') {
+      const confirmed = await showChoice(ctx.tui, ctx.palette, 'Provider route ' + route + ' already exists', [
+        { value: 'yes', label: 'Replace credential', description: 'Update only this route credential reference; models and overrides stay' },
+        { value: 'no', label: 'Cancel' },
+      ], 'Enter selects · Esc cancels', ctx.signal)
+      if (confirmed !== 'yes')
+        return
+      // Replace the credential reference only: restating the route object would
+      // silently drop its models, modelOverrides, and any other field.
+      ops = env === undefined
+        ? [{ op: 'unset', path: ['providers', route, 'apiKeyEnv'] }]
+        : [{ op: 'set', path: ['providers', route, 'apiKeyEnv'], value: env }]
+      keyReference = env ?? nativeEnv
+    }
+    else {
+      const confirmed = await showChoice(ctx.tui, ctx.palette, 'Provider route ' + route + ' already exists', [
+        { value: 'merge', label: 'Add/replace this model, keep other models', description: 'Append to the existing route and keep its other models' },
+        { value: 'replace', label: 'Replace entire route', description: 'Discard the existing model list' },
+        { value: 'cancel', label: 'Cancel' },
+      ], 'Enter selects · Esc cancels', ctx.signal)
+      if (confirmed === undefined || confirmed === 'cancel')
+        return
+      if (confirmed === 'merge') {
+        const existing = providerRecord[route]
+        const merged = mergeProviderModel(existing, provider)
+        // Write only the fields this wizard owns. The existing route came from a
+        // redacted describe() view, so restating it would overwrite secret
+        // fields with their placeholders.
+        ops = Object.keys(provider)
+          .filter(field => field !== 'models')
+          .map(field => ({ op: 'set', path: ['providers', route, field], value: provider[field] }))
+        const mergedModels = Array.isArray(merged.models) ? merged.models : []
+        ops.push({ op: 'set', path: ['providers', route, 'models'], value: mergedModels })
       }
       else {
-        const confirmed = await showChoice(ctx.tui, ctx.palette, 'Provider route ' + route + ' already exists', [
-          { value: 'merge', label: 'Add/replace this model, keep other models', description: 'Append to the existing route and keep its other models' },
-          { value: 'replace', label: 'Replace entire route', description: 'Discard the existing model list' },
-          { value: 'cancel', label: 'Cancel' },
-        ], 'Enter selects · Esc cancels', ctx.signal)
-        if (confirmed === undefined || confirmed === 'cancel')
-          return
-        if (confirmed === 'merge')
-          provider = mergeProviderModel(existing, provider)
+        // An explicit full replacement is built from the wizard's own values, not
+        // from the redacted view, so restating the route is safe here.
+        ops = [{ op: 'set', path: ['providers', route], value: provider }]
       }
     }
-    await settings.mutate('llm-pi-ai', [{ op: 'set', path: ['providers', route], value: provider }], state.revision)
+    // A long wizard can outlive the revision read at its start; re-read before
+    // writing so another profile change is not reported as a stale-refusal.
+    const latest = settings.describe({ redactSecrets: true }).find(row => row.ns === 'llm-pi-ai')
+    try {
+      await settings.mutate('llm-pi-ai', ops, latest?.revision ?? state.revision)
+    }
+    catch (error) {
+      ctx.notice('error', 'Could not save provider: ' + errorMessage(error))
+      return
+    }
+    if (pendingSecret !== undefined && credentials !== undefined) {
+      try {
+        await credentials.set(pendingSecret.env, pendingSecret.value)
+      }
+      catch (error) {
+        if (isNewRoute) {
+          const afterSave = settings.describe({ redactSecrets: true }).find(row => row.ns === 'llm-pi-ai')
+          try {
+            await settings.mutate('llm-pi-ai', [{ op: 'unset', path: ['providers', route] }], afterSave?.revision)
+            ctx.notice('error', 'Could not store API key; rolled back new provider route ' + route + ': ' + errorMessage(error))
+            return
+          }
+          catch {
+            // Fall through to report the partial state when rollback also fails.
+          }
+        }
+        ctx.notice('error', 'Provider route ' + route + ' was saved, but the API key could not be stored: ' + errorMessage(error))
+        return
+      }
+      ctx.notice('info', 'Stored API key under credential reference ' + pendingSecret.env + '.')
+    }
     ctx.notice('info', 'Saved provider route: ' + route
       + (savedInput === undefined ? '' : ' · input ' + savedInput)
-      + ' · key is read from ' + ((provider as { apiKeyEnv?: string }).apiKeyEnv ?? nativeEnv ?? 'no credential reference'))
+      + ' · key is read from ' + (keyReference ?? 'no credential reference'))
     if (chosenModel !== undefined) {
       await selectModel(ctx, llm, route + '/' + chosenModel)
       return

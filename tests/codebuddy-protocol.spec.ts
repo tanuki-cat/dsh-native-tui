@@ -15,6 +15,7 @@ import {
   inputModalitiesOf,
   maxOutputTokensOf,
   parseCatalogue,
+  reasoningEffortsOf,
   seedCatalogue,
 } from '../src/codebuddy/models.js'
 import { checkIn, fetchQuota, parseQuota, summarizeAccounts } from '../src/codebuddy/credits.js'
@@ -175,6 +176,10 @@ describe('codebuddy failure classification', () => {
     expect(redact('Bearer abcdefghijklmnop')).toContain('<redacted>')
     expect(redact('{"accessToken":"abcdefgh"}')).not.toContain('abcdefgh')
     expect(redact('state=abcdefgh')).toContain('state=<redacted>')
+    // The gateway's snake_case token fields reach log lines verbatim.
+    expect(redact('{"access_token":"abcdefgh"}')).not.toContain('abcdefgh')
+    expect(redact('{"refresh_token":"abcdefgh"}')).not.toContain('abcdefgh')
+    expect(redact('refresh_token=abcdefgh')).not.toContain('abcdefgh')
   })
 
   it('offers an actionable hint only when one exists', () => {
@@ -235,6 +240,15 @@ describe('codebuddy catalogue mapping', () => {
     ])
     expect(parseCatalogue(JSON.stringify({ code: 1, data: { models: [] } }))).toEqual([])
     expect(parseCatalogue('not json')).toEqual([])
+  })
+
+  it('deduplicates the reasoning efforts the gateway repeats', () => {
+    expect(reasoningEffortsOf({ supportedEfforts: ['low', 'low', 'high', '', 7] }))
+      .toEqual({ efforts: ['low', 'high'] })
+    expect(reasoningEffortsOf({ supportedEfforts: ['low', 'low'], canDisableThinking: false }))
+      .toEqual({ efforts: ['low'], canDisableThinking: false })
+    // An empty list with thinking always on is still no selectable level.
+    expect(reasoningEffortsOf({ supportedEfforts: [] })).toBeUndefined()
   })
 
   it('offers a text-only seed list before the first discovery', () => {

@@ -108,8 +108,10 @@ export function maxOutputTokensOf(maxOutputTokens: unknown): number {
 export function reasoningEffortsOf(raw: unknown): { efforts: string[]; canDisableThinking?: boolean } | undefined {
   if (raw === null || typeof raw !== 'object') return undefined
   const { supportedEfforts, canDisableThinking } = raw as { supportedEfforts?: unknown; canDisableThinking?: unknown }
+  // A repeated level would be offered twice by the picker while the gateway
+  // only ever receives one spelling, so the list is deduplicated in place.
   const efforts = Array.isArray(supportedEfforts)
-    ? supportedEfforts.filter((level): level is string => typeof level === 'string' && level !== '')
+    ? [...new Set(supportedEfforts.filter((level): level is string => typeof level === 'string' && level !== ''))]
     : []
   if (efforts.length === 0 && canDisableThinking !== false) return undefined
   return {

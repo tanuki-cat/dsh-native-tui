@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { highlightCode } from '../src/ui/code-preview.js'
-import { ToolOutput } from '../src/ui/tool-output.js'
+import { ToolOutput, toolLabel } from '../src/ui/tool-output.js'
 import { createPalette } from '../src/ui/theme.js'
 
 vi.mock('../src/ui/code-preview.js', async importOriginal => {
@@ -49,5 +49,17 @@ describe('ToolOutput', () => {
     const expanded = new ToolOutput(longBody, palette, true, 5, 'start', false, 'bash').render(40)
     expect(expanded).toHaveLength(1000)
     expect(expanded.at(-1)?.trim()).toBe('if then fi')
+  })
+})
+
+describe('tool labels', () => {
+  it('truncates surrogate pairs without leaving an isolated half', () => {
+    expect(toolLabel('\u{1F600}\u{1F600}\u{1F600}\u{1F600}', 6)).toBe('\u{1F600}\u{1F600}…')
+    expect(toolLabel('\u{1F600}\u{1F600}\u{1F600}\u{1F600}', 6, 'end')).toBe('…\u{1F600}\u{1F600}')
+    for (const label of [toolLabel('\u{1F600}\u{1F600}\u{1F600}\u{1F600}', 6),
+      toolLabel('\u{1F600}\u{1F600}\u{1F600}\u{1F600}', 6, 'end')]) {
+      // A well-formed string has no unpaired surrogate code unit.
+      expect(/[\uD800-\uDFFF]/u.test(label)).toBe(false)
+    }
   })
 })

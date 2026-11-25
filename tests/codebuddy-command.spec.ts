@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   runCodebuddyCommand,
+  selectProfiles,
   type CodeBuddyCommandDeps,
   type CodeBuddyPromptSettings,
 } from '../src/runtime/codebuddy-command.js'
@@ -342,5 +343,121 @@ describe('runCodebuddyCommand prompt', () => {
     const deps = depsOf({ settings: settingsOf() })
     await runCodebuddyCommand('prompt bogus', deps)
     expect(deps.notices.join('\n')).toContain('expected "/codebuddy prompt"')
+  })
+})
+
+describe('runCodebuddyCommand targets', () => {
+  it('does not resolve a prototype key to a deployment', () => {
+    // A bare object lookup would return Object.prototype members for these and
+    // pass an unrelated value on as a profile.
+    expect(selectProfiles('constructor')).toBeUndefined()
+    expect(selectProfiles('toString')).toBeUndefined()
+    expect(selectProfiles('hasOwnProperty')).toBeUndefined()
+    expect(selectProfiles('cn')?.map(profile => profile.id)).toEqual(['codebuddy'])
+    expect(selectProfiles('codebuddy-en')?.map(profile => profile.id)).toEqual(['codebuddy-en'])
+  })
+
+  it('reports an unknown target without touching the credential store', async () => {
+    const deleted: string[] = []
+    const deps = depsOf({
+      credentials: {
+        readRecord: async () => undefined,
+        modifyRecord: async () => undefined,
+        deleteRecord: async (key) => { deleted.push(key) },
+      },
+    })
+    await runCodebuddyCommand('logout constructor', deps)
+    expect(deleted).toEqual([])
+    expect(deps.notices.join('\n')).toContain('unknown target')
+  })
+})
+
+describe('runCodebuddyCommand logout', () => {
+  /** A credential store double that records deletes. */
+  function storeOf(events: string[]) {
+    return {
+      async readRecord() { return undefined },
+      async modifyRecord() { return undefined },
+      async deleteRecord() { events.push('delete') },
+    }
+  }
+
+  it('cancels an in-flight sign-in before deleting the credential', async () => {
+    const events: string[] = []
+    let inFlight = true
+    const deps = depsOf({
+      credentials: storeOf(events),
+      wait: async () => { await Promise.resolve() },
+      authorization: {
+        async begin() { return { status: 'authorized' } },
+        describe: () => ({ inFlight }),
+        cancel: () => { events.push('cancel'); inFlight = false },
+      },
+    })
+    await runCodebuddyCommand('logout cn', deps)
+    // The delete is safe only after the polling flow has released the key.
+    expect(events).toEqual(['cancel', 'delete'])
+    expect(deps.notices.join('\n')).toContain('signed out')
+  })
+
+  it('waits for a cancelled sign-in that would otherwise commit the grant', async () => {
+    let record: { kind: string; payload?: unknown } | undefined
+    let inFlight = true
+    const deps = depsOf({
+      credentials: {
+        async readRecord() { return record },
+        async modifyRecord() { return undefined },
+        async deleteRecord() { record = undefined },
+      },
+      wait: async () => { await Promise.resolve() },
+      authorization: {
+        async begin() { return { status: 'authorized' } },
+        describe: () => ({ inFlight }),
+        cancel: () => {
+          // The flow settles asynchronously and commits its grant. A delete that
+          // did not wait for that commit would be overwritten by it.
+          void Promise.resolve().then(() => {
+            record = { kind: 'grant', payload: { access: 'resurrected' } }
+            inFlight = false
+          })
+        },
+      },
+    })
+    await runCodebuddyCommand('logout cn', deps)
+    expect(record).toBeUndefined()
+    expect(deps.notices.join('\n')).toContain('signed out')
+  })
+
+  it('keeps the credential when a sign-in never settles', async () => {
+    const events: string[] = []
+    const deps = depsOf({
+      credentials: storeOf(events),
+      wait: async () => { await Promise.resolve() },
+      authorization: {
+        async begin() { return { status: 'cancelled' } },
+        describe: () => ({ inFlight: true }),
+        cancel: () => {},
+      },
+    })
+    await runCodebuddyCommand('logout cn', deps)
+    expect(events).toEqual([])
+    expect(deps.notices.join('\n')).toContain('still settling')
+  })
+})
+
+describe('runCodebuddyCommand refresh', () => {
+  it('forwards the command signal to the catalogue refresh', async () => {
+    const seen: (AbortSignal | undefined)[] = []
+    const controller = new AbortController()
+    const deps = depsOf({
+      service: {
+        ...serviceOf([]),
+        refresh: async (id: string, signal?: AbortSignal) => { seen.push(signal); return [{ id }] },
+      } as never,
+      signal: controller.signal,
+    })
+    await runCodebuddyCommand('models refresh cn', deps)
+    // Cancelling the command must reach the network request it started.
+    expect(seen).toEqual([controller.signal])
   })
 })

@@ -183,6 +183,10 @@ async function dispatchCommandLine(line: string, deps: CommandRouterDeps): Promi
       ctx().notice('info', 'Cancellation requested')
       return
     case 'new':
+      if (ctx().active.agent.status === 'running') {
+        ctx().notice('warning', 'Wait for the running turn to finish before /new, or run /cancel first.')
+        return
+      }
       await deps.switchTo(() => deps.openNewSession(
         sessionCwd(ctx()),
         deps.preset.current() ?? ctx().config.agentPreset,
@@ -196,7 +200,15 @@ async function dispatchCommandLine(line: string, deps: CommandRouterDeps): Promi
       return
     case 'resume':
       if (args === '') await sessionsCommand(ctx())
-      else if (args !== ctx().active.id) await deps.switchTo(() => resumeHostSession(ctx().host, args as SessionId))
+      else if (args !== ctx().active.id) {
+        // Session disposal cancels the running turn and clears its inbox, so a
+        // switch mid-turn would silently drop the queued prompt.
+        if (ctx().active.agent.status === 'running') {
+          ctx().notice('warning', 'Wait for the running turn to finish before /resume, or run /cancel first.')
+          return
+        }
+        await deps.switchTo(() => resumeHostSession(ctx().host, args as SessionId))
+      }
       return
     case 'model':
       await modelCommand(ctx(), args)
@@ -307,7 +319,8 @@ async function dispatchCommandLine(line: string, deps: CommandRouterDeps): Promi
       return
     default: {
       try {
-        const execution = await ctx().host.commands.execute(ctx().active.agent, line, [], new AbortController().signal)
+        // Share the dispatch signal so Escape cancels a running Host command.
+        const execution = await ctx().host.commands.execute(ctx().active.agent, line, [], ctx().signal)
         if (execution !== undefined) {
           // Host commands append command/done before execute() resolves, and the
           // transcript renders that event. Do not also surface result.text here.

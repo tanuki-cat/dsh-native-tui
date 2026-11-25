@@ -81,8 +81,44 @@ const MAX_REQUEST_BYTES = 1024 * 1024
  */
 const MAX_REQUEST_IMAGE_BYTES = 20 * 1024 * 1024
 
-/** Occurrences one offload advance removes; one at a time is the smallest repair. */
+/**
+ * Floor of the occurrences one offload step removes.
+ *
+ * A request barely over its count bound removes only what it must, while one
+ * far over removes a quarter of the excess per step: a long history converges
+ * in a bounded number of rounds instead of offloading and re-reading almost the
+ * whole set one occurrence at a time, which is quadratic work.
+ */
 const IMAGE_OFFLOAD_COUNT_QUANTUM = 1
+
+/** Share of the count excess one offload step covers. */
+const IMAGE_OFFLOAD_BATCHES = 4
+
+/**
+ * Concurrent attachment reads for one request.
+ *
+ * The reader decodes and re-encodes images, so an unbounded `Promise.all` over
+ * a long history peaks at every image at once; a small pool overlaps the
+ * ordinary case (a handful of images) without that peak.
+ */
+const IMAGE_READ_CONCURRENCY = 4
+
+/** Base64 length of raw bytes, the unit the inline budget is stated in. */
+function base64Length(bytes: number): number {
+  return Math.ceil(bytes / 3) * 4
+}
+
+/**
+ * Occurrences one offload step removes for a retained set of this size.
+ * @param occurrences - retained image occurrences in the request.
+ * @param maxImages - retained-occurrence limit, when the route has one.
+ * @returns the count quantum to price with.
+ */
+function imageOffloadQuantum(occurrences: number, maxImages: number | undefined): number {
+  if (maxImages === undefined) return IMAGE_OFFLOAD_COUNT_QUANTUM
+  const excess = Math.max(0, occurrences - maxImages)
+  return Math.max(IMAGE_OFFLOAD_COUNT_QUANTUM, Math.ceil(excess / IMAGE_OFFLOAD_BATCHES))
+}
 
 /**
  * Aspect-preserving integer dimensions within a hard total-pixel budget.
@@ -205,7 +241,7 @@ type WirePart = Record<string, unknown>
 /** One prepared image: the wire part to emit, plus the encoded byte count it measured. */
 interface PreparedImage {
   readonly part: WirePart
-  /** Encoded request bytes, or the source size when the read failed. */
+  /** Measured request bytes; 0 for placeholder text, which carries none. */
   readonly bytes: number
 }
 
@@ -232,17 +268,27 @@ function requestImageRefs(messages: readonly RequestMessage[]): ImageRef[] {
 }
 
 /**
- * Read every request image once, concurrently, before any message is built.
+ * Read every request image once, with bounded concurrency, before any message is
+ * built.
  *
  * One attachment referenced from several messages is decoded once, and the
- * reads overlap instead of running one per message in sequence. A failed read
- * degrades that image to placeholder text with a diagnostic; it never fails the
- * turn, because the model can still answer about the rest of the request.
- * @param refs - distinct references to read.
+ * reads overlap instead of running one per message in sequence. Reading stops
+ * as soon as the images already measured cannot fit the inline budget: the
+ * request is going to fail with `IMAGE_OFFLOAD_REQUIRED` either way, and
+ * decoding the rest of a long history first would make one over-budget turn
+ * cost the whole history's bytes. A failed read degrades that image to
+ * placeholder text with a diagnostic; it never fails the turn, because the
+ * model can still answer about the rest of the request.
+ * @param refs - distinct references to read, in first-seen order.
+ * @param occurrences - how many times each attachment occurs in the request.
  * @param images - reader, diagnostics and cancellation.
  * @returns one prepared part per attachment id.
  */
-async function prepareImages(refs: readonly ImageRef[], images: WireImageOptions): Promise<Map<string, PreparedImage>> {
+async function prepareImages(
+  refs: readonly ImageRef[],
+  occurrences: ReadonlyMap<string, number>,
+  images: WireImageOptions,
+): Promise<Map<string, PreparedImage>> {
   const prepared = new Map<string, PreparedImage>()
   if (refs.length === 0) return prepared
   const reader = images.reader
@@ -250,35 +296,108 @@ async function prepareImages(refs: readonly ImageRef[], images: WireImageOptions
     images.onDiagnostic?.('no attachment service is mounted; ' + String(refs.length)
       + ' image(s) were sent as placeholder text')
     for (const ref of refs) {
-      prepared.set(ref.attachmentId, { part: { type: 'text', text: unavailableImageText(ref) }, bytes: ref.bytes })
+      // Placeholder text carries no image bytes, so it costs the inline budget
+      // nothing: the request that would be sent cannot exceed the byte bound.
+      prepared.set(ref.attachmentId, { part: { type: 'text', text: unavailableImageText(ref) }, bytes: 0 })
     }
     return prepared
   }
-  // Each task carries its own reference, so the map is built from the reads
-  // themselves rather than from a positional index a later edit could misalign.
-  // A misaligned index would send one attachment's bytes where another was
-  // meant: silent, and hard to trace from the transcript.
-  const entries = await Promise.all(refs.map(async (ref): Promise<[ImageRef, PreparedImage]> => {
+  // The budget counts occurrences, not attachments: a repeated image is sent
+  // (and paid for) once per occurrence.
+  let pricedBytes = 0
+  const overBudget = (): boolean => pricedBytes > MAX_REQUEST_IMAGE_BYTES
+  let next = 0
+  const readOne = async (ref: ImageRef): Promise<void> => {
+    let entry: PreparedImage
     try {
       const stored = await reader.readImageRequest(ref, imageTargetOf(ref), images.signal)
-      return [ref, {
+      entry = {
         part: {
           type: 'image_url',
           image_url: { url: 'data:' + stored.mediaType + ';base64,' + Buffer.from(stored.data).toString('base64') },
         },
         bytes: stored.data.byteLength,
-      }]
+      }
     }
     catch (error) {
       images.onDiagnostic?.('image ' + ref.attachmentId + ' could not be read and was sent as placeholder text: '
         + (error instanceof Error ? error.message : String(error)))
       // A placeholder carries no bytes, so it costs the budget nothing while
       // still telling the model an image was attached.
-      return [ref, { part: { type: 'text', text: unavailableImageText(ref) }, bytes: 0 }]
+      entry = { part: { type: 'text', text: unavailableImageText(ref) }, bytes: 0 }
     }
-  }))
-  for (const [ref, preparedImage] of entries) prepared.set(ref.attachmentId, preparedImage)
+    prepared.set(ref.attachmentId, entry)
+    pricedBytes += base64Length(entry.bytes) * (occurrences.get(ref.attachmentId) ?? 1)
+  }
+  const workers = Array.from({ length: Math.min(IMAGE_READ_CONCURRENCY, refs.length) }, async () => {
+    for (;;) {
+      if (overBudget()) return
+      const ref = refs[next]
+      next += 1
+      if (ref === undefined) return
+      await readOne(ref)
+    }
+  })
+  await Promise.all(workers)
+  // The stop above can leave images unread. They are priced at zero so the
+  // offload count still names the occurrences the measured prefix needs, and
+  // the request fails before anything is serialized.
+  for (const ref of refs) {
+    if (prepared.has(ref.attachmentId)) continue
+    prepared.set(ref.attachmentId, { part: { type: 'text', text: unavailableImageText(ref) }, bytes: 0 })
+  }
   return prepared
+}
+
+/**
+ * Retained occurrences of each attachment, in wire order.
+ * @param messages - messages this route actually sends.
+ * @returns attachment id to occurrence count.
+ */
+function imageOccurrences(messages: readonly RequestMessage[]): Map<string, number> {
+  const occurrences = new Map<string, number>()
+  for (const message of messages) {
+    for (const block of message.content) {
+      if (block.type !== 'image' || block.offloaded === true) continue
+      const id = block.attachment.attachmentId
+      occurrences.set(id, (occurrences.get(id) ?? 0) + 1)
+    }
+  }
+  return occurrences
+}
+
+/**
+ * Count occurrences the count budget alone already requires offloading.
+ *
+ * This is decidable before a single image is read, so a request over the count
+ * bound never pays for the decode it is about to discard. The byte budget can
+ * only ask for more, never fewer, so this is the floor of the real answer.
+ * @param messages - messages this route actually sends.
+ * @param maxImages - optional retained-occurrence limit.
+ * @returns leading occurrences to offload from the count budget, or 0.
+ */
+function precheckOffloadCount(messages: readonly RequestMessage[], maxImages: number | undefined): number {
+  if (maxImages === undefined) return 0
+  // Lengths are unknown here; only the count excess is being priced, and a
+  // zero-length list leaves the byte target at zero.
+  const offload = requiredImageOffload(
+    messages,
+    {
+      representation: 'base64',
+      maxBytes: Number.MAX_SAFE_INTEGER,
+      maxImages,
+      countQuantum: imageOffloadQuantum(retainedOccurrences(messages), maxImages),
+    },
+    () => 0,
+  )
+  return offload
+}
+
+/** Retained image occurrences of a request, in wire order. */
+function retainedOccurrences(messages: readonly RequestMessage[]): number {
+  let count = 0
+  for (const occurrences of imageOccurrences(messages).values()) count += occurrences
+  return count
 }
 
 /**
@@ -417,7 +536,8 @@ function sendingMessages(messages: readonly RequestMessage[]): readonly RequestM
 }
 
 /**
- * Refuse a request whose retained images exceed this route's inline budget.
+ * Count occurrences a request whose images have been read still exceeds its
+ * inline budget by.
  *
  * The failure carries `offloadImages`, the positive count of additional oldest
  * occurrences that must be offloaded; `dsh-compaction-image-offload` records
@@ -426,32 +546,35 @@ function sendingMessages(messages: readonly RequestMessage[]): readonly RequestM
  * without limit and fail upstream with an opaque 400 instead.
  * @param messages - request history, already narrowed to the messages this route sends.
  * @param prepared - images already read for this request.
- * @throws LlmError with `IMAGE_OFFLOAD_REQUIRED` when the budget is exceeded.
+ * @param maxImages - optional retained-occurrence limit.
+ * @returns leading occurrences to offload; 0 when the request fits.
  */
-function assertImagesFit(
+function offloadCountOf(
   messages: readonly RequestMessage[],
   prepared: ReadonlyMap<string, PreparedImage>,
   maxImages?: number,
-): void {
+): number {
   // `requiredImageOffload` applies the base64 expansion itself for the base64
   // representation, so this returns the encoded bytes as measured, not their
   // data-URI length.
   const bytesOf = (block: Extract<ContentBlock, { type: 'image' }>): number =>
     prepared.get(block.attachment.attachmentId)?.bytes ?? block.attachment.bytes
-  const offloadImages = requiredImageOffload(
+  return requiredImageOffload(
     messages,
-    { representation: 'base64', maxBytes: MAX_REQUEST_IMAGE_BYTES, countQuantum: IMAGE_OFFLOAD_COUNT_QUANTUM,
+    { representation: 'base64', maxBytes: MAX_REQUEST_IMAGE_BYTES, countQuantum: imageOffloadQuantum(retainedOccurrences(messages), maxImages),
       ...maxImages === undefined ? {} : { maxImages } },
     bytesOf,
   )
-  if (offloadImages > 0) {
-    throw new LlmError(
-      'CodeBuddy request images exceed the ' + String(MAX_REQUEST_IMAGE_BYTES)
-      + '-byte inline budget' + (maxImages === undefined ? '' : ' or ' + maxImages + '-image count budget') + '; ' + String(offloadImages) + ' more oldest occurrence(s) must be offloaded.',
-      IMAGE_OFFLOAD_REQUIRED_CODE,
-      { offloadImages },
-    )
-  }
+}
+
+/** The `IMAGE_OFFLOAD_REQUIRED` failure naming how many occurrences to remove. */
+function offloadError(offloadImages: number, maxImages: number | undefined): LlmError {
+  return new LlmError(
+    'CodeBuddy request images exceed the ' + String(MAX_REQUEST_IMAGE_BYTES)
+    + '-byte inline budget' + (maxImages === undefined ? '' : ' or ' + maxImages + '-image count budget') + '; ' + String(offloadImages) + ' more oldest occurrence(s) must be offloaded.',
+    IMAGE_OFFLOAD_REQUIRED_CODE,
+    { offloadImages },
+  )
 }
 
 /**
@@ -483,8 +606,13 @@ export async function buildChatPayload(
   // request this route cannot send at all, so it must not be priced.
   for (const message of options.messages) assertImageRole(message)
   const sending = sendingMessages(options.messages)
-  const prepared = await prepareImages(requestImageRefs(sending), scoped)
-  assertImagesFit(sending, prepared, images.maxRequestImages)
+  // The count bound is decidable without reading a single image, so a request
+  // that already exceeds it must not pay for decodes it is going to discard.
+  const precheck = precheckOffloadCount(sending, images.maxRequestImages)
+  if (precheck > 0) throw offloadError(precheck, images.maxRequestImages)
+  const prepared = await prepareImages(requestImageRefs(sending), imageOccurrences(sending), scoped)
+  const offloadImages = offloadCountOf(sending, prepared, images.maxRequestImages)
+  if (offloadImages > 0) throw offloadError(offloadImages, images.maxRequestImages)
   const messages: WireMessage[] = []
   if (options.system !== undefined && options.system !== '') {
     messages.push({ role: 'system', content: options.system })

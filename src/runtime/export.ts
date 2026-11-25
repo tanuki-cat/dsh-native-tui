@@ -14,13 +14,16 @@ export interface SessionExportResult {
  * @param agent - active Agent whose durable log is exported.
  * @param target - relative path resolved from cwd, or an absolute path.
  * @param cwd - Session workspace root used for relative targets.
+ * @param signal - cancels generation and the write when the command is aborted.
  * @returns written path and event count.
  */
 export async function exportSessionLog(
   agent: Agent,
   target: string,
   cwd: string,
+  signal?: AbortSignal,
 ): Promise<SessionExportResult> {
+  signal?.throwIfAborted()
   const path = resolve(cwd, target)
   const session = agent.session
   const events = session.snapshotEvents()
@@ -33,7 +36,13 @@ export async function exportSessionLog(
     exportedAt: new Date().toISOString(),
     eventCount: events.length,
   }
-  const body = [JSON.stringify(header), ...events.map(event => JSON.stringify(event))].join('\n') + '\n'
-  await writeFile(path, body, { encoding: 'utf8', flag: 'wx' })
+  const lines = [JSON.stringify(header)]
+  for (const event of events) {
+    signal?.throwIfAborted()
+    lines.push(JSON.stringify(event))
+  }
+  signal?.throwIfAborted()
+  // A session log can quote prompts and tool output; keep the file private.
+  await writeFile(path, lines.join('\n') + '\n', { encoding: 'utf8', flag: 'wx', mode: 0o600 })
   return { path, eventCount: events.length }
 }

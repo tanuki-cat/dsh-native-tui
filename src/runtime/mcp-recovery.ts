@@ -30,15 +30,25 @@ export const RETRY_WINDOW_MS = 30_000
  * with no answered call in between keeps one such report from killing a healthy
  * server's other tools, while a dead transport still fails every call it gets.
  * A streak also ages out after one retry window, so two unrelated failures
- * minutes apart do not add up to a restart. A structured `ConnectionClosed`
- * code needs no corroboration: no tool body produces it.
+ * minutes apart do not add up to a restart. A structured closed-connection code
+ * (`ConnectionClosed` or `MCP_CONNECTION_CLOSED`) needs no corroboration: no
+ * tool body produces it.
  */
 const REQUIRED_FAILURES = 2
+/**
+ * Leading context the Host adds before the transport's own message.
+ *
+ * Tool failures arrive as `MCP tool "<name>" failed: ...`, resource failures as
+ * `MCP resources/read failed: ...`. The transport text is matched after this
+ * prefix is removed, so prefixes cannot hide the first-word patterns below.
+ */
+const MCP_FAILURE_PREFIX = /^MCP .+ failed:\s*/u
 /** Transport-owned failure phrasings; free text is deliberately absent. */
 const CONNECTION_FAILURES: readonly RegExp[] = [
   /^Connection closed\b/iu,
   /\bserver is disconnected\b/iu,
   /^Error POSTing to endpoint\b/iu,
+  /\bMCP transport closed\b/iu,
   /\bfetch failed\b/iu,
   /\bsocket hang up\b/iu,
   /\bECONNRESET\b/u,
@@ -85,12 +95,19 @@ function failureMessage(result: unknown): string {
 
 /** Structured error code the MCP client assigns to a closed transport. */
 function closedConnectionCode(result: unknown): boolean {
-  return (result as { error?: { info?: { code?: unknown } } } | undefined)?.error?.info?.code === 'ConnectionClosed'
+  const code = (result as { error?: { info?: { code?: unknown } } } | undefined)?.error?.info?.code
+  return code === 'MCP_CONNECTION_CLOSED' || code === 'ConnectionClosed'
+}
+
+/** Remove the Host's failure prefix so first-word transport patterns still match. */
+function transportMessage(message: string): string {
+  return message.replace(MCP_FAILURE_PREFIX, '')
 }
 
 /** Decide whether one failed call looks like a transport failure. */
 function isConnectionFailure(result: unknown, message: string): boolean {
-  return closedConnectionCode(result) || CONNECTION_FAILURES.some(pattern => pattern.test(message))
+  const transport = transportMessage(message)
+  return closedConnectionCode(result) || CONNECTION_FAILURES.some(pattern => pattern.test(transport))
 }
 
 /** States the core manager is already resolving without outside help. */

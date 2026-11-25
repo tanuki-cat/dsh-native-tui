@@ -56,13 +56,18 @@ function codeOf(error: unknown): unknown {
   return error !== null && typeof error === 'object' ? (error as { readonly code?: unknown }).code : undefined
 }
 
-/** Render one notice without duplicating the URL or code. */
-function noticeText(notice: AuthorizationNotice, opened: boolean): string {
+/**
+ * Render one notice without duplicating the URL or code.
+ * @param notice - the flow's announcement.
+ * @param needsManualOpen - whether this is the first announcement of the URL
+ *   and the browser could not be launched for it.
+ */
+function noticeText(notice: AuthorizationNotice, needsManualOpen: boolean): string {
   const parts = [notice.message]
   if (notice.code !== undefined) parts.push('code: ' + notice.code)
   if (notice.url !== undefined) {
     parts.push(notice.url)
-    if (!opened) parts.push('(open this URL in a browser)')
+    if (needsManualOpen) parts.push('(open this URL in a browser)')
   }
   return parts.join(' ')
 }
@@ -107,11 +112,13 @@ export async function loginCodex(deps: LoginDeps): Promise<LoginOutcome> {
     if (signal.aborted) return
     const url = notice.url
     const first = url !== undefined && !opened.has(url)
-    const launched = first && url !== undefined && autoOpenable(url)
-      ? deps.openUrl?.(url) === true
-      : false
+    const launched = first && url !== undefined && autoOpenable(url) ? deps.openUrl?.(url) === true : false
     if (first && url !== undefined) opened.add(url)
-    deps.notice('info', noticeText(notice, launched))
+    // The manual hint belongs to the first announcement only, and only when the
+    // browser was not launched for it: repeating it for a URL already shown
+    // reads as if the earlier page had failed.
+    const needsManualOpen = first && !launched
+    deps.notice('info', noticeText(notice, needsManualOpen))
   }
 
   const startDeviceWait = (notice: AuthorizationNotice): void => {

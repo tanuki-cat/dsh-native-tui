@@ -64,7 +64,7 @@ const READ_TOOLS = new Set([
   // Waiting on a child and reading the shared task board mutate nothing.
   'wait_agent', 'team_task_list', 'team_task_get',
 ])
-const FILE_EDITS = new Set(['write', 'edit'])
+const FILE_EDITS = new Set(['write', 'edit', 'apply_patch'])
 const SANDBOX_RANK: Record<string, number> = {
   'read-only': 0,
   'workspace-write': 1,
@@ -200,11 +200,26 @@ export class InteractionModeService {
   }
 
   current(agent: Agent): InteractionMode | 'custom' {
+    // The Host `/plan` selection is durable and independent of the permission
+    // preset: native presets such as danger-full-access must still be gated
+    // read-only while the plan projection says planning.
+    const plan = this.planState(agent)
+    if (plan?.pending ?? plan?.active ?? false) return 'plan'
     const preset = this.permissions.current(agent.session)
     if (!isInteractionMode(preset) || preset === 'off') return 'off'
-    const plan = this.plan(agent)?.get(agent)
-    if (plan?.pending ?? plan?.active ?? false) return 'plan'
     return this.configured(preset) ? preset : 'custom'
+  }
+
+  /** Read the Host plan projection; a disposed unit must not crash a mode switch. */
+  private planState(agent: Agent): { active: boolean; pending?: boolean } | undefined {
+    try {
+      return this.plan(agent)?.get(agent)
+    }
+    catch {
+      // PLAN_STATE_UNAVAILABLE during preset switching or unloading means
+      // there is no plan to gate, not a reason to take the terminal down.
+      return undefined
+    }
   }
 
   private configured(mode: InteractionMode): boolean {
@@ -263,13 +278,21 @@ export class InteractionModeService {
       if (preset === 'plan') { reachedPlan = true; continue }
       if (reachedPlan && typeof preset === 'string') return preset
     }
-    return 'accept-edits'
+    return this.fallbackPreset(agent)
+  }
+
+  /** Pick a preset this profile actually offers when plan mode has no history to restore. */
+  private fallbackPreset(agent: Agent): string {
+    // The configured default is the profile's own answer; the native preset is
+    // the fallback when that default is an interaction identity this profile
+    // does not register.
+    const candidates = [this.permissions.defaultPreset, this.nativePreset(agent)]
+    return candidates.find(preset => this.permissions.names.includes(preset)) ?? this.permissions.defaultPreset
   }
 
   /** Called at an accepted pre-step, not from the non-reentrant append feed. */
   reconcilePlan(agent: Agent): void {
-    if (this.current(agent) === 'off') return
-    const plan = this.plan(agent)?.get(agent)
+    const plan = this.planState(agent)
     if (plan === undefined) return
     const wanted = plan.pending ?? plan.active
     const preset = this.permissions.current(agent.session)

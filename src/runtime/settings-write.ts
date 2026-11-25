@@ -38,11 +38,26 @@ export function isSettingsConflict(error: unknown): boolean {
 }
 
 /**
+ * A path segment that addresses an array element by position.
+ *
+ * Object keys may also be numeric strings, so this errs toward refusing the
+ * retry: replaying a positional edit after another writer changed the array
+ * would update a different element, which is worse than surfacing the conflict.
+ */
+const ARRAY_INDEX_SEGMENT = /^(?:0|[1-9][0-9]*)$/u
+
+/** Whether an edit depends on the current position of array elements. */
+function addressesArrayIndex(op: SettingsPathOp): boolean {
+  return op.path.some(segment => ARRAY_INDEX_SEGMENT.test(segment))
+}
+
+/**
  * Apply path edits and return the namespace's refreshed descriptor.
  *
  * A revision conflict means the profile moved while this editor was open. The
  * edits are path-addressed and already user-confirmed, so retrying once against
- * the fresh revision only touches those exact paths.
+ * the fresh revision only touches those exact paths — unless an edit names an
+ * array index, which another writer may already have shifted.
  * @param settings - Host settings service.
  * @param ns - namespace to write.
  * @param ops - path-addressed edits.
@@ -60,6 +75,7 @@ export async function writeSettingsOps(
   }
   catch (error) {
     if (!isSettingsConflict(error)) throw error
+    if (ops.some(addressesArrayIndex)) throw error
     const fresh = findSettingsNamespace(settings, ns)
     if (fresh === undefined) return undefined
     await settings.mutate(ns, ops, fresh.revision)
