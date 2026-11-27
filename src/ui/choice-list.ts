@@ -35,4 +35,16 @@ export class ChoiceList extends SelectList {
     this.updateLabels()
     return selectionRows(super.render(width), width, this.palette.autocompleteSelection)
   }
+
+  /**
+   * Resize the visible window to the terminal height.
+   *
+   * `SelectList` keeps `maxVisible` private and exposes no setter, but its
+   * scrolling math is exactly what an adaptive dialog needs; writing the field
+   * preserves selection, filtering and the callbacks already wired.
+   * @param maxVisible - rows the list may paint.
+   */
+  setMaxVisible(maxVisible: number): void {
+    (this as unknown as { maxVisible: number }).maxVisible = Math.max(1, Math.floor(maxVisible))
+  }
 }

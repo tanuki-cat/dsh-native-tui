@@ -459,3 +459,8 @@ docs/design-task-feature-dsh-native-tui-host-native.md
 - 状态语义：弹窗优先于运行态（`blocked`），`completed` → `done`，`error` → `error`，`aborted` / `interrupted` / `blocked` / `forked` / `max-tokens` → `idle`（取消不伪装成完成）；`done` / `error` 保持到下一轮开始。标题仍由 OSC 0 单独维护，两者互不覆盖。
 - 启动时设置 `process.title = 'dsh'`：iTerm2 的 Show current job name 取前台进程 argv[0]（源码为 `argv0 ?? name`），Node 默认显示 `(node)`；改为 `(dsh)`，不影响 OSC 0 标题与 OSC 7501 记录。
 - `tests/tab-status.spec.ts` 的 15 项测试通过，覆盖状态映射、去重、重叠弹窗乱序关闭和旧会话弹窗清理。真实 Host 探针 `scripts/fake-tty-tab-status.mjs` 模拟终端协商回复，验证 `idle → working → done → blocked:permission → done → blocked:question → done → clear` 的完整顺序、两种 `waiting` 提示及 OSC 0 工作区标题。`pnpm check` 通过（140 个测试文件、2,066 项测试、类型检查和构建）。
+
+## 2026-11-28 · 第三轮全量代码审查与修复
+
+- 完成三路只读全量审查并分 3 组落地全部 18 项修复（High 3 项、Medium 9 项、Low 6 项），覆盖：`PromptEditor` 超宽字素防爆栈、`StreamText` 无换行流式可视行增量提交、`/workspaces use` 运行中切会话守卫、`/context` 报告 `compaction.route` 终端转义清洗、deliverable 单 FD `O_NOFOLLOW` 消除 TOCTOU、`transcript` 大会话冷启动窗口压缩与 `toolMemory` 有界回收、`ToolOutput`/`WriteCard` 先截窗后规范化、`files.ts` 复用 `Intl.Collator`、`StreamMarkdown` `frozenLength` 零前缀拷贝、`SkillCache` 单飞去重与失败缓存、notice/tool 错误行宽度裁剪、模态列表 `maxVisible` 随终端高度自适应、compact thinking 按列宽单行截断、`ask_user_question` 长详情查看入口、`TextInputDialog` secret 屏幕掩码、自定义 provider 非 loopback 明文 HTTP 限制，以及卡片截断代理对/字素安全化。[第三轮审查与修复记录](design-task-fix-audit-round-3.md)
+- 验证：`pnpm check` 全量通过（144 个测试文件 / 2,112 项测试、类型检查、构建），所有 `src/` 文件均 ≤ 1,000 行（`src/ui/dialogs.ts` 拆出 `dialog-frame.ts` 与 `text-input-dialog.ts` 后 908 行，`src/ui/transcript.ts` 拆出 `transcript-compaction.ts` 与 `transcript-memory.ts` 后 958 行）。

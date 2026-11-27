@@ -5,7 +5,6 @@ import {
   isKeyRelease,
   matchesKey,
   truncateToWidth,
-  visibleWidth,
   type Component,
   type SelectList,
   type TUI,
@@ -30,35 +29,29 @@ import type { ImagePreview } from '../runtime/images.js'
 import { sanitizeTerminalText } from '../runtime/terminal-text.js'
 import { ChoiceList, type ChoiceItem } from './choice-list.js'
 import { PromptEditor } from './prompt-editor.js'
+import { TextInputDialog } from './text-input-dialog.js'
+import { dialogFrame } from './dialog-frame.js'
 
 export type { ChoiceItem } from './choice-list.js'
+export { dialogFrame } from './dialog-frame.js'
 
 function localeText(value: { readonly en: string; readonly [locale: string]: string } | undefined): string | undefined {
   if (value === undefined) return undefined
   return value.en ?? Object.values(value)[0]
 }
 
-/** Render a full-width, opaque dialog surface so the transcript cannot bleed through. */
-export function dialogFrame(lines: readonly string[], width: number, palette: Palette): string[] {
-  if (width < 6) {
-    const safe = Math.max(0, width)
-    return lines.map((line) => {
-      const bounded = truncateToWidth(line, safe, '…')
-      const clipped = palette.plain ? bounded.replace(/\x1b\[[0-9;]*m/gu, '') : bounded
-      return palette.dialogBand(clipped + ' '.repeat(Math.max(0, safe - visibleWidth(clipped))))
-    })
-  }
-  const outer = width
-  const inner = Math.max(1, outer - 4)
-  const content = lines.map((line) => {
-    const bounded = truncateToWidth(line, inner)
-    // Native cursor markers must survive plain mode; SGR resets from truncation need not.
-    const clipped = palette.plain ? bounded.replace(/\x1b\[[0-9;]*m/gu, '') : bounded
-    return palette.dialogBand('│ ' + clipped)
-      + palette.dialogBand(' '.repeat(Math.max(0, inner - visibleWidth(clipped))) + ' │')
-  })
-  return [palette.dialogBand('┌' + '─'.repeat(outer - 2) + '┐'), ...content,
-    palette.dialogBand('└' + '─'.repeat(outer - 2) + '┘')]
+/** Overlay height percentages the dialogs below open with. */
+const CHOICE_OVERLAY_PERCENT = 80
+const SEARCH_OVERLAY_PERCENT = 85
+
+/**
+ * Rows an overlay with a percentage height may paint on a terminal.
+ * @param rows - terminal rows, defaulting to a typical 30-row terminal.
+ * @param percent - `maxHeight` percentage the dialog opens with.
+ * @returns the row budget pi-tui resolves from that percentage.
+ */
+export function overlayRowLimit(rows: number | undefined, percent: number): number {
+  return Math.max(3, Math.floor((rows ?? 30) * percent / 100))
 }
 
 /**
@@ -77,10 +70,11 @@ export function bindAbort(signal: AbortSignal | undefined, onAbort: () => void):
 
 /** SelectList wrapper that owns its title and key hint. */
 class ChoiceDialog implements Component {
-  private readonly list: SelectList
+  private readonly list: ChoiceList
   constructor(
+    private readonly tui: TUI,
     private readonly title: string,
-    items: readonly ChoiceItem[],
+    private readonly items: readonly ChoiceItem[],
     private readonly hint: string,
     private readonly palette: Palette,
     private readonly maxTitleRows?: () => number,
@@ -100,13 +94,17 @@ class ChoiceDialog implements Component {
     const limit = this.maxTitleRows?.()
     const shown = limit !== undefined && title.length > limit
       ? limit === 1 ? [truncateToWidth(title[0] ?? '', inner, '…')]
-        : [...title.slice(0, limit - 1), this.palette.dim('… View full request details')] : title
+        : [...title.slice(0, limit - 1), this.palette.dim('… Choose "View full details" to read the rest')] : title
+    const hint = new Text(this.palette.dim(this.hint), 0, 0).render(inner)
+    const chrome = 2 + shown.length + (limit === 1 ? 0 : 1) + (limit === undefined ? 1 : 0) + hint.length
+    const budget = Math.max(1, overlayRowLimit(this.tui.terminal?.rows, CHOICE_OVERLAY_PERCENT) - chrome)
+    this.list.setMaxVisible(Math.max(1, budget - (this.items.length > budget ? 1 : 0)))
     return dialogFrame([
       ...shown,
       ...(limit === 1 ? [] : ['']),
       ...this.list.render(inner),
       ...(limit === undefined ? [''] : []),
-      ...new Text(this.palette.dim(this.hint), 0, 0).render(inner),
+      ...hint,
     ], width, this.palette)
   }
 
@@ -116,11 +114,13 @@ class ChoiceDialog implements Component {
 
 /** Searchable select list with an inline filter input. */
 class SearchChoiceDialog implements Component {
-  private list: SelectList
+  private list: ChoiceList
   private readonly input: Input
+  private matches = 0
   onSelect?: (item: { value: string; label: string; description?: string }) => void
   onCancel?: () => void
   constructor(
+    private readonly tui: TUI,
     private title: string,
     private items: readonly ChoiceItem[],
     private hint: string,
@@ -139,13 +139,14 @@ class SearchChoiceDialog implements Component {
     this.list = this.makeList(this.input.getValue(), selected)
   }
 
-  private makeList(filter: string, selected?: string): SelectList {
+  private makeList(filter: string, selected?: string): ChoiceList {
     const query = filter.trim().toLowerCase()
     const matches = this.items.filter(item => query === ''
       || item.value.toLowerCase().includes(query)
       || item.label.toLowerCase().includes(query)
       || (item.badge?.text ?? '').toLowerCase().includes(query)
       || (item.description ?? '').toLowerCase().includes(query))
+    this.matches = matches.length
     const list = new ChoiceList(
       matches,
       12,
@@ -160,13 +161,18 @@ class SearchChoiceDialog implements Component {
 
   render(width: number): string[] {
     const inner = Math.max(1, width - 4)
+    const title = new Text(sanitizeTerminalText(this.title), 0, 0).render(inner)
+    const hint = new Text(this.palette.dim(this.hint), 0, 0).render(inner)
+    const chrome = 2 + title.length + 1 + 1 + 1 + hint.length
+    const budget = Math.max(1, overlayRowLimit(this.tui.terminal?.rows, SEARCH_OVERLAY_PERCENT) - chrome)
+    this.list.setMaxVisible(Math.max(1, budget - (this.matches > budget ? 1 : 0)))
     return dialogFrame([
-      ...new Text(sanitizeTerminalText(this.title), 0, 0).render(inner),
+      ...title,
       ...this.input.render(inner),
       '',
       ...this.list.render(inner),
       '',
-      ...new Text(this.palette.dim(this.hint), 0, 0).render(inner),
+      ...hint,
     ], width, this.palette)
   }
 
@@ -190,43 +196,6 @@ class SearchChoiceDialog implements Component {
     this.input.invalidate()
     this.list.invalidate()
   }
-}
-
-/** Single-line input wrapper that owns its title and key hint. */
-class TextInputDialog implements Component {
-  readonly input: Input
-  constructor(
-    private readonly title: string,
-    placeholder: string,
-    private readonly hint: string,
-    private readonly palette: Palette,
-    initialValue?: string,
-  ) {
-    this.input = new Input({ prompt: '› ', placeholder })
-    if (initialValue !== undefined) {
-      // Host settings are untrusted data: escape sequences there would reach the
-      // terminal through the Input, and a single-line field cannot hold breaks.
-      this.input.setValue(sanitizeTerminalText(initialValue).replace(/[\r\n\t]/gu, ' '))
-      // setValue leaves the cursor before the old text; a prefilled field should
-      // open at its end so typing extends the value instead of prepending to it.
-      this.input.handleInput('\x05')
-    }
-    this.input.focused = true
-  }
-
-  render(width: number): string[] {
-    const inner = Math.max(1, width - 4)
-    return dialogFrame([
-      ...new Text(sanitizeTerminalText(this.title), 0, 0).render(inner),
-      '',
-      ...this.input.render(inner),
-      '',
-      ...new Text(this.palette.dim(this.hint), 0, 0).render(inner),
-    ], width, this.palette)
-  }
-
-  handleInput(data: string): void { this.input.handleInput(data) }
-  invalidate(): void { this.input.invalidate() }
 }
 
 /** Show one keyboard-selected choice. */
@@ -255,7 +224,7 @@ export function showChoice(
     }
     const onAbort = (): void => { finish(undefined) }
     try {
-      const dialog = new ChoiceDialog(title, items, hint, palette, maxTitleRows)
+      const dialog = new ChoiceDialog(tui, title, items, hint, palette, maxTitleRows)
       handle = tui.showOverlay(dialog, { width: 76, maxHeight: '80%', anchor: 'center' })
       dialog.selectList.onSelect = item => { finish(item.value) }
       dialog.selectList.onCancel = () => { finish(undefined) }
@@ -295,7 +264,7 @@ export function showSearchChoice(
     }
     const onAbort = (): void => { finish(undefined) }
     try {
-      const dialog = new SearchChoiceDialog(title, items, hint, palette)
+      const dialog = new SearchChoiceDialog(tui, title, items, hint, palette)
       handle = tui.showOverlay(dialog, { width: 84, maxHeight: '85%', anchor: 'center' })
       dialog.onSelect = item => { finish(item.value) }
       dialog.onCancel = () => { finish(undefined) }
@@ -318,6 +287,12 @@ export function showSearchChoice(
   })
 }
 
+/** Options for one free-text input. */
+export interface TextInputOptions {
+  /** Mask the typed value on screen while submitting the real value. */
+  readonly secret?: boolean
+}
+
 /** Show one free-text input. */
 export function showTextInput(
   tui: TUI,
@@ -328,6 +303,7 @@ export function showTextInput(
   signal?: AbortSignal,
   initialValue?: string,
   allowEmpty?: boolean,
+  options?: TextInputOptions,
 ): Promise<string | undefined> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted === true) {
@@ -345,7 +321,7 @@ export function showTextInput(
     }
     const onAbort = (): void => { finish(undefined) }
     try {
-      const dialog = new TextInputDialog(title, placeholder, hint, palette, initialValue)
+      const dialog = new TextInputDialog(title, placeholder, hint, palette, initialValue, options?.secret === true)
       handle = tui.showOverlay(dialog, { width: 76, maxHeight: '80%', anchor: 'center' })
       dialog.input.onSubmit = value => {
         const trimmed = value.trim()
@@ -619,9 +595,19 @@ const OTHER_ANSWER_VALUE = '__custom__'
 /** Row that answers a question with no selection and continues the batch. */
 const SKIP_ANSWER_VALUE = '__skip__'
 
+/** Row that opens the complete, unclipped question text and detail. */
+const DETAILS_ANSWER_VALUE = '__details__'
+
+/** The full-detail row every question option list ends with. */
+const DETAILS_ANSWER_ITEM: ChoiceItem = {
+  value: DETAILS_ANSWER_VALUE,
+  label: 'View full details',
+  description: 'Read the complete question without answering',
+}
+
 /** Whether an option-list row is a dialog action rather than an answer label. */
 function isAnswerAction(value: string): boolean {
-  return value === OTHER_ANSWER_VALUE || value === SKIP_ANSWER_VALUE
+  return value === OTHER_ANSWER_VALUE || value === SKIP_ANSWER_VALUE || value === DETAILS_ANSWER_VALUE
 }
 
 /** Build the cancellation error the Host classifies as `ASK_ABORTED`. */
@@ -644,6 +630,28 @@ function questionTitle(question: AskUserQuestionItem, index: number, total: numb
   return parts.join('\n')
 }
 
+/** Complete question text and detail, without the title's display clip. */
+function questionFullText(question: AskUserQuestionItem, index: number, total: number): string {
+  return [
+    question.header === undefined ? `Question ${String(index + 1)}/${String(total)}` : `${question.header} · ${String(index + 1)}/${String(total)}`,
+    question.question,
+    ...(question.detail === undefined || question.detail.trim() === '' ? [] : ['', question.detail]),
+  ].join('\n')
+}
+
+/** Page the complete question so a truncated title is never a dead end. */
+function showQuestionDetails(
+  tui: TUI,
+  palette: Palette,
+  question: AskUserQuestionItem,
+  index: number,
+  total: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  return showComponentPager(tui, palette, 'Question details',
+    new Text(sanitizeTerminalText(questionFullText(question, index, total)), 0, 0), signal)
+}
+
 /**
  * Title rows a question overlay may occupy.
  *
@@ -658,16 +666,18 @@ const QUESTION_TITLE_ROWS = 4
  * free-text answer that supplements them.
  */
 class MultiChoiceDialog implements Component {
-  private list: SelectList
+  private list: ChoiceList
   private index = 0
   private error = ''
   private readonly checked = new Set<string>()
   onSubmit?: (selected: string[]) => void
   onCustom?: () => void
   onSkip?: () => void
+  onDetails?: () => void
   onCancel?: () => void
 
   constructor(
+    private readonly tui: TUI,
     private readonly title: string,
     private readonly items: readonly ChoiceItem[],
     private readonly hint: string,
@@ -683,7 +693,7 @@ class MultiChoiceDialog implements Component {
       .map(item => item.label)
   }
 
-  private makeList(): SelectList {
+  private makeList(): ChoiceList {
     const list = new ChoiceList(
       this.items.map(item => ({
         value: item.value,
@@ -701,6 +711,10 @@ class MultiChoiceDialog implements Component {
       if (found >= 0) this.index = found
     }
     list.onSelect = (item) => {
+      if (item.value === DETAILS_ANSWER_VALUE) {
+        this.onDetails?.()
+        return
+      }
       if (item.value === OTHER_ANSWER_VALUE) {
         this.onCustom?.()
         return
@@ -737,15 +751,20 @@ class MultiChoiceDialog implements Component {
     const inner = Math.max(1, width - 4)
     const title = new Text(sanitizeTerminalText(this.title), 0, 0).render(inner)
     const shown = title.length > QUESTION_TITLE_ROWS
-      ? [...title.slice(0, QUESTION_TITLE_ROWS - 1), this.palette.dim('… View full request details')]
+      ? [...title.slice(0, QUESTION_TITLE_ROWS - 1), this.palette.dim('… Choose "View full details" to read the rest')]
       : title
+    const hint = new Text(this.palette.dim(this.hint), 0, 0).render(inner)
+    const error = this.error === '' ? [] : new Text(this.palette.error(this.error), 0, 0).render(inner)
+    const chrome = 2 + shown.length + 1 + 1 + error.length + hint.length
+    const budget = Math.max(1, overlayRowLimit(this.tui.terminal?.rows, CHOICE_OVERLAY_PERCENT) - chrome)
+    this.list.setMaxVisible(Math.max(1, budget - (this.items.length > budget ? 1 : 0)))
     return dialogFrame([
       ...shown,
       '',
       ...this.list.render(inner),
       '',
-      ...(this.error === '' ? [] : new Text(this.palette.error(this.error), 0, 0).render(inner)),
-      ...new Text(this.palette.dim(this.hint), 0, 0).render(inner),
+      ...error,
+      ...hint,
     ], width, this.palette)
   }
 
@@ -766,6 +785,7 @@ function showMultiChoice(
   items: readonly ChoiceItem[],
   hint: string,
   signal?: AbortSignal,
+  onDetails?: () => void,
 ): Promise<MultiChoiceResult | undefined> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted === true) {
@@ -783,11 +803,12 @@ function showMultiChoice(
     }
     const onAbort = (): void => { finish(undefined) }
     try {
-      const dialog = new MultiChoiceDialog(title, items, hint, palette)
+      const dialog = new MultiChoiceDialog(tui, title, items, hint, palette)
       handle = tui.showOverlay(dialog, { width: 76, maxHeight: '80%', anchor: 'center' })
       dialog.onSubmit = selected => { finish({ selected, custom: false, skip: false }) }
       dialog.onCustom = () => { finish({ selected: dialog.selection(), custom: true, skip: false }) }
       dialog.onSkip = () => { finish({ selected: [], custom: false, skip: true }) }
+      dialog.onDetails = () => { onDetails?.() }
       dialog.onCancel = () => { finish(undefined) }
     } catch (error) {
       reject(error)
@@ -819,8 +840,13 @@ async function answerOne(
       const mode = await showChoice(tui, palette, title, [
         { value: 'answer', label: 'Answer…', description: 'Type a free-text answer' },
         { value: SKIP_ANSWER_VALUE, label: 'Skip this question', description: 'Leave this answer empty and continue' },
+        DETAILS_ANSWER_ITEM,
       ], 'Enter selects · Esc cancels the batch', signal, () => QUESTION_TITLE_ROWS)
       if (mode === undefined) throw abortedQuestion()
+      if (mode === DETAILS_ANSWER_VALUE) {
+        await showQuestionDetails(tui, palette, question, index, total, signal)
+        continue
+      }
       if (mode === SKIP_ANSWER_VALUE) return { id: question.id, selected: [] }
       const custom = await showTextInput(tui, palette, title, 'type an answer', 'Enter submits · Esc cancels the batch', signal, undefined, true)
       if (custom === undefined) throw abortedQuestion()
@@ -837,9 +863,12 @@ async function answerOne(
     })),
     { value: OTHER_ANSWER_VALUE, label: 'Other…', description: 'Type a free-text answer' },
     { value: SKIP_ANSWER_VALUE, label: 'Skip this question', description: 'Leave this answer empty and continue' },
+    DETAILS_ANSWER_ITEM,
   ]
   if (question.multiSelect === true) {
-    const picked = await showMultiChoice(tui, palette, title, items, 'Space toggles · Enter submits · Other… adds text · Esc cancels the batch', signal)
+    const picked = await showMultiChoice(tui, palette, title, items,
+      'Space toggles · Enter submits · Other… adds text · Esc cancels the batch', signal,
+      () => { void showQuestionDetails(tui, palette, question, index, total, signal) })
     if (picked === undefined) throw abortedQuestion()
     if (picked.skip) return { id: question.id, selected: [] }
     if (!picked.custom) return { id: question.id, selected: picked.selected }
@@ -850,6 +879,10 @@ async function answerOne(
   for (;;) {
     const choice = await showChoice(tui, palette, title, items, 'Enter selects · Esc cancels the batch', signal, () => QUESTION_TITLE_ROWS)
     if (choice === undefined) throw abortedQuestion()
+    if (choice === DETAILS_ANSWER_VALUE) {
+      await showQuestionDetails(tui, palette, question, index, total, signal)
+      continue
+    }
     if (choice === SKIP_ANSWER_VALUE) return { id: question.id, selected: [] }
     if (choice !== OTHER_ANSWER_VALUE) return { id: question.id, selected: [choice] }
     const custom = await showTextInput(tui, palette, title, 'type an answer', 'Enter submits · Esc cancels the batch', signal, undefined, true)

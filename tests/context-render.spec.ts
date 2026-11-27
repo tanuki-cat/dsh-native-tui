@@ -54,6 +54,27 @@ describe('context command final rendering', () => {
     for (const theme of ['dark', 'light', 'plain'] as const) expect(harness(theme).render(width).every(row => visibleWidth(row) <= width)).toBe(true)
   })
 
+  it('strips terminal controls from the compaction route', () => {
+    const h = harness('dark', {
+      metrics: {
+        ...metrics(),
+        compaction: {
+          state: 'known',
+          route: 'local/model\x1b]52;c;CLIPBOARD\x07\x1b[31m',
+          tokens: 800_000,
+          window: 1_000_000,
+          percent: 80,
+        },
+      },
+      breakdown: breakdown(),
+    })
+    const rendered = h.render().join('\n')
+    expect(rendered).not.toContain('\x1b]52;')
+    expect(rendered).not.toContain('CLIPBOARD')
+    expect(stripTerminalSequences(rendered)).toContain('Automatic compaction: at 80% of the window (800,000 tokens) · local/model')
+    expect(rendered).toContain(h.palette.contextBucket('system')('█'))
+  })
+
   it('keeps the command-time metrics and composition when their source objects change', () => {
     const h = harness()
     Object.assign(h.figures.metrics, { contextPercent: 99, contextEstimateTokens: 990000 })

@@ -16,6 +16,22 @@ const render = (message: AssistantMessage): string => stripTerminalSequences(mes
 type AssistantBlock = Extract<TranscriptBlock, { kind: 'assistant' }>
 
 describe('AssistantMessage compact thinking', () => {
+  it('bounds a wide CJK preview by columns and keeps the omission marker inline', () => {
+    const block: AssistantBlock = {
+      kind: 'assistant',
+      text: 'answer',
+      reasoning: '中'.repeat(200),
+      live: false,
+    }
+    const message = new AssistantMessage(block, options)
+    const text = render(message)
+    expect(text).toContain('thinking · 中')
+    expect(text).toContain('chars omitted')
+    // The marker must not occupy its own source row: it is appended to the one
+    // compact line, which then wraps naturally inside MessageBody.
+    expect(text).not.toContain('\n… [')
+  })
+
   it('leaves the streaming preview when the same reasoning settles', () => {
     const block: AssistantBlock = {
       kind: 'assistant',

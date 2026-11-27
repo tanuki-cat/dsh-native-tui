@@ -292,6 +292,16 @@ describe('provider config helpers', () => {
   })
 })
 describe('provider baseURL validation', () => {
+  it('allows plain HTTP only for loopback hosts', () => {
+    expect(normalizeBaseURL('https://api.example.com/v1')).toBe('https://api.example.com/v1')
+    expect(normalizeBaseURL('http://localhost:11434/v1')).toBe('http://localhost:11434/v1')
+    expect(normalizeBaseURL('http://127.0.0.1:8080/v1/')).toBe('http://127.0.0.1:8080/v1')
+    expect(normalizeBaseURL('http://127.12.0.9/v1')).toBe('http://127.12.0.9/v1')
+    expect(normalizeBaseURL('http://[::1]:8080/v1')).toBe('http://[::1]:8080/v1')
+    expect(() => normalizeBaseURL('http://api.example.com/v1')).toThrow('baseURL must use https for non-loopback hosts')
+    expect(() => normalizeBaseURL('http://127.0.0.1.example.com/v1')).toThrow('baseURL must use https for non-loopback hosts')
+  })
+
   it('rejects a query, fragment or embedded credentials', () => {
     // Each would be repeated in front of every request path, or sent as a
     // credential the operator never configured.

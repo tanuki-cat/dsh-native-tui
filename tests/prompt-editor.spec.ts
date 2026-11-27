@@ -128,6 +128,33 @@ describe('PromptEditor', () => {
     expect(editor.getText()).toBe('abcdef')
   })
 
+  it.each([1, 2, 3])('renders a wide CJK draft at %i columns without recursing through word wrap', width => {
+    // A full-width grapheme cannot fit the one-column layout these widths
+    // resolve to; pi-tui's wordWrapLine recurses on itself instead of wrapping.
+    const editor = createEditor()
+    editor.setText('中文')
+    const lines = editor.render(width)
+    expect(lines.every(line => visibleWidth(withoutCursor(line)) <= width)).toBe(true)
+    expect(editor.getText()).toBe('中文')
+  })
+
+  it('renders an absurd combining-mark cluster without overflowing a normal terminal', () => {
+    const editor = createEditor()
+    editor.setText('\u093E'.repeat(200))
+    const lines = editor.render(80)
+    expect(lines.every(line => visibleWidth(withoutCursor(line)) <= 80)).toBe(true)
+    expect(editor.getText()).not.toBe('')
+  })
+
+  it('bounds an over-wide cluster inserted at the cursor or pasted', () => {
+    const inserted = createEditor()
+    inserted.insertTextAtCursor('\u093E'.repeat(200))
+    expect(inserted.render(80).every(line => visibleWidth(withoutCursor(line)) <= 80)).toBe(true)
+    const pasted = createEditor()
+    pasted.handleInput('\x1b[200~' + '\u093E'.repeat(200) + '\x1b[201~')
+    expect(pasted.render(80).every(line => visibleWidth(withoutCursor(line)) <= 80)).toBe(true)
+  })
+
   it('keeps the prompt visible when a multiline draft scrolls', () => {
     const editor = createEditor()
     editor.setText(Array.from({ length: 30 }, (_, index) => 'row ' + index).join('\n'))

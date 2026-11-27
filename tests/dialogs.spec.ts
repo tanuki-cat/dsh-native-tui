@@ -145,6 +145,25 @@ describe('dialog frame', () => {
 })
 
 describe('text input dialog', () => {
+  it('masks a secret value on screen while submitting and editing the real value', async () => {
+    let component: { render(width: number): string[]; handleInput(data: string): void } | undefined
+    const promise = showTextInput({
+      showOverlay(value: { render(width: number): string[]; handleInput(data: string): void }) {
+        component = value
+        return { hide() {} }
+      },
+    } as never, createPalette('plain'), 'API key', 'paste the key', 'Masked on screen · Esc cancels',
+    new AbortController().signal, undefined, undefined, { secret: true })
+    component!.handleInput('hunter2')
+    const rendered = stripTerminalSequences(component!.render(60).join('\n'))
+    expect(rendered).not.toContain('hunter2')
+    expect(rendered).toContain('*******')
+    expect(rendered).toContain('Masked on screen')
+    component!.handleInput('\x7f')
+    component!.handleInput('\r')
+    await expect(promise).resolves.toBe('hunter')
+  })
+
   it('opens a prefilled value with the cursor at the end', async () => {
     let component: { render(width: number): string[]; handleInput(data: string): void } | undefined
     const promise = showTextInput({
@@ -160,14 +179,14 @@ describe('text input dialog', () => {
 })
 
 /** Minimal overlay host: capture each shown component and drive it with keys. */
-function overlayHarness(): { tui: never; overlays: { render(width: number): string[]; handleInput(data: string): void }[] } {
+function overlayHarness(rows = 24): { tui: never; overlays: { render(width: number): string[]; handleInput(data: string): void }[] } {
   const overlays: { render(width: number): string[]; handleInput(data: string): void }[] = []
   const tui = {
-    terminal: { rows: 24, columns: 80 },
+    terminal: { rows, columns: 80 },
     requestRender() {},
     showOverlay(component: { render(width: number): string[]; handleInput(data: string): void }) {
       overlays.push(component)
-      return { hide() {} }
+      return { hide() {}, focus() {} }
     },
   }
   return { tui: tui as never, overlays }
@@ -356,6 +375,74 @@ describe('user question dialogs', () => {
   })
 })
 
+describe('short terminals', () => {
+  it('keeps the last choice inside the overlay height on a 12-row terminal', async () => {
+    const { tui, overlays } = overlayHarness(12)
+    const controller = new AbortController()
+    const promise = showChoice(tui, createPalette('plain'), 'Pick one',
+      Array.from({ length: 10 }, (_, index) => ({ value: 'item-' + index, label: 'Item ' + index })),
+      'Enter selects', controller.signal)
+    for (let index = 0; index < 9; index += 1) overlays[0]!.handleInput('\x1b[B')
+    const lines = overlays[0]!.render(50)
+    const selected = lines.findIndex(line => stripTerminalSequences(line).includes('› '))
+    expect(selected).toBeGreaterThanOrEqual(0)
+    expect(selected).toBeLessThan(Math.floor(12 * 0.8))
+    expect(stripTerminalSequences(lines[selected]!)).toContain('Item 9')
+    expect(lines.every(line => visibleWidth(line) <= 50)).toBe(true)
+    overlays[0]!.handleInput('\r')
+    await expect(promise).resolves.toBe('item-9')
+  })
+})
+
+describe('question full details', () => {
+  const palette = createPalette('plain')
+  const detail = 'BEGIN ' + 'detail '.repeat(90) + 'END'
+
+  it('opens the unclipped question from the View full details row and returns to it', async () => {
+    const { tui, overlays } = overlayHarness()
+    const promise = showQuestionBatch(tui, palette, [{
+      id: 'pick', question: 'Pick one', detail, options: [{ label: 'ALPHA' }, { label: 'BETA' }],
+    }], undefined)
+    await flush()
+    // Rows: ALPHA, BETA, Other…, Skip this question, View full details.
+    for (let index = 0; index < 4; index += 1) overlays[0]!.handleInput('\x1b[B')
+    expect(overlays[0]!.render(76).join('\n')).toContain('View full details')
+    overlays[0]!.handleInput('\r')
+    await flush()
+    expect(overlays).toHaveLength(2)
+    const pager = stripTerminalSequences(overlays[1]!.render(100).join('\n'))
+    expect(pager).toContain('BEGIN')
+    expect(pager).toContain('END')
+    overlays[1]!.handleInput('\x1b')
+    await flush()
+    expect(overlays).toHaveLength(3)
+    overlays[2]!.handleInput('\r')
+    await expect(promise).resolves.toEqual({ answers: [{ id: 'pick', selected: ['ALPHA'] }] })
+  })
+
+  it('opens full details from a multi-select question without closing it', async () => {
+    const { tui, overlays } = overlayHarness()
+    const promise = showQuestionBatch(tui, palette, [{
+      id: 'targets', question: 'Pick targets', detail, multiSelect: true,
+      options: [{ label: 'CODE' }, { label: 'DOCS' }],
+    }], undefined)
+    await flush()
+    // Rows: CODE, DOCS, Other…, Skip this question, View full details.
+    for (let index = 0; index < 4; index += 1) overlays[0]!.handleInput('\x1b[B')
+    overlays[0]!.handleInput('\r')
+    await flush()
+    expect(overlays).toHaveLength(2)
+    expect(stripTerminalSequences(overlays[1]!.render(100).join('\n'))).toContain('END')
+    overlays[1]!.handleInput('\x1b')
+    await flush()
+    expect(overlays).toHaveLength(2)
+    for (let index = 0; index < 4; index += 1) overlays[0]!.handleInput('\x1b[A')
+    overlays[0]!.handleInput(' ')
+    overlays[0]!.handleInput('\r')
+    await expect(promise).resolves.toEqual({ answers: [{ id: 'targets', selected: ['CODE'] }] })
+  })
+})
+
 describe('question overlay bounds', () => {
   const palette = createPalette('plain')
 
@@ -373,7 +460,7 @@ describe('question overlay bounds', () => {
     expect(rows.length).toBeLessThan(20)
     expect(screen).toContain('ALPHA')
     expect(screen).toContain('BETA')
-    expect(screen).toContain('View full request details')
+    expect(screen).toContain('View full details')
     // Enter still submits the highlighted row; the list must have been visible.
     overlays[0]!.handleInput('\x1b[B')
     overlays[0]!.handleInput('\r')

@@ -29,6 +29,8 @@ import { clip, ptcCallLine } from './tool-preview.js'
 import { AssistantStream, type AssistantPart } from './transcript-stream.js'
 import { isCodeExecutionTool } from './transcript-render.js'
 import { trimTranscriptWindow } from './transcript-window.js'
+import { compactTranscriptBlocks, isFinalTranscriptBlock } from './transcript-compaction.js'
+import { capOldest, toolMemoryLimit } from './transcript-memory.js'
 
 /**
  * Nested PTC tools that always get their own card, including the pending row
@@ -427,6 +429,70 @@ export function createTranscriptReducer(options: TranscriptOptions) {
   let pruneBatch: { readonly index: number; readonly seq: number; readonly shadowed: Set<number> } | undefined
   /** Distinct compact call rows already recorded per `run_code`, including omitted ones. */
   const seenPtcLines = new Map<string, Set<string>>()
+  /** Leading blocks no future event can rewrite. */
+  let finalPrefix = 0
+  const memoryLimit = toolMemoryLimit(options.maxEntries)
+  /** Whether a call still owns a pending card and must stay addressable. */
+  const isPendingCall = (callId: string): boolean => {
+    const index = toolByCall.get(callId)
+    const block = index === undefined ? undefined : blocks[index]
+    return block?.kind === 'tool' && block.pending
+  }
+  /**
+   * Bound session-level identity memory.
+   *
+   * `callBySeq` is pruned from its oldest inserts only when the cap is crossed,
+   * so a normal replay window keeps every identity it can still address. The
+   * same pass keeps pending calls and evicts settled history in insertion order.
+   * @param oldestRetainedSeq - oldest durable sequence still on screen, when known.
+   */
+  const capToolMemory = (oldestRetainedSeq?: number): void => {
+    if (oldestRetainedSeq !== undefined) {
+      while (callIdBySeq.size > memoryLimit) {
+        const oldest = callIdBySeq.keys().next()
+        if (oldest.done || oldest.value >= oldestRetainedSeq) break
+        callIdBySeq.delete(oldest.value)
+      }
+    }
+    capOldest(callIdBySeq, memoryLimit)
+    capOldest(knownCalls, memoryLimit, isPendingCall)
+    capOldest(settledCalls, memoryLimit)
+    capOldest(prunedCalls, memoryLimit)
+    capOldest(prunedSeqs, memoryLimit)
+  }
+  /** Shift a block-index keyed map after `drop` front blocks were removed. */
+  const shiftIndexKeys = <V>(map: Map<number, V>, drop: number): void => {
+    for (const [index, value] of map) {
+      if (index < drop) map.delete(index)
+      else map.set(index - drop, value)
+    }
+  }
+  /** Shift a key -> block-index map after `drop` front blocks were removed. */
+  const shiftIndexValues = <K>(map: Map<K, number>, drop: number): void => {
+    for (const [key, index] of map) {
+      if (index < drop) map.delete(key)
+      else map.set(key, index - drop)
+    }
+  }
+  /** Extend the final-block prefix over blocks that just settled. */
+  const advanceFinalPrefix = (): void => {
+    while (finalPrefix < blocks.length && isFinalTranscriptBlock(blocks[finalPrefix]!)) finalPrefix += 1
+  }
+  /** Drop settled history that can no longer enter the retained window. */
+  const compact = (): void => {
+    if (sources.length < blocks.length) return
+    const drop = compactTranscriptBlocks(blocks, sources, finalPrefix, options.maxEntries)
+    if (drop === 0) return
+    finalPrefix -= drop
+    shiftIndexKeys(assistants, drop)
+    shiftIndexValues(liveByStep, drop)
+    shiftIndexValues(toolByCall, drop)
+    shiftIndexValues(compactionByCall, drop)
+    for (const key of seenPtcLines.keys()) if (!toolByCall.has(key)) seenPtcLines.delete(key)
+    pruneBatch = pruneBatch === undefined ? undefined
+      : pruneBatch.index >= drop ? { ...pruneBatch, index: pruneBatch.index - drop } : undefined
+    capToolMemory()
+  }
   /**
    * Record one PTC sub-call on the compact card of the `run_code` that ran it.
    *
@@ -506,6 +572,10 @@ export function createTranscriptReducer(options: TranscriptOptions) {
     for (let position = offset; position < entries.length; position += 1) {
       // Attribute every block the previous entry appended to that entry.
       while (sources.length < blocks.length) sources.push(position - 1)
+      // A long cold append must not materialize every historical block first.
+      advanceFinalPrefix()
+      compact()
+      capToolMemory()
       const entry = entries[position]!
       if (entry.type === 'live') {
         pruneBatch = undefined
@@ -852,6 +922,9 @@ export function createTranscriptReducer(options: TranscriptOptions) {
     }
 
     while (sources.length < blocks.length) sources.push(entries.length - 1)
+    advanceFinalPrefix()
+    compact()
+    capToolMemory()
   }
 
   const reduce = (): TranscriptReduction => {
@@ -863,7 +936,23 @@ export function createTranscriptReducer(options: TranscriptOptions) {
       visible.push(block)
       visibleSources.push(sources[index] ?? 0)
     }
-    return trimTranscriptWindow(visible, visibleSources, options.maxEntries)
+    const reduction = trimTranscriptWindow(visible, visibleSources, options.maxEntries)
+    // Row trimming is the point where old identities stop being addressable.
+    let oldestRetainedSeq: number | undefined
+    for (const block of reduction.blocks) {
+      const seq = block.kind === 'tool' ? block.positionSeq ?? block.seq : block.seq
+      if (seq === undefined) continue
+      if (oldestRetainedSeq === undefined || seq < oldestRetainedSeq) oldestRetainedSeq = seq
+    }
+    capToolMemory(oldestRetainedSeq)
+    return reduction
   }
-  return { append, reduce }
+  return {
+    append,
+    reduce,
+    /** @internal Materialized block count, so a test can prove cold append stays bounded. */
+    get blockCount(): number {
+      return blocks.length
+    },
+  }
 }

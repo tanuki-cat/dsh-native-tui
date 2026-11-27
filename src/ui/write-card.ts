@@ -2,13 +2,55 @@ import { Container, Text, type Component } from '@earendil-works/pi-tui'
 import type { Palette } from './theme.js'
 import type { TranscriptBlock } from './transcript.js'
 import { languageForPath } from './code-preview.js'
-import { literalToolText, toolLabel, ToolOutput } from './tool-output.js'
+import { literalToolText, safeCut, toolLabel, ToolOutput } from './tool-output.js'
 import { ToolBody, toolHeading } from './transcript-chrome.js'
 import { SourcePreview } from './source-preview.js'
 import { highlightToolLabel, toolActionLabel } from './tool-label.js'
 
 type ToolBlock = Extract<TranscriptBlock, { kind: 'tool' }>
 const PREVIEW_LINES = 10
+/** Characters one source preview can show, before literal escaping. */
+const PREVIEW_CHARS = 65536
+/** Raw margin so expansion by tabs or control bytes cannot starve the preview. */
+const RAW_MARGIN = 4096
+
+/**
+ * Literal source for the small head of a potentially huge file.
+ *
+ * The card only paints at most `maxLines`, so the content is scanned for line
+ * breaks without splitting or normalizing the whole file: each collected line
+ * is cut with {@link safeCut}, and trailing empty lines are removed exactly as
+ * `split('\\n')` plus `pop()` did.
+ * @param content - file content as reported by the write call.
+ * @param maxLines - lines a preview may show.
+ * @returns the literal preview source and the file's non-trailing line count.
+ */
+function previewSource(content: string, maxLines: number): { readonly source: string; readonly total: number } {
+  const lines: string[] = []
+  const rawBudget = PREVIEW_CHARS + RAW_MARGIN
+  let rawUsed = 0
+  let totalSegments = 0
+  let trailingEmpty = 0
+  let index = 0
+  while (true) {
+    let end = index
+    while (end < content.length && content[end] !== '\n' && content[end] !== '\r') end += 1
+    const empty = end === index
+    totalSegments += 1
+    trailingEmpty = empty ? trailingEmpty + 1 : 0
+    if (lines.length < maxLines && rawUsed < rawBudget) {
+      const sliceEnd = safeCut(content, Math.min(end, index + rawBudget - rawUsed))
+      const line = content.slice(index, sliceEnd)
+      lines.push(line)
+      rawUsed += line.length + 1
+    }
+    if (end >= content.length) break
+    index = content[end] === '\r' && content[end + 1] === '\n' ? end + 2 : end + 1
+  }
+  // Everything after the last non-empty line was a trailing newline.
+  lines.length = Math.min(lines.length, totalSegments - trailingEmpty)
+  return { source: literalToolText(lines.join('\n')), total: totalSegments - trailingEmpty }
+}
 
 /** File content preview; successful writes never duplicate their result or masquerade as a diff. */
 export function renderWriteCard(block: ToolBlock, palette: Palette, expanded = false): Component {
@@ -28,18 +70,14 @@ export function renderWriteCard(block: ToolBlock, palette: Palette, expanded = f
   container.addChild(new ToolBody(body, palette))
   if (content !== undefined) {
     // Display source literally: model/file escape sequences must not control the terminal.
-    const normalized = literalToolText(content)
-    const lines = normalized.split('\n')
-    while (lines.at(-1) === '') lines.pop()
-    if (lines.length > 0) {
-      const visible = lines.slice(0, expanded ? 2000 : PREVIEW_LINES)
-      const source = visible.join('\n')
-      const truncated = source.length > 65536
-      const preview = source.slice(0, 65536)
+    const { source, total } = previewSource(content, expanded ? 2000 : PREVIEW_LINES)
+    if (total > 0) {
+      const truncated = source.length > PREVIEW_CHARS
+      const preview = source.slice(0, safeCut(source, PREVIEW_CHARS))
       body.addChild(new SourcePreview(preview, languageForPath(path), palette))
-      if (truncated || (expanded && lines.length > 2000)) body.addChild(new Text(palette.dim('… [content omitted by preview limit]'), 0, 0))
-      if (!expanded && lines.length > PREVIEW_LINES) {
-        body.addChild(new Text(palette.dim(`… (${String(lines.length - PREVIEW_LINES)} more lines, ${String(lines.length)} total)`), 0, 0))
+      if (truncated || (expanded && total > 2000)) body.addChild(new Text(palette.dim('… [content omitted by preview limit]'), 0, 0))
+      if (!expanded && total > PREVIEW_LINES) {
+        body.addChild(new Text(palette.dim(`… (${String(total - PREVIEW_LINES)} more lines, ${String(total)} total)`), 0, 0))
       }
     }
   }

@@ -24,6 +24,7 @@ import {
   type ContextBreakdown,
   type SessionMetrics,
 } from '../../runtime/metrics.js'
+import { sanitizeTerminalText } from '../../runtime/terminal-text.js'
 import type { Palette } from '../theme.js'
 import type { CommandContext } from './context.js'
 import { NL } from './shared.js'
@@ -74,9 +75,9 @@ export function contextReport(
     const configured = configuredPercent !== undefined && Math.abs(configuredPercent - compaction.percent) >= 0.01
       ? ' · configured ' + share(configuredPercent) : ''
     lines.push('Automatic compaction: at ' + share(compaction.percent) + ' of the window ('
-      + compaction.tokens.toLocaleString('en-US') + ' tokens)' + configured + ' · ' + compaction.route)
+      + compaction.tokens.toLocaleString('en-US') + ' tokens)' + configured + ' · ' + sanitizeTerminalText(compaction.route))
   } else if (compaction !== undefined) {
-    lines.push('Automatic compaction: ' + compaction.state + (compaction.route === undefined ? '' : ' · ' + compaction.route))
+    lines.push('Automatic compaction: ' + compaction.state + (compaction.route === undefined ? '' : ' · ' + sanitizeTerminalText(compaction.route)))
   } else if (metrics.contextCompactPercent !== undefined) {
     lines.push('Automatic compaction: at ' + share(metrics.contextCompactPercent) + ' of the window')
   }

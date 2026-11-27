@@ -72,6 +72,17 @@ export function isValidEnvName(name: string): boolean {
 }
 
 /**
+ * Whether a URL host is a loopback address that may use plain HTTP.
+ * @param hostname - `URL.hostname`, which keeps IPv6 brackets.
+ */
+function isLoopbackHost(hostname: string): boolean {
+  const host = hostname.toLowerCase()
+  if (host === 'localhost' || host === '[::1]' || host === '::1') return true
+  const octets = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/u.exec(host)
+  return octets !== null && octets[1] === '127' && octets.slice(1).every(octet => Number(octet) <= 255)
+}
+
+/**
  * Normalize an HTTP(S) endpoint.
  *
  * Only the endpoint itself is an endpoint: a query string, a fragment or an
@@ -90,6 +101,9 @@ export function normalizeBaseURL(value: string): string {
     throw new Error('baseURL must be a valid URL')
   }
   if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Error('baseURL must use http or https')
+  if (url.protocol === 'http:' && !isLoopbackHost(url.hostname)) {
+    throw new Error('baseURL must use https for non-loopback hosts')
+  }
   if (url.search !== '' || url.hash !== '') throw new Error('baseURL must not include a query or fragment')
   if (url.username !== '' || url.password !== '') throw new Error('baseURL must not include credentials')
   return url.toString().replace(/\/$/u, '')

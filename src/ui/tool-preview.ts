@@ -5,13 +5,16 @@
  * @module dsh-native-tui/ui/tool-preview
  */
 
+import { sliceGraphemes } from './grapheme-preview.js'
+
 /** Maximum characters retained in one tool preview. */
 const TOOL_PREVIEW = 1200
 
-/** Clip one line-oriented preview without changing its content. */
+/** Clip one line-oriented preview without cutting a grapheme in half. */
 export function clip(text: string, limit = TOOL_PREVIEW): string {
   if (text.length <= limit) return text
-  return `${text.slice(0, limit)}\n… [${String(text.length - limit)} chars omitted]`
+  const kept = sliceGraphemes(text, limit)
+  return `${kept}\n… [${String(text.length - kept.length)} chars omitted]`
 }
 
 /**
@@ -80,8 +83,8 @@ function boundedLine(value: string, keep: KeepEnd, limit = PTC_TARGET_CHARS): st
   if (compact.length <= limit) return compact
   const budget = limit - 1
   return keep === 'tail'
-    ? '…' + compact.slice(compact.length - budget)
-    : compact.slice(0, budget) + '…'
+    ? '…' + sliceGraphemes(compact, budget, 'end')
+    : sliceGraphemes(compact, budget) + '…'
 }
 
 /** Read one non-empty string argument as a bounded single line. */
@@ -208,7 +211,9 @@ export function compactErrorPreview(result: string | undefined): string {
   if (result === undefined) return ''
   const line = result.split('\n').map(row => row.trim()).find(row => row !== '') ?? ''
   const compact = line.replace(/\s+/gu, ' ')
-  return compact.length <= COMPACT_ERROR_CHARS ? compact : compact.slice(0, COMPACT_ERROR_CHARS - 1) + '…'
+  return compact.length <= COMPACT_ERROR_CHARS
+    ? compact
+    : sliceGraphemes(compact, COMPACT_ERROR_CHARS - 1) + '…'
 }
 
 /** Extract a one-line description for a compact code-execution row. */

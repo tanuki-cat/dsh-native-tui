@@ -18,6 +18,138 @@ function normalize(text: string): string {
   return text.replace(/\t/g, '   ')
 }
 
+/** Shared grapheme segmenter, matching the one pi-tui's wrapper uses. */
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+
+/** Scripts pi-tui treats as per-character break opportunities. */
+const CJK_BREAK = /[\p{Script_Extensions=Han}\p{Script_Extensions=Hiragana}\p{Script_Extensions=Katakana}\p{Script_Extensions=Hangul}\p{Script_Extensions=Bopomofo}]/u
+
+type TokenKind = 'space' | 'word'
+
+interface SourceToken {
+  start: number
+  end: number
+  readonly kind: TokenKind
+}
+
+/**
+ * Split one newline-free source line into the same tokens `wrapTextWithAnsi`
+ * uses, keeping source offsets so a wrapped visual line can be mapped back.
+ * ANSI is not supported here; callers fall back to newline-only commits.
+ * @param text - one source line, without escapes.
+ * @returns tokens in source order.
+ */
+function sourceTokens(text: string): SourceToken[] {
+  const tokens: SourceToken[] = []
+  let current: SourceToken | undefined
+  const flush = (): void => {
+    if (current !== undefined) tokens.push(current)
+    current = undefined
+  }
+  const add = (start: number, end: number, kind: TokenKind): void => {
+    if (current !== undefined && current.kind === kind) current.end = end
+    else {
+      flush()
+      current = { start, end, kind }
+    }
+  }
+  // pi-tui skips grapheme segmentation for printable ASCII, so match it exactly.
+  if (/^[\x20-\x7e]*$/u.test(text)) {
+    for (let index = 0; index < text.length; index += 1) {
+      add(index, index + 1, text[index] === ' ' ? 'space' : 'word')
+    }
+  }
+  else {
+    for (const segment of graphemeSegmenter.segment(text)) {
+      const start = segment.index
+      const value = segment.segment
+      if (value === ' ') add(start, start + value.length, 'space')
+      else if (CJK_BREAK.test(value)) {
+        flush()
+        tokens.push({ start, end: start + value.length, kind: 'word' })
+      }
+      else add(start, start + value.length, 'word')
+    }
+  }
+  flush()
+  return tokens
+}
+
+/** Whether a token's visible text is all whitespace, as `isWhitespaceToken` decides. */
+function isWhitespaceToken(text: string): boolean {
+  return !/\S/u.test(text)
+}
+
+/**
+ * Source offset where the last visual line of a wrapped, newline-free line
+ * begins.
+ *
+ * `wrapTextWithAnsi` is greedy and resets state at every visual line, so the
+ * source prefix before that offset wraps to exactly every visual line before
+ * the last one. The scan mirrors the wrapper's token and long-word breaking
+ * without rendering, which lets a streaming append commit the finished lines.
+ * @param text - one newline-free source line without ANSI escapes.
+ * @param width - wrap width in terminal cells.
+ * @returns the offset, or -1 when the line cannot be split safely.
+ */
+function lastVisualLineStart(text: string, width: number): number {
+  if (text === '' || visibleWidth(text) <= width) return 0
+  let currentWidth = 0
+  let hasLine = false
+  let lineStart = 0
+  let lastStart = 0
+  for (const token of sourceTokens(text)) {
+    const tokenText = text.slice(token.start, token.end)
+    const tokenWidth = visibleWidth(tokenText)
+    const whitespace = token.kind === 'space' || isWhitespaceToken(tokenText)
+    if (tokenWidth > width && !whitespace) {
+      if (hasLine) {
+        // The wrapper flushes the current line before breaking the long word.
+        lastStart = lineStart
+        hasLine = false
+        currentWidth = 0
+      }
+      // `breakLongWord` produces one visual line per grapheme run that fits.
+      let chunkStart = token.start
+      let chunkWidth = 0
+      for (const segment of graphemeSegmenter.segment(tokenText)) {
+        const graphemeWidth = visibleWidth(segment.segment)
+        // A single grapheme wider than the line makes the wrapper emit a
+        // phantom empty line, which a tail-only re-wrap cannot reproduce.
+        if (graphemeWidth > width) return -1
+        if (chunkWidth + graphemeWidth > width) {
+          lastStart = chunkStart
+          chunkStart = token.start + segment.index
+          chunkWidth = 0
+        }
+        chunkWidth += graphemeWidth
+        hasLine = true
+      }
+      lineStart = chunkStart
+      currentWidth = chunkWidth
+      continue
+    }
+    if (currentWidth + tokenWidth > width && currentWidth > 0) {
+      lastStart = lineStart
+      if (whitespace) {
+        // The dropped token is not part of the next visual line.
+        lineStart = token.end
+        currentWidth = 0
+        hasLine = false
+        continue
+      }
+      lineStart = token.start
+      currentWidth = tokenWidth
+      hasLine = true
+      continue
+    }
+    if (!hasLine) lineStart = token.start
+    currentWidth += tokenWidth
+    hasLine = true
+  }
+  return hasLine ? lineStart : lastStart
+}
+
 /**
  * One text block whose finished lines survive an append.
  *
@@ -113,7 +245,25 @@ export class StreamText implements Component {
     }
     const rest = this.text.slice(this.committedTo)
     this.wrapped += rest.length
-    for (const line of wrapTextWithAnsi(rest, contentWidth)) this.lines.push(this.pad(this.style(line), contentWidth))
+    const wrapped = wrapTextWithAnsi(rest, contentWidth)
+    // A newline-free tail grows without bound while it streams. Once it wraps
+    // into several visual lines, commit every line but the active last one so
+    // the next frame re-wraps only that line. ANSI state would not survive the
+    // source cut, so escaped text keeps the newline-only boundary.
+    const cut = contentWidth >= 2 && wrapped.length > 1 && !rest.includes('\x1b') && !rest.includes('\r')
+      ? lastVisualLineStart(rest, contentWidth)
+      : -1
+    if (cut > 0 && cut < rest.length) {
+      for (let index = 0; index < wrapped.length - 1; index += 1) {
+        this.lines.push(this.pad(this.style(wrapped[index]!), contentWidth))
+      }
+      this.committedTo += cut
+      this.committedCount = this.lines.length
+      this.lines.push(this.pad(this.style(wrapped.at(-1)!), contentWidth))
+    }
+    else {
+      for (const line of wrapped) this.lines.push(this.pad(this.style(line), contentWidth))
+    }
     this.valid = true
     return this.lines
   }

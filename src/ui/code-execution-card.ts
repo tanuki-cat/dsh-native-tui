@@ -2,6 +2,7 @@ import { Container, Text, type Component } from '@earendil-works/pi-tui'
 import { ToolBody, toolHeading } from './transcript-chrome.js'
 import { SourcePreview } from './source-preview.js'
 import { compactCodeExecutionPreview, compactErrorPreview, formatToolArguments } from './tool-preview.js'
+import { sliceGraphemes } from './grapheme-preview.js'
 import type { TranscriptBlock, TranscriptOptions } from './transcript.js'
 import { literalToolText, toolLabel, ToolOutput } from './tool-output.js'
 import { compactToolLabel, executionVerb, highlightToolLabel, toolDisplayName } from './tool-label.js'
@@ -158,7 +159,7 @@ export function renderCodeExecutionCard(block: Extract<TranscriptBlock, { kind: 
       for (const line of lines) {
         if (preview.length >= (options.toolsExpanded ? 2000 : CODE_PREVIEW_LINES) || used >= budget) break
         const remaining = options.toolsExpanded ? budget - used : Math.min(CODE_LINE_CHARS, budget - used)
-        const text = line.length > remaining ? line.slice(0, Math.max(0, remaining - 1)) + '…' : line
+        const text = line.length > remaining ? sliceGraphemes(line, Math.max(0, remaining - 1)) + '…' : line
         if (text.length !== line.length) shortened = true
         preview.push(text)
         used += text.length + 1

@@ -29,11 +29,12 @@ export async function codexCommand(ctx: CommandContext, args: string): Promise<v
       message,
       placeholder ?? '',
       secret
-        ? 'Input is hidden from the transcript · Esc cancels'
+        ? 'Masked on screen · Enter submits · Esc cancels'
         : 'Enter submits · Esc cancels · empty keeps waiting',
       signal,
       undefined,
       true,
+      { secret },
     ),
     openUrl: url => openUrlInBrowser(url),
     signal: ctx.signal,

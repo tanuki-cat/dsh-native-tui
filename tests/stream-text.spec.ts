@@ -71,6 +71,21 @@ describe('StreamText', () => {
     expect(stream.wrappedCharacters - wasted).toBe('and the streaming tail'.length)
   })
 
+  it('commits finished visual lines of a newline-free stream', () => {
+    const target = PROSE.repeat(80).trimEnd()
+    const stream = new StreamText()
+    let shown = ''
+    for (let index = 0; index < target.length; index += 5) {
+      shown += target.slice(index, index + 5)
+      stream.setText(shown)
+      stream.render(24)
+    }
+    // Every committed visual line came from one pass; only the active line is
+    // wrapped again, so the per-frame work stays linear in the stream length.
+    expect(stream.wrappedCharacters).toBeLessThan(target.length * 6)
+    expect(stream.render(24)).toEqual(new Text(target, 0, 0).render(24))
+  })
+
   it('styles each rendered line without leaking state between them', () => {
     const text = PROSE.repeat(4)
     const stream = new StreamText(text, line => '[' + line + ']')

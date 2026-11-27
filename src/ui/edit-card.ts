@@ -2,6 +2,7 @@ import { Text, truncateToWidth, visibleWidth, type Component } from '@earendil-w
 import { diffLines, diffSourceLines, MAX_DIFF_INPUT_LINES, MAX_DIFF_MATRIX_CELLS, type DiffLine, type FileDiff } from './diff.js'
 import type { Palette } from './theme.js'
 import { literalToolText } from './tool-output.js'
+import { sliceGraphemes } from './grapheme-preview.js'
 import { diffRow } from './transcript-chrome.js'
 
 interface NumberedRow {
@@ -90,8 +91,8 @@ export function renderEditDiff(diff: FileDiff, palette: Palette, expanded = fals
     if (row.kind === 'omitted') { lines.push({ text: palette.dim(row.text), kind: row.kind }); continue }
     const rowPrefix = String(row.line).padStart(gutter) + ' ' + (row.kind === 'add' ? '+' : row.kind === 'remove' ? '-' : ' ') + ' '
     const color = row.kind === 'add' ? palette.success : row.kind === 'remove' ? palette.error : palette.dim
-    const source = rowPrefix + literalToolText(row.text.slice(0, 65536))
-    const bounded = source.slice(0, characterBudget)
+    const source = rowPrefix + literalToolText(sliceGraphemes(row.text, 65536))
+    const bounded = sliceGraphemes(source, characterBudget)
     if (bounded.length < source.length || row.text.length > 65536) limited = true
     lines.push({ text: color(bounded), kind: row.kind })
     characterBudget -= bounded.length

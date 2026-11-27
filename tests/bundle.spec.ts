@@ -261,7 +261,7 @@ describe('exportSessionBundle', () => {
   })
 
   const withSymlinks = process.platform === 'win32' ? it.skip : it
-  withSymlinks('follows a presented link before trusting the workspace boundary', async () => {
+  withSymlinks('rejects a presented link instead of following it', async () => {
     const parent = await mkdtemp(join(tmpdir(), 'native-tui-bundle-'))
     cleanup.push(parent)
     const dir = join(parent, 'workspace')
@@ -271,10 +271,13 @@ describe('exportSessionBundle', () => {
     await symlink(join(parent, 'secret.md'), join(dir, 'escape.md'))
     await symlink(join(dir, 'real.md'), join(dir, 'inside.md'))
     const result = await exportSessionBundle(presentingAgent(dir, ['escape.md', 'inside.md']), 'bundle.zip', dir, attachments)
-    expect(result.deliverables.map(record => record.path)).toEqual(['inside.md'])
-    expect(result.skipped).toEqual(['deliverable escape.md: outside the session workspace'])
+    expect(result.deliverables).toEqual([])
+    expect(result.skipped).toEqual([
+      'deliverable escape.md: is a symbolic link',
+      'deliverable inside.md: is a symbolic link',
+    ])
     const archive = unzipSync(await readFile(result.path))
-    expect(Object.keys(archive).some(entry => entry.includes('inside'))).toBe(true)
+    expect(Object.keys(archive).some(entry => entry.includes('inside'))).toBe(false)
     expect(Object.keys(archive).some(entry => entry.includes('escape'))).toBe(false)
   })
 })

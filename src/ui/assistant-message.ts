@@ -1,5 +1,5 @@
 import { Container, Spacer, type Component } from '@earendil-works/pi-tui'
-import { clipGraphemes } from './grapheme-preview.js'
+import { clipTextToWidth } from './grapheme-preview.js'
 import { reasoningPreview, reasoningText } from './reasoning-text.js'
 import { sanitizeTerminalText } from '../runtime/terminal-text.js'
 import type { TranscriptBlock, TranscriptOptions } from './transcript.js'
@@ -27,6 +27,9 @@ interface PartComponent {
 }
 
 const CONTROL_BYTE = /[\u001B\u0080-\u009F]/u
+
+/** Display columns one compact thinking preview may occupy. */
+const COMPACT_THINKING_COLUMNS = 240
 
 /**
  * Whether appending a chunk can reuse the already sanitized prefix.
@@ -75,7 +78,9 @@ export class AssistantMessage extends Container {
           ? before.text + sanitizeTerminalText(delta)
           : sanitizeTerminalText(display)
       } else {
-        text = 'thinking · ' + clipGraphemes(sanitizeTerminalText(reasoningPreview(display, block.live)), 240)
+        // The compact row is one line: bound it by display columns, not by a
+        // grapheme count that lets wide CJK clusters span several rows.
+        text = 'thinking · ' + clipTextToWidth(sanitizeTerminalText(reasoningPreview(display, block.live)), COMPACT_THINKING_COLUMNS)
       }
       visible.push({ type: part.type, text, raw: part.text, display, hasControl, live })
     }
