@@ -300,8 +300,13 @@ async function dispatchCommandLine(line: string, deps: CommandRouterDeps): Promi
           ctx().palette,
           question.message,
           question.placeholder ?? '',
-          question.secret === true ? 'Input is hidden from the transcript · Esc cancels' : 'Enter submits · Esc cancels',
+          question.secret === true
+            ? 'Masked on screen · Enter submits · Esc cancels'
+            : 'Enter submits · Esc cancels',
           ctx().signal,
+          undefined,
+          undefined,
+          { secret: question.secret === true },
         ),
         choose: (title, items, hint) => showChoice(ctx().tui, ctx().palette, title, items, hint, ctx().signal),
         editText: (title, initialValue, hint) => showMultilineInput(

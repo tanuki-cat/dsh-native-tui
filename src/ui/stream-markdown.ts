@@ -76,7 +76,8 @@ export class StreamMarkdown implements Component {
   private liveText = ''
   private readonly live: Markdown
   private readonly frozen: FrozenChunk[] = []
-  private frozenText = ''
+  /** Source length of the frozen prefix; each chunk stores only its own text. */
+  private frozenLength = 0
   /** Render the document as one component: it defines link references. */
   private whole = false
   private scan: ScanState = { scanned: 0, fence: undefined, pendingBlank: undefined, split: 0, definesReference: false }
@@ -138,7 +139,7 @@ export class StreamMarkdown implements Component {
    */
   private reset(): void {
     this.frozen.length = 0
-    this.frozenText = ''
+    this.frozenLength = 0
     this.whole = false
     this.scan = { scanned: 0, fence: undefined, pendingBlank: undefined, split: 0, definesReference: false }
   }
@@ -158,11 +159,10 @@ export class StreamMarkdown implements Component {
       return
     }
     const split = this.text.length >= SPLIT_MIN_CHARS ? this.scan.split : 0
-    const prefix = this.text.slice(0, split)
     // A split that moved backwards cannot reuse the chunks it already froze.
-    if (!prefix.startsWith(this.frozenText)) this.dropFrozen()
-    if (prefix.length > this.frozenText.length) {
-      const chunk = prefix.slice(this.frozenText.length)
+    if (split < this.frozenLength) this.dropFrozen()
+    if (split > this.frozenLength) {
+      const chunk = this.text.slice(this.frozenLength, split)
       const last = this.frozen.at(-1)
       if (last !== undefined && last.text.length + chunk.length <= FROZEN_MERGE_CHARS) {
         last.text += chunk
@@ -171,7 +171,7 @@ export class StreamMarkdown implements Component {
       else {
         this.frozen.push({ text: chunk, component: new Markdown(chunk, 0, 0, this.theme) })
       }
-      this.frozenText = prefix
+      this.frozenLength = split
     }
     const live = this.text.slice(split)
     if (live !== this.liveText) {
@@ -183,7 +183,7 @@ export class StreamMarkdown implements Component {
   /** Forget the frozen prefix without disturbing the scan. */
   private dropFrozen(): void {
     this.frozen.length = 0
-    this.frozenText = ''
+    this.frozenLength = 0
   }
 
   /**

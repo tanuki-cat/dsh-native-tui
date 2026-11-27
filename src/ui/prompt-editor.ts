@@ -22,11 +22,49 @@ export interface AttachmentTarget {
 
 const placeholderSegmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
 
+/** A grapheme wider than this is a pathological cluster (stacked combining marks). */
+const MAX_GRAPHEME_WIDTH = 2
+
+/** Zero-width space: breaks a pathological cluster into individually bounded graphemes. */
+const ZERO_WIDTH_SPACE = '\u200B'
+
+/** Only marks, joiners and variation selectors can stack into an over-wide cluster. */
+const STACKABLE_GRAPHEME = /[\p{M}\u200D\uFE0F]/u
+
+const PASTE_START = '\u001B[200~'
+const PASTE_END = '\u001B[201~'
+
 function splitFirstGrapheme(text: string): { readonly first: string; readonly rest: string } {
   if (text === '') return { first: '', rest: '' }
   const next = placeholderSegmenter.segment(text)[Symbol.iterator]().next()
   if (next.done) return { first: text.slice(0, 1), rest: text.slice(1) }
   return { first: next.value.segment, rest: text.slice(next.value.segment.length) }
+}
+
+/**
+ * Break clusters that are wider than any sane cell into separate graphemes.
+ *
+ * pi-tui's `wordWrapLine` recurses forever when one grapheme is wider than the
+ * layout width, so a single cluster of hundreds of combining marks crashes the
+ * renderer on a normal terminal. Joining the cluster's code points with a
+ * zero-width space keeps its bytes but gives the segmenter a break opportunity,
+ * leaving each grapheme at most one column wide.
+ * @param text - text about to enter the editor.
+ * @returns text whose graphemes are individually bounded.
+ */
+function clampGraphemeWidths(text: string): string {
+  if (!STACKABLE_GRAPHEME.test(text)) return text
+  let result = ''
+  let changed = false
+  for (const { segment } of placeholderSegmenter.segment(text)) {
+    if (visibleWidth(segment) <= MAX_GRAPHEME_WIDTH) {
+      result += segment
+      continue
+    }
+    changed = true
+    result += Array.from(segment).join(ZERO_WIDTH_SPACE)
+  }
+  return changed ? result : text
 }
 
 /** A shaded native editor with a display-only prompt in its reserved padding. */
@@ -74,6 +112,14 @@ export class PromptEditor extends Editor {
     finally {
       this.inputDepth -= 1
     }
+  }
+
+  override setText(text: string): void {
+    super.setText(clampGraphemeWidths(text))
+  }
+
+  override insertTextAtCursor(text: string): void {
+    super.insertTextAtCursor(clampGraphemeWidths(text))
   }
 
   /**
@@ -125,7 +171,18 @@ export class PromptEditor extends Editor {
       this.tui.requestRender()
       return
     }
-    super.handleInput(data)
+    super.handleInput(this.guardInput(data))
+  }
+
+  /** Prevent a pathological paste or candidate from entering as one over-wide grapheme. */
+  private guardInput(data: string): string {
+    if (data.startsWith(PASTE_START) && data.endsWith(PASTE_END)) {
+      const body = data.slice(PASTE_START.length, -PASTE_END.length)
+      const guarded = clampGraphemeWidths(body)
+      return guarded === body ? data : PASTE_START + guarded + PASTE_END
+    }
+    if (data.length > 0 && data.charCodeAt(0) >= 32 && !data.includes('\u001B')) return clampGraphemeWidths(data)
+    return data
   }
 
   override setAutocompleteProvider(provider: AutocompleteProvider): void {
@@ -178,11 +235,17 @@ export class PromptEditor extends Editor {
   }
 
   private renderEditor(width: number, fullWidth: number, labels: string, hasAttachments: boolean): string[] {
-    const lines = super.render(width)
     // Match the native padding clamp so cursor, wrapping, mouse and menus keep their offsets.
     const padding = Math.min(this.getPaddingX(), Math.max(0, Math.floor((width - 1) / 2)))
+    const contentWidth = Math.max(1, width - padding * 2)
+    const layoutWidth = Math.max(1, contentWidth - (padding > 0 ? 0 : 1))
     this.renderedPadding = padding
     this.menuRows = []
+    // A grapheme wider than the layout makes pi-tui's wordWrapLine recurse on
+    // itself. Such text cannot be laid out natively, so render a clipped view.
+    const lines = this.hasOverwideGrapheme(layoutWidth)
+      ? this.renderSafeEditor(width, padding, layoutWidth)
+      : super.render(width)
     if (!hasAttachments && this.getText() === '' && this.placeholder !== '' && lines[1] !== undefined) {
       const available = Math.max(1, width - padding * 2)
       const hint = stripTerminalSequences(truncateToWidth(this.placeholder, available, ''))
@@ -218,6 +281,40 @@ export class PromptEditor extends Editor {
     const suggestions = this.menuRows.map(index => this.renderSuggestion(menu[index]!, fullWidth, padding))
     this.panelStart = suggestions.length
     return [...suggestions, ...input]
+  }
+
+  /** Whether any grapheme in the draft exceeds the native layout width. */
+  private hasOverwideGrapheme(layoutWidth: number): boolean {
+    for (const line of this.getLines()) {
+      if (visibleWidth(line) <= layoutWidth) continue
+      for (const { segment } of placeholderSegmenter.segment(line)) {
+        if (visibleWidth(segment) > layoutWidth) return true
+      }
+    }
+    return false
+  }
+
+  /** Clipped stand-in for a native layout that would recurse on an over-wide grapheme. */
+  private renderSafeEditor(width: number, padding: number, layoutWidth: number): string[] {
+    const lines = [this.renderTopBorder(width, 0)]
+    const logical = this.getLines()
+    const cursor = this.getCursor()
+    const maxRows = Math.max(5, Math.floor(this.tui.terminal.rows * 0.3))
+    const start = Math.min(Math.max(0, cursor.line - Math.floor(maxRows / 2)), Math.max(0, logical.length - maxRows))
+    const visible = logical.slice(start, start + Math.max(1, maxRows))
+    for (const [offset, line] of visible.entries()) {
+      let body = line
+      if (start + offset === cursor.line && this.focused) {
+        const before = line.slice(0, cursor.col)
+        const after = line.slice(cursor.col)
+        const at = splitFirstGrapheme(after).first || ' '
+        body = before + CURSOR_MARKER + renderFakeCursor(at) + after.slice(at.length)
+      }
+      const clipped = truncateToWidth(body, layoutWidth, '…')
+      lines.push(' '.repeat(padding) + clipped + ' '.repeat(Math.max(0, width - padding - visibleWidth(clipped))))
+    }
+    lines.push(this.renderBottomBorder(width, 0))
+    return lines
   }
 
   override handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {

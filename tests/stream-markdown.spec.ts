@@ -90,6 +90,18 @@ describe('StreamMarkdown', () => {
     expectSameAsMarkdown(stream, replaced, 40)
   })
 
+  it('drops the frozen prefix when setText mutates text it already rendered', () => {
+    const stream = new StreamMarkdown(document, theme)
+    stream.render(40)
+    const mutated = document.replace('Streaming markdown', 'A mutated heading')
+    stream.setText(mutated)
+    expectSameAsMarkdown(stream, mutated, 40)
+    // A later append after the reset uses the new prefix, not the old chunks.
+    const grown = mutated + '\n\n' + prose.repeat(20)
+    stream.setText(grown)
+    expectSameAsMarkdown(stream, grown, 40)
+  })
+
   it('never splits inside a fenced block that has grown past the threshold', () => {
     const head = (prose.repeat(8) + '\n\n').repeat(12)
     const body = head + fence + 'python\n' + 'x = 1\n\n'.repeat(400) + fence + '\n'

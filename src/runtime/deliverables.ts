@@ -1,6 +1,7 @@
 import { realpath } from 'node:fs/promises'
-import { isAbsolute, relative, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
+import { readBoundedFileNoFollow } from './files.js'
 
 function outsideWorkspace(root: string, path: string): boolean {
   const local = relative(root, path)
@@ -23,6 +24,50 @@ export async function resolveContainedDeliverable(
   const real = await realpath(absolute)
   if (outsideWorkspace(workspace, real)) throw new Error('outside the session workspace')
   return { absolute, real }
+}
+
+/** One bounded deliverable read through the containment check that admitted it. */
+export interface ContainedDeliverable {
+  readonly absolute: string
+  readonly real: string
+  readonly data: Buffer
+}
+
+/**
+ * Resolve and read one deliverable without a TOCTOU gap between the containment
+ * check and the read.
+ *
+ * The parent directory is resolved once and must stay inside the workspace; the
+ * final component is then opened with `O_NOFOLLOW`, so a symlink swapped in
+ * after the check cannot redirect the read and is rejected instead. The bytes
+ * come from that same descriptor, bounded by `maxBytes`.
+ * @param root - workspace root the Host declared the deliverable in.
+ * @param itemPath - the model-declared path.
+ * @param maxBytes - maximum bytes read.
+ * @param workspaceReal - pre-resolved workspace root, when the caller has it.
+ * @param label - file kind used in bound errors.
+ * @param limitName - bound name used in over-size errors.
+ * @returns the lexical absolute path, the opened path, and its bytes.
+ */
+export async function readContainedDeliverable(
+  root: string,
+  itemPath: string,
+  maxBytes: number,
+  workspaceReal?: string,
+  label = 'deliverable',
+  limitName = 'limit',
+): Promise<ContainedDeliverable> {
+  const base = resolve(root)
+  const absolute = resolve(base, itemPath)
+  if (outsideWorkspace(base, absolute)) throw new Error('outside the session workspace')
+  const workspace = workspaceReal ?? await realpath(base).catch(() => base)
+  // Resolve the parent directory rather than the target: `O_NOFOLLOW` below
+  // rejects a final-component symlink, including one that points back inside.
+  const parent = await realpath(dirname(absolute))
+  if (absolute !== base && outsideWorkspace(workspace, parent)) throw new Error('outside the session workspace')
+  const real = join(parent, basename(absolute))
+  const data = await readBoundedFileNoFollow(real, maxBytes, label, limitName)
+  return { absolute, real, data }
 }
 
 /** One file declared by the present tool. */

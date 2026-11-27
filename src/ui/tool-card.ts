@@ -10,6 +10,8 @@ import { ToolBody, toolHeading } from './transcript-chrome.js'
 import { executionVerb, highlightToolLabel, isWriteUpdate, toolActionLabel } from './tool-label.js'
 import { EditGroupCard, isAppliedEdit } from './edit-group.js'
 import { detailsRow } from './details-row.js'
+import { ClippedText } from './clipped-text.js'
+import { sliceGraphemes } from './grapheme-preview.js'
 
 type ToolBlock = Extract<TranscriptBlock, { kind: 'tool' }>
 type Arguments = Readonly<Record<string, unknown>>
@@ -142,7 +144,7 @@ export class ToolCard implements Component {
         tail = (tail ?? '') + palette.dim(':' + start + (typeof args?.limit === 'number' ? '-' + (start + args.limit - 1) : ''))
       } else if (!search && path === undefined && args !== undefined) {
         const summary = Object.entries(args).slice(0, 5).map(([key, value]) => inline(key) + '=' + inline(typeof value === 'string' ? value : JSON.stringify(value) ?? String(value))).join(' ')
-        head += ' ' + palette.dim(summary.length > 160 ? summary.slice(0, 159) + '…' : summary)
+        head += ' ' + palette.dim(summary.length > 160 ? sliceGraphemes(summary, 159) + '…' : summary)
       }
       container.addChild(toolHeading(head, palette, block, tail))
       if (args === undefined && block.args.trim() !== '') addBody(new Text(palette.dim(literalToolText(formatToolArguments(block.args))), 0, 0))
@@ -164,7 +166,7 @@ export class ToolCard implements Component {
       const code = block.errorCode === undefined ? undefined : inline(block.errorCode)
       const name = block.errorName === undefined || block.errorName === 'Error' ? undefined : inline(block.errorName)
       const label = code === undefined ? 'error' : name === undefined ? 'error · ' + code : 'error · ' + name + ' · ' + code
-      container.addChild(new Text(palette.error('  └ ' + label), 0, 0))
+      container.addChild(new ClippedText(palette.error('  └ ' + label)))
       const reason = block.errorReason?.trim() ?? ''
       if (expanded && reason !== '' && reason !== (block.result ?? '').trim()) {
         addBody(new ToolOutput(block.errorReason ?? reason, palette, true, 5, 'start', true))

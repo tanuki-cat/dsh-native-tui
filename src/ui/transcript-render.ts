@@ -16,6 +16,7 @@ import { ToolCard } from './tool-card.js'
 import { clip } from './tool-preview.js'
 import type { TranscriptBlock, TranscriptOptions } from './transcript.js'
 import { MessageBody } from './transcript-chrome.js'
+import { ClippedText } from './clipped-text.js'
 import { ContextMessage } from './context-message.js'
 import { ContextReportMessage } from './context-report.js'
 import { activityHeading, styleTurnStatus, WaitStatusLine } from './waiting.js'
@@ -98,10 +99,10 @@ export function renderTranscriptBlock(block: TranscriptBlock, options: Transcrip
     case 'notice': {
       if (block.tone === 'info' && block.contextReport !== undefined) return new ContextReportMessage(block.contextReport, palette)
       const text = sanitizeTerminalText(block.text).replaceAll('\n', '\n  ')
-      if (block.tone === 'error') return new Text(palette.error('✕ ' + text), 0, 0)
-      if (block.tone === 'warning') return new Text(palette.warning('! ' + text), 0, 0)
-      if (block.tone === 'success') return new Text(palette.success('✓ ' + text), 0, 0)
-      return new Text(palette.dim('i ') + text, 0, 0)
+      if (block.tone === 'error') return new ClippedText(palette.error('✕ ' + text))
+      if (block.tone === 'warning') return new ClippedText(palette.warning('! ' + text))
+      if (block.tone === 'success') return new ClippedText(palette.success('✓ ' + text))
+      return new ClippedText(palette.dim('i ') + text)
     }
   }
 }

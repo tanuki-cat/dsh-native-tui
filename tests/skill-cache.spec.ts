@@ -93,4 +93,48 @@ describe('skill catalog cache', () => {
     expect((await cache.load(target, () => 1)).map(row => row.name)).toEqual(['new'])
     expect(list).toHaveBeenLastCalledWith({ cwd, scope: target })
   })
+
+  it('shares one in-flight read for the same Agent and worktree', async () => {
+    let resolveRead!: (rows: SkillSummaryLike[]) => void
+    const pending = new Promise<SkillSummaryLike[]>(resolve => { resolveRead = resolve })
+    const list = vi.fn(() => pending)
+    const cache = new SkillCatalogCache(() => ({ list }), workingDirectory, () => true)
+    const target = agent()
+    const first = cache.load(target, () => 0)
+    const second = cache.load(target, () => 0)
+    expect(list).toHaveBeenCalledTimes(1)
+    resolveRead([summary('alpha')])
+    expect((await first).map(row => row.name)).toEqual(['alpha'])
+    expect((await second).map(row => row.name)).toEqual(['alpha'])
+    expect(list).toHaveBeenCalledTimes(1)
+  })
+
+  it('caches a failed catalog read for the TTL', async () => {
+    const list = vi.fn(async () => { throw new Error('catalog unavailable') })
+    const cache = new SkillCatalogCache(() => ({ list }), workingDirectory, () => true)
+    const target = agent()
+    expect(await cache.load(target, () => 0)).toEqual([])
+    expect(await cache.load(target, () => SKILLS_CACHE_MS - 1)).toEqual([])
+    expect(list).toHaveBeenCalledTimes(1)
+    await cache.load(target, () => SKILLS_CACHE_MS)
+    expect(list).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not let an older read overwrite a newer generation', async () => {
+    let resolveOld!: (rows: SkillSummaryLike[]) => void
+    let resolveNew!: (rows: SkillSummaryLike[]) => void
+    const oldRead = new Promise<SkillSummaryLike[]>(resolve => { resolveOld = resolve })
+    const newRead = new Promise<SkillSummaryLike[]>(resolve => { resolveNew = resolve })
+    const list = vi.fn().mockReturnValueOnce(oldRead).mockReturnValueOnce(newRead)
+    const cache = new SkillCatalogCache(() => ({ list }), workingDirectory, () => true)
+    const target = agent()
+    const stale = cache.load(target, () => 0)
+    cache.clear()
+    const fresh = cache.load(target, () => 0)
+    resolveNew([summary('new')])
+    expect((await fresh).map(row => row.name)).toEqual(['new'])
+    resolveOld([summary('old')])
+    expect(await stale).toEqual([])
+    expect((await cache.load(target, () => 1)).map(row => row.name)).toEqual(['new'])
+  })
 })

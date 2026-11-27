@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { stripTerminalSequences } from '@earendil-works/pi-tui'
 import { highlightCode } from '../src/ui/code-preview.js'
-import { ToolOutput, toolLabel } from '../src/ui/tool-output.js'
+import { literalToolText, safeCut, ToolOutput, toolLabel } from '../src/ui/tool-output.js'
 import { createPalette } from '../src/ui/theme.js'
 
 vi.mock('../src/ui/code-preview.js', async importOriginal => {
@@ -49,6 +50,32 @@ describe('ToolOutput', () => {
     const expanded = new ToolOutput(longBody, palette, true, 5, 'start', false, 'bash').render(40)
     expect(expanded).toHaveLength(1000)
     expect(expanded.at(-1)?.trim()).toBe('if then fi')
+  })
+
+  it('bounds a large body before normalizing and reports the exact omission count', () => {
+    const raw = ('line\tvalue\r\n').repeat(20_000) + 'x'.repeat(1000)
+    const full = literalToolText(stripTerminalSequences(raw)).trimEnd()
+    const bounded = full.slice(0, safeCut(full, 65_536))
+    const lines = new ToolOutput(raw, palette, true, 100_000).render(200)
+    expect(lines.at(-1)?.trim()).toBe('… [' + String(full.length - bounded.length) + ' chars omitted by preview limit]')
+    expect(lines[0]?.trimEnd()).toBe('line  value')
+  })
+
+  it('never splits a surrogate pair in a head or tail preview', () => {
+    const lone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u
+    const head = new ToolOutput('x' + '\u{1F600}'.repeat(40_000), palette, true, 100_000).render(200).join('')
+    expect(lone.test(head)).toBe(false)
+    const tail = new ToolOutput('\u{1F600}'.repeat(40_000) + 'x', palette, true, 100_000, 'end').render(200).join('')
+    expect(lone.test(tail)).toBe(false)
+  })
+
+  it('counts stripped escape sequences that sit between CR and LF', () => {
+    // Stripping removes the SGR before CRLF normalization, so the pair collapses
+    // into one newline; the omission count must follow that order.
+    const raw = ('line\r\x1b[0m\n').repeat(20_000)
+    const full = literalToolText(stripTerminalSequences(raw)).trimEnd()
+    const lines = new ToolOutput(raw, palette, true, 100_000).render(200)
+    expect(lines.at(-1)?.trim()).toBe('… [' + String(full.length - safeCut(full, 65_536)) + ' chars omitted by preview limit]')
   })
 })
 

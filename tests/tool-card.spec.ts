@@ -1,4 +1,4 @@
-import { Text, stripTerminalSequences } from '@earendil-works/pi-tui'
+import { Text, stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui'
 import type { TuiMouseEvent } from '@earendil-works/pi-tui'
 import { describe, expect, it } from 'vitest'
 import { ToolCard } from '../src/ui/tool-card.js'
@@ -101,6 +101,13 @@ describe('pi-style tool cards', () => {
   it('preserves leading indentation in an expanded read result', () => {
     const card = new ToolCard(tool({ result: '    return value\nnext line' }), { ...options, toolsExpanded: true })
     expect(card.render(100).find(line => line.includes('return value'))).toMatch(/^ {2}└ {5}return value/u)
+  })
+
+  it('clips an over-wide error status row to the terminal width', () => {
+    const card = new ToolCard(tool({ isError: true, errorCode: '\u093E'.repeat(200), result: 'failed' }), options)
+    const lines = card.render(80)
+    expect(lines.every(line => visibleWidth(line) <= 80)).toBe(true)
+    expect(stripTerminalSequences(lines.join('\n'))).toContain('error')
   })
 
   it('keeps read errors visible while collapsed', () => {

@@ -12,8 +12,10 @@ export interface DirectoryEntry {
 }
 
 /** Case-insensitive name order used by the file browser. */
+const NAME_COLLATOR = new Intl.Collator(undefined, { sensitivity: 'base' })
+
 function compareNames(left: string, right: string): number {
-  return left.localeCompare(right, undefined, { sensitivity: 'base' })
+  return NAME_COLLATOR.compare(left, right)
 }
 
 /**
@@ -118,9 +120,32 @@ export async function readTextPreview(path: string, maxBytes = 16_384): Promise<
  * or trusting pre-read `stat` sizes across TOCTOU races.
  */
 export async function readBoundedFile(path: string, maxBytes: number, label = 'file', limitName = 'limit'): Promise<Buffer> {
+  return readBoundedPath(path, maxBytes, label, limitName, false)
+}
+
+/**
+ * Read one regular file within `maxBytes` without following a symlink at the
+ * final path component. Callers are responsible for checking that the parent
+ * directory stays inside its workspace.
+ */
+export async function readBoundedFileNoFollow(path: string, maxBytes: number, label = 'file', limitName = 'limit'): Promise<Buffer> {
+  return readBoundedPath(path, maxBytes, label, limitName, true)
+}
+
+async function readBoundedPath(
+  path: string,
+  maxBytes: number,
+  label: string,
+  limitName: string,
+  noFollow: boolean,
+): Promise<Buffer> {
   if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new Error(label + ' maxBytes must be a positive safe integer')
-  await refuseNonRegularBeforeOpen(path)
-  const file = await open(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0))
+  if (!noFollow) await refuseNonRegularBeforeOpen(path)
+  const flags = constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (noFollow ? (constants.O_NOFOLLOW ?? 0) : 0)
+  const file = await open(path, flags).catch((error: NodeJS.ErrnoException) => {
+    if (noFollow && error.code === 'ELOOP') throw new Error('is a symbolic link')
+    throw error
+  })
   try {
     const info = await file.stat()
     if (!info.isFile()) throw new Error('not a regular file')

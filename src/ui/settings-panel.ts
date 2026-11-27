@@ -22,10 +22,13 @@ import {
   type TUI,
 } from '@earendil-works/pi-tui'
 import type { ChoiceItem } from './dialogs.js'
-import { bindAbort, dialogFrame } from './dialogs.js'
+import { bindAbort, dialogFrame, overlayRowLimit } from './dialogs.js'
 import type { Palette } from './theme.js'
 import { ChoiceList } from './choice-list.js'
 import { selectionRows } from './selection-row.js'
+
+/** Overlay height percentage `showSettingsPanel` opens with. */
+const SETTINGS_OVERLAY_PERCENT = 90
 
 /** Sentinel a field submenu returns to remove the saved override. */
 export const SETTINGS_RESET = '\u0000reset'
@@ -83,12 +86,19 @@ function panelTheme(palette: Palette): SettingsListTheme {
 class SettingsPanel implements Component {
   private readonly list: SettingsList
   private submenuOpen = false
+  /** Rows reserved for one item plus its selected description. */
+  private visibleItems: number
+  private readonly preferredItems: number
+  private fittedRows = -1
   constructor(
+    private readonly tui: TUI,
     private readonly spec: SettingsPanelSpec,
     private readonly palette: Palette,
     private readonly onChange: (id: string, value: string) => void,
     private readonly onCancel: () => void,
   ) {
+    this.preferredItems = Math.min(11, Math.max(3, spec.items.length))
+    this.visibleItems = this.preferredItems
     this.list = new SettingsList(
       spec.items.map(item => ({
         id: item.id,
@@ -106,7 +116,7 @@ class SettingsPanel implements Component {
           },
         }),
       })),
-      Math.min(11, Math.max(3, spec.items.length)),
+      this.visibleItems,
       panelTheme(palette),
       (id, value) => { onChange(id, value) },
       onCancel,
@@ -119,16 +129,45 @@ class SettingsPanel implements Component {
     this.list.updateValue(id, value)
   }
 
+  /**
+   * Shrink the list until its rows fit the overlay.
+   *
+   * `SettingsList` reserves two rows per item (label and the selected item's
+   * description), and its search input and own hint are part of the body. Only
+   * a resize needs a refit; value edits and filtering keep the current window.
+   */
+  private fitList(inner: number, available: number): string[] {
+    let rendered = this.list.render(inner)
+    const rows = this.tui.terminal?.rows ?? 30
+    if (this.fittedRows === rows) return rendered
+    this.fittedRows = rows
+    this.visibleItems = Math.max(1, Math.min(this.preferredItems, Math.floor(available / 2)))
+    const target = this.list as unknown as { maxVisible: number }
+    target.maxVisible = this.visibleItems
+    rendered = this.list.render(inner)
+    while (rendered.length > available && this.visibleItems > 1) {
+      this.visibleItems -= 1
+      target.maxVisible = this.visibleItems
+      rendered = this.list.render(inner)
+    }
+    return rendered
+  }
+
   render(width: number): string[] {
     const inner = Math.max(1, width - 4)
-    const rendered = this.list.render(inner)
+    const title = new Text(this.spec.title(), 0, 0).render(inner)
+    const hint = new Text(this.palette.dim(this.spec.hint), 0, 0).render(inner)
+    // Top/bottom borders, title+blank, and the panel's blank+hint row.
+    const chrome = 2 + title.length + 1 + 1 + hint.length
+    const available = Math.max(1, overlayRowLimit(this.tui.terminal?.rows, SETTINGS_OVERLAY_PERCENT) - chrome)
+    const rendered = this.submenuOpen ? this.list.render(inner) : this.fitList(inner, available)
     const body = this.submenuOpen ? rendered : selectionRows(rendered, inner, this.palette.autocompleteSelection, '› ')
     return dialogFrame([
-      ...new Text(this.spec.title(), 0, 0).render(inner),
+      ...title,
       '',
       ...body,
       '',
-      ...new Text(this.palette.dim(this.spec.hint), 0, 0).render(inner),
+      ...hint,
     ], width, this.palette)
   }
 
@@ -173,6 +212,7 @@ export function showSettingsPanel(
         palette,
       })
       panel = new SettingsPanel(
+        tui,
         spec,
         palette,
         (id, value) => {

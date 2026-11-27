@@ -1,6 +1,7 @@
 import { CURSOR_MARKER, renderFakeCursor, stripTerminalSequences, visibleWidth, type Component } from '@earendil-works/pi-tui'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { settingsChoiceSubmenu, settingsInputSubmenu, showSettingsPanel } from '../src/ui/settings-panel.js'
+import { overlayRowLimit } from '../src/ui/dialogs.js'
 import { createPalette } from '../src/ui/theme.js'
 
 describe('settings selection presentation', () => {
@@ -67,6 +68,39 @@ describe('settings selection presentation', () => {
     expect(inputRow).toBeDefined()
     expect(inputRow).toContain(renderFakeCursor(' '))
     expect(inputRow).not.toContain('48;5;75;30m')
+    controller.abort()
+    await opened
+  })
+})
+
+describe('short settings terminals', () => {
+  it('keeps the last setting inside the overlay height on a 12-row terminal', async () => {
+    const palette = createPalette('plain'), controller = new AbortController()
+    onTestFinished(() => { controller.abort() })
+    let panel: Component
+    const items = Array.from({ length: 8 }, (_, index) => ({
+      id: 'setting-' + index,
+      label: 'Setting ' + index,
+      value: 'v' + index,
+      values: ['v' + index, 'w' + index],
+    }))
+    const opened = showSettingsPanel({
+      terminal: { rows: 12, columns: 80 },
+      requestRender() {},
+      showOverlay(value: Component) { panel = value; return { hide() {}, focus() {} } },
+    } as never, palette, () => ({
+      title: () => 'Settings',
+      hint: 'Esc closes',
+      items,
+      onChange: (_id, value) => value,
+    }), controller.signal)
+    for (let index = 0; index < 7; index += 1) panel!.handleInput?.('\x1b[B')
+    const lines = panel!.render(60)
+    const selected = lines.findIndex(row => stripTerminalSequences(row).includes('› '))
+    expect(selected).toBeGreaterThanOrEqual(0)
+    expect(selected).toBeLessThan(overlayRowLimit(12, 90))
+    expect(stripTerminalSequences(lines[selected]!)).toContain('Setting 7')
+    expect(lines.every(row => visibleWidth(row) <= 60)).toBe(true)
     controller.abort()
     await opened
   })

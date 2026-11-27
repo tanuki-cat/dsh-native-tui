@@ -72,6 +72,10 @@ export async function workspacesCommand(
       ctx.notice('warning', 'Usage: /workspaces use <id|path>')
       return
     }
+    if (ctx.active.agent.status === 'running') {
+      ctx.notice('warning', 'Wait for the running turn to finish before /workspaces use, or run /cancel first.')
+      return
+    }
     try {
       const workspace = workspaceService.get(rest) ?? await workspaceService.resolveByPath(rest)
       if (workspace === undefined) {

@@ -112,4 +112,20 @@ describe('write content cards', () => {
     expect(output()).not.toContain('CODE_LINE_29')
     expect(output()).toContain('Show details · ctrl+o')
   })
+
+  it('previews a huge one-line file without normalizing it whole or splitting a surrogate pair', () => {
+    const content = 'x' + '\u{1F600}'.repeat(40_000)
+    const text = render(write(content), true)
+    expect(text).toContain('content omitted by preview limit')
+    // A clipped preview must not start or end on half of a surrogate pair.
+    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(text)).toBe(false)
+  })
+
+  it('counts a large multi-line file while showing only its head', () => {
+    const content = Array.from({ length: 5000 }, (_, index) => 'SOURCE_LINE_' + String(index + 1).padStart(4, '0')).join('\n')
+    const text = render(write(content))
+    expect(text).toContain('SOURCE_LINE_0010')
+    expect(text).not.toContain('SOURCE_LINE_0011')
+    expect(text).toContain('4990 more lines, 5000 total')
+  })
 })

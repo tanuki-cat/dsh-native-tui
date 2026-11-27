@@ -6,8 +6,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import { strToU8, zipSync } from 'fflate'
 import { debug } from '../debug.js'
-import { presentedEvents, resolveContainedDeliverable } from './deliverables.js'
-import { readBoundedFile } from './files.js'
+import { presentedEvents, readContainedDeliverable } from './deliverables.js'
 
 /** Maximum attachment bytes included in one terminal ZIP bundle. */
 export const MAX_BUNDLE_ATTACHMENT_BYTES = 64 * 1024 * 1024
@@ -335,14 +334,13 @@ export async function exportSessionBundle(
     for (const { path: itemPath } of event.files) {
       signal?.throwIfAborted()
       try {
-        const { absolute, real } = await resolveContainedDeliverable(root, itemPath, workspace)
         const remaining = MAX_BUNDLE_DELIVERABLE_TOTAL_BYTES - deliverableBytes
         const cap = Math.min(MAX_BUNDLE_DELIVERABLE_BYTES, remaining)
         if (cap <= 0) {
           skipped.push('deliverable ' + itemPath + ': bundle deliverable limit reached')
           continue
         }
-        const data = await readBoundedFile(real, cap, 'deliverable')
+        const { absolute, data } = await readContainedDeliverable(root, itemPath, cap, workspace)
         deliverableBytes += data.byteLength
         deliverableIndex += 1
         const entry = claimEntry(entries, 'deliverables/' + String(deliverableIndex) + '-' + safeName(basename(absolute), 'deliverable'))

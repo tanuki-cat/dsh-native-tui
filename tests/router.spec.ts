@@ -15,7 +15,12 @@ interface Notice {
 }
 
 /** A dispatcher whose every collaborator records what the line asked of it. */
-function harness(options: { readonly hostResult?: unknown; readonly skills?: readonly SkillSuggestion[]; readonly running?: boolean; readonly hostListThrows?: boolean; readonly contextThrows?: boolean } = {}) {
+function harness(options: { readonly hostResult?: unknown; readonly skills?: readonly SkillSuggestion[]; readonly running?: boolean; readonly hostListThrows?: boolean; readonly contextThrows?: boolean; readonly workspace?: boolean } = {}) {
+  const workspaceRegistry = {
+    get: (id: string) => id === 'ws-1' ? { id, path: '/tmp/workspace', title: 'workspace', sessionIds: [] } : undefined,
+    list: () => [],
+    resolveByPath: async () => undefined,
+  }
   const skillRegistry = {
     list: async () => [
       { name: 'alpha', description: 'first skill', invocation: { modelInvocable: true, userInvocable: true }, source: 'user-agents', provider: 'filesystem' },
@@ -33,7 +38,9 @@ function harness(options: { readonly hostResult?: unknown; readonly skills?: rea
     host: {
       // The skill registry is the one service /skill needs; everything else
       // stays unmounted so a handler cannot quietly depend on it.
-      get: (name: string) => name === 'skills' ? skillRegistry : undefined,
+      get: (name: string) => name === 'skills'
+        ? skillRegistry
+        : name === 'workspaceRegistry' && options.workspace === true ? workspaceRegistry : undefined,
       commands: {
         list: () => {
           if (options.hostListThrows === true) throw new Error('registry exploded')
@@ -157,6 +164,17 @@ describe('command router', () => {
       'Wait for the running turn to finish before /new, or run /cancel first.',
       'Wait for the running turn to finish before /resume, or run /cancel first.',
     ])
+  })
+
+  it('refuses to switch workspaces while a turn is running', async () => {
+    const h = harness({ running: true, workspace: true })
+    await runCommandLine('/workspaces use ws-1', h.deps)
+    expect(h.switched).toEqual([])
+    expect(h.calls).toEqual([])
+    expect(h.notices).toEqual([{
+      tone: 'warning',
+      text: 'Wait for the running turn to finish before /workspaces use, or run /cancel first.',
+    }])
   })
 
   it('passes the dispatch signal to Host commands', async () => {
